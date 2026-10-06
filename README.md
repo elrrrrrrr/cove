@@ -1,45 +1,53 @@
 # Cove
 
-Cove 是使用 SwiftUI 和 SwiftData 构建的 iOS 阅读与媒体客户端，支持网页内容、视频、漫画、PDF、EPUB、TXT、压缩漫画、图片、音乐及 SMB 文件访问。
+Cove 是可配置的 iOS 资源浏览与阅读应用。来源包括本地文件夹、SMB 和网页；统一浏览、搜索、收藏、历史以及内容打开方式。
 
-App 不包含真实站点预设。站点使用可导入的 `.site` YAML 配置，普通页面通过 CSS 选择器解析，复杂页面通过可选 JavaScript 扩展。App 提供页面点选、手动编辑、结果预览和配置导入导出。
+当前重构使用全新 .site v2 和新资料库，不兼容旧配置与旧数据结构。GitHub 仓库保持 Private。
 
 ## 构建
 
-需要 Xcode（iOS 26+ SDK）、Swift 6 和 XcodeGen。
+需要 Xcode、XcodeGen，目标 iOS 26+、Swift 6 严格并发。
 
-```sh
-cd EasyReader
-xcodegen generate
-open EasyReader.xcodeproj
-```
+    cd EasyReader
+    xcodegen generate
+    open EasyReader.xcodeproj
 
-SPM 依赖为 AMSMB2、ZIPFoundation、Yams。项目配置以 `EasyReader/project.yml` 为准。真机运行时在 Xcode 配置自己的签名团队。
+新增、删除、移动 Swift 文件后必须重新生成工程。依赖：AMSMB2、ZIPFoundation、Yams。
 
-## 私有配置与数据
+## 配置
 
-在仓库根目录的 `sites/` 放置真实 `.site`；本地构建自动打包。可在 `data/favorites.json` 放置预置收藏。两个目录均被 Git 忽略，不存在时也能构建。
+从“资源”添加来源，选择本地文件夹、SMB 或网站。网站支持 CSS 字段点选、内容预览、分页/搜索测试和 YAML/异步 JavaScript 编辑。
 
-仅全新安装首次导入。后续更新通过 App 手动导入，用户删除的站点不会重新出现。App 数据优先存放在本地 `Application Support/Cove/config/` 和 `data/`，NAS 接入统一使用 SMB。
+- [配置格式与例子](docs/site-format-v2.md)
+- [资源架构及 review 修订](docs/architecture.md)
+- [测试、性能证据和界面截图](docs/validation.md)
+- [虚构网页示例](examples/sites/demo.site)
+- [本地来源示例](examples/sites/files.site)
+- [SMB 示例](examples/sites/smb.site)
 
-详细规范：[.site 配置与本地数据](docs/site-format.md)。虚构示例：[demo.site](examples/sites/demo.site)、[favorites.json](examples/data/favorites.json)。示例域名不提供真实服务。
+真实规则放根目录 sites/，可选预置收藏放 data/favorites.json；两个目录及 config/ 均被 Git 忽略。没有这些目录也能正常构建。构建资源只在首次初始化导入一次。
+
+本地配置与资料库在 Application Support/Cove2；有 TTL 的缓存在 Caches/Cove2。密码存 Keychain，文件夹授权不随配置导出。
+
+## 内容与交互
+
+- 视频：单个播放，或当前列表的垂直滑动播放；列表分页与下一集分别处理。
+- 漫画：网页章节、ZIP/CBZ 共用图片阅读与下采样管线。
+- 电子书：EPUB、PDF、TXT。
+- 音乐：本地、HTTP、SMB 播放，播放队列、进度、迷你播放器。
+- 图片、文件夹、网页原始浏览。
+- 普通文件可前台离线保存；路径相对于应用数据目录持久化。
+
+RAR/CBR 当前只有识别与解码器扩展接口，尚未集成实际 RAR 解码器。HLS 可在线播放，离线打包未实现；网页漫画整本离线未实现。真实站点与实体 NAS 需另做实际环境验证。
 
 ## 验证
 
-```sh
-cd EasyReader
-xcodegen generate
-xcodebuild -project EasyReader.xcodeproj -scheme EasyReader \
-  -destination 'platform=iOS Simulator,name=iPhone 17 Pro' \
-  CODE_SIGNING_ALLOWED=NO test
-```
+Swift 测试覆盖配置契约、跨来源身份、资料库、路径及 EPUB 引用限制、图片尺寸和缓存失效、共享取消、HTTP 下载、文件目录与 SMB 分片媒体读取。界面测试使用 localhost 虚构网站及自制短视频。
 
-测试使用虚构站点与本地 HTML，覆盖选择器、异步脚本、匹配、分页、章节、配置校验、首次导入、迁移、收藏合并及备份身份。
+    python3 scripts/test_export.py
+    cd EasyReader
+    xcodegen generate
+    xcodebuild -project EasyReader.xcodeproj -scheme EasyReader \\
+      -destination 'platform=iOS Simulator,name=iPhone 17 Pro' test
 
-## 准备公开仓库
-
-```sh
-python3 scripts/export-public-repo.py /path/to/cove-public
-```
-
-导出当前工作区可公开的文件到新目录，并初始化一个没有旧提交历史的新 Git 仓库。原仓库、原历史和未提交工作保留。私有配置、数据、生成项目及构建输出不导出；脚本不创建远程仓库，也不上传。
+导出脚本会排除私有目录、凭据文件及非示例 .site，并在复制前检查常见密钥标记。公开前仍需 review 选定提交。

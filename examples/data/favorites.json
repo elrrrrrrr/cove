@@ -1,13 +1,1 @@
-{
-  "version": 1,
-  "favorites": [
-    {
-      "title": "示例视频",
-      "pageURL": "https://media.example/watch/1",
-      "thumbnail": "https://media.example/covers/1.jpg",
-      "siteName": "示例媒体站",
-      "definitionID": "example.media",
-      "isComic": false
-    }
-  ]
-}
+{"schemaVersion": 2, "items": []}

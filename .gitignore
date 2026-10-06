@@ -20,3 +20,27 @@ build/
 /data/
 /config/
 /public-export/
+
+# Private site files are never tracked outside the reserved example/fixture folders.
+*.[sS][iI][tT][eE]
+!/examples/sites/*.site
+!/EasyReader/Tests/Fixtures/Sites/*.site
+
+# Local credentials and Python artifacts
+.env
+.env.*
+!.env.example
+!.env.sample
+!.env.template
+*.pem
+*.key
+*.p8
+*.p12
+*.pfx
+*.keystore
+*.mobileprovision
+.netrc
+credentials.json
+id_rsa
+id_ed25519
+__pycache__/
