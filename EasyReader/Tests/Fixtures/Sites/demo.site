@@ -1,58 +1,77 @@
-schemaVersion: 2
+schemaVersion: 1
 id: example.media
-name: 示例媒体
-source:
-  adapter: web
-  url: https://media.example/
+version: 1
+name: 示例媒体站
+match:
+  hosts: [media.example]
+  includeSubdomains: false
 entries:
-  - id: videos
-    name: 视频
-    path: /videos/
-    kind: video
-  - id: comics
-    name: 漫画
+  - id: latest
+    name: 示例视频
+    path: /latest/
+    category: video
+  - id: books
+    name: 示例漫画
     path: /books/
-    kind: comic
-modules:
-  catalog:
-    items: article.card
-    kind: video
-    fields:
-      title: .title
-      url: a@href
-      thumbnail: img@src
-      tags: .tag[]
-    variants:
-      - match: {pathPrefix: /books/}
-        kind: comic
-        items: article.book
-        fields: {title: .title, url: a@href, thumbnail: img@src}
-  pagination:
-    next: 'a[rel=next]@href'
-  search:
-    url: '/search?q={query}'
-  login:
-    url: /login
-  video:
-    fields: {url: 'video@src'}
-  comic:
+    category: comic
+rules:
+  - id: video-list
+    role: catalog
+    match:
+      pathPattern: '^/(latest|search)/'
+    contentType: video
+    searchURLTemplate: '/search/?q={keyword}'
+    presentation:
+      layout: bento
+    extract:
+      items: article.video-card
+      fields:
+        title: {selector: .title, text: true}
+        url: {selector: 'a[href]', attribute: href}
+        thumbnail:
+          selector: img
+          attribute: data-src
+          fallbackAttributes: [src]
+    pagination:
+      mode: nextLink
+      selector: 'a[rel="next"]'
+  - id: video-detail
+    role: video
+    match: {pathPrefix: /watch/}
+    extract:
+      fields:
+        url: {selector: 'video[src], video source[src]', attribute: src}
+        title: {selector: h1, text: true}
+  - id: comic-list
+    role: catalog
+    match: {pathPrefix: /books/}
+    contentType: comic
+    presentation: {layout: portrait}
+    extract:
+      items: article.book-card
+      fields:
+        title: {selector: .title, text: true}
+        url: {selector: a, attribute: href}
+        thumbnail: {selector: img, attribute: src}
+  - id: comic-detail
+    role: comic
     match: {pathPrefix: /book/}
-    fields:
-      title: h1
-      chapters:
-        selector: .chapters a
-        all: true
-        fields:
-          title: {text: true}
-          url: {attribute: href}
-  chapter:
+    extract:
+      fields:
+        title: {selector: h1, text: true}
+        cover: {selector: .cover, attribute: src}
+        tags: {selector: 'a[rel="tag"]', text: true, all: true}
+        chapters:
+          selector: a.chapter
+          all: true
+          fields:
+            title: {text: true}
+            url: {attribute: href, resolveURL: true}
+  - id: comic-chapter
+    role: chapter
     match: {pathPrefix: /chapter/}
-    fields: {images: 'img.page@src[]'}
-presentation:
-  layout: grid
-  openItem: videoFeed
-  feed:
-    nextGesture: swipeUp
-    autoplay: true
-    preloadNext: 1
-    onPlaybackEnd: stop
+    extract:
+      fields:
+        images: {selector: 'main img', attribute: src, all: true}
+        prevChapter: {selector: 'a[rel="prev"]', attribute: href}
+        nextChapter: {selector: 'a[rel="next"]', attribute: href}

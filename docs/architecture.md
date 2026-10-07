@@ -1,3 +1,5 @@
+> 历史候选：本文记录被回退的 v2 重构分支，不是当前恢复版的界面或数据契约。当前版本见 [恢复记录](ui-recovery.md)。
+
 # Cove resource architecture
 
 This rebuild uses a new `.site` schema and a new library store. It does not read the previous schema or migrate the previous database. Private definitions remain outside Git; convert their editable files explicitly when developing locally.

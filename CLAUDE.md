@@ -1,2 +1,1 @@
-# Cove
-Follow [AGENTS.md](AGENTS.md), [architecture](docs/architecture.md), and [.site v2](docs/site-format-v2.md).
+See AGENTS.md, DESIGN.md and docs/ui-recovery.md. The active app restores the existing UI and original store. The v2 rebuild is preserved as an experimental branch, not the current product baseline.

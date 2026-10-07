@@ -1,5 +1,0 @@
-schemaVersion: 2
-id: example.files
-name: 我的文件
-source: {adapter: files}
-presentation: {layout: list}

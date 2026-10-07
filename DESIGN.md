@@ -1,16 +1,10 @@
-# Cove interface
+# Cove 界面恢复约定
 
-Cove is a native iOS resource browser. Use system navigation, menus, lists and media surfaces; Chinese labels and semantic colors. Each screen has one primary structure.
+当前版本以重构前界面为恢复基线。
 
-- Home: compact continue-reading and recent activity with source/offline shortcuts.
-- Sources: one list for folders, SMB and web; adapter filter and explicit add/import.
-- Collection: one grid/portrait/list layout, capability-based search/login/pagination/original-page actions.
-- Resource cards: separate open, tag and favorite buttons. No parent tap competing with child actions.
-- Reader: content first, compact native controls. Video feed is vertical paging, one active player.
-- Music: persistent shared audio session with mini-player after leaving its page.
-- Setup: Source → Modules → Preview → Advanced. Visible field labels, CSS shorthand, point picking, card results, pagination/search tests. Full YAML and JS are optional advanced paths.
-- Settings: grouped form.
-
-Use native SwiftUI components. Avoid decorative gradients, nested cards and repeated per-cell shimmer. Use one loading presentation per collection. Prefer data/model boundaries over mechanical file-length limits. Screenshots on iPhone and iPad are required for substantial UI changes.
-
-HTML prototypes under design/ are historical references and do not define the current implementation.
+- 保留主页快速访问卡片、继续阅读、最近阅读、下载和稍后再看。
+- 保留站点图标、内容封面、标签、搜索、分页、选集和原网页入口。
+- 保留视频 Bento 混合卡片、漫画竖版、导航列表和图片流的原有样式。
+- 保留收藏、NAS、音乐及现有阅读器。
+- 架构和性能调整不能以替换成简化界面或删除现有能力实现。
+- 修改前后对照同一份配置、同一份数据，验证每项能力和布局。

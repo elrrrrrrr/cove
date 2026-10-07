@@ -42,10 +42,6 @@ targets:
     deploymentTarget: "26.0"
     sources:
       - path: Tests/EasyReaderUITests
-      - path: Tests/TestSupport
-      - path: Tests/Fixtures/Media
-        type: folder
-        buildPhase: resources
     dependencies:
       - target: EasyReader
     settings:
@@ -59,13 +55,6 @@ targets:
     deploymentTarget: "26.0"
     sources:
       - path: Tests/EasyReaderTests
-      - path: Tests/TestSupport
-      - path: Tests/Fixtures/Archives
-        type: folder
-        buildPhase: resources
-      - path: Tests/Fixtures/Media
-        type: folder
-        buildPhase: resources
       - path: Tests/Fixtures/Sites
         type: folder
         buildPhase: resources
@@ -87,7 +76,7 @@ targets:
           - "**/*.md"
       - path: Resources/Assets.xcassets
         buildPhase: resources
-      - path: Resources/BlockerRules.json
+      - path: Sources/EasyReader/Features/WebReader/BlockerRules.json
         buildPhase: resources
     preBuildScripts:
       - name: Bundle local site definitions
@@ -129,11 +118,11 @@ targets:
         NSLocalNetworkUsageDescription: "用于连接局域网内的 NAS 设备（SMB 协议）"
         NSBonjourServices:
           - "_smb._tcp"
-        LSSupportsOpeningDocumentsInPlace: true
         UIBackgroundModes:
           - audio
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
+          NSAllowsArbitraryLoads: true
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: true
           UISceneConfigurations: {}

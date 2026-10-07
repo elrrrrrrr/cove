@@ -1,5 +1,10 @@
 # Cove — resource browser
 
+## Active recovery baseline
+The user explicitly requested rollback after the full rebuild removed existing UI/features. Restore and preserve the pre-rebuild interface, original Cove store and v1 .site rules for this recovery. The schemaVersion 2/Cove2 contracts below describe the deferred resource-architecture branch and are not the active recovery data format. Keep v2 code and data backed up. Do not change existing default UI, layouts, covers or capabilities as part of architecture/performance work.
+
+The restored source tree uses App, Features, Models and Shared. Native readers and the generic .site parser remain; DSM/FnOS stay removed. Always regenerate XcodeGen after file moves. Never publish private content.
+
 ## Build
 SwiftUI + SwiftData, iOS 26+, Swift 6 strict concurrency. XcodeGen project.yml is the source of truth. Always run xcodegen generate after adding/removing/moving Swift files. Dependencies: AMSMB2, ZIPFoundation, Yams.
 
