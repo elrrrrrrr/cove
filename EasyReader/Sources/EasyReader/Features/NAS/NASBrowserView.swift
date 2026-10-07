@@ -19,8 +19,6 @@ enum NASConnection {
 
 // MARK: - NASBrowserView
 
-enum NASViewMode { case list, grid }
-
 /// Shows NAS file tree with native navigation (swipe-back) and file routing.
 struct NASBrowserView: View {
     @Query private var nasConfigs: [NASConfig]
@@ -33,7 +31,6 @@ struct NASBrowserView: View {
     @State private var showConnect  = false
     @State private var connection: NASConnection?
     @State private var error: String?
-    @State private var viewMode: NASViewMode = .list
 
     // Navigation stack for directory browsing (swipe-back support)
     @State private var navPath: [String] = []
@@ -63,8 +60,10 @@ struct NASBrowserView: View {
         openedFileURL != nil || openedFileData != nil || openedStreamItem != nil || openedStreamURL != nil
     }
 
-    private var readPathSet: Set<String> {
-        Set(readHistory.compactMap(\.filePath))
+    @State private var readPathSet: Set<String> = []
+    private func updateReadPaths() {
+        let configID = selectedConfig?.id.uuidString
+        readPathSet = Set(readHistory.filter { $0.nasConfigID == configID }.compactMap(\.filePath))
     }
 
     var body: some View {
@@ -77,7 +76,7 @@ struct NASBrowserView: View {
                         path: "/",
                         title: selectedConfig?.name ?? "NAS",
                         connection: connection,
-                        viewMode: $viewMode,
+                        sourceID: selectedConfig?.id.uuidString ?? "nas",
                         isDownloading: isDownloading,
                         readPathSet: readPathSet,
                         onOpenDirectory: { dirPath in navPath.append(dirPath) },
@@ -97,7 +96,7 @@ struct NASBrowserView: View {
                         path: dirPath,
                         title: (dirPath as NSString).lastPathComponent,
                         connection: connection,
-                        viewMode: $viewMode,
+                        sourceID: selectedConfig?.id.uuidString ?? "nas",
                         isDownloading: isDownloading,
                         readPathSet: readPathSet,
                         onOpenDirectory: { dirPath in navPath.append(dirPath) },
@@ -108,6 +107,9 @@ struct NASBrowserView: View {
                 }
             }
         }
+        .task { updateReadPaths() }
+        .onChange(of: readHistory) { _, _ in updateReadPaths() }
+        .onChange(of: selectedConfig?.id) { _, _ in updateReadPaths() }
         .overlay {
             if isResolving {
                 VStack(spacing: 12) {
@@ -500,273 +502,75 @@ struct NASBrowserView: View {
 
 // MARK: - NASDirectoryListView
 
-/// Reusable view for a single directory level. Supports NavigationLink for subdirectories.
 struct NASDirectoryListView: View {
     let path: String
     let title: String
     let connection: NASConnection
-    @Binding var viewMode: NASViewMode
     let isDownloading: Bool
     let readPathSet: Set<String>
     let onOpenDirectory: (String) -> Void
     let onOpen: (NASFileEntry, [NASFileEntry]) -> Void
     let onDownload: (NASFileEntry) -> Void
     let onDisconnect: () -> Void
-
+    @AppStorage private var savedLayout: String
     @State private var allEntries: [NASFileEntry] = []
-    @State private var visibleLimit = 200
+    @State private var visibleEntries: [NASFileEntry] = []
     @State private var isLoading = true
     @State private var error: String?
 
-    private let initialVisibleCount = 200
-    private let loadMoreCount = 200
-
-    private var visibleEntries: ArraySlice<NASFileEntry> {
-        allEntries.prefix(visibleLimit)
+    init(path: String, title: String, connection: NASConnection, sourceID: String,
+         isDownloading: Bool, readPathSet: Set<String>,
+         onOpenDirectory: @escaping (String) -> Void,
+         onOpen: @escaping (NASFileEntry, [NASFileEntry]) -> Void,
+         onDownload: @escaping (NASFileEntry) -> Void, onDisconnect: @escaping () -> Void) {
+        self.path = path; self.title = title; self.connection = connection
+        self.isDownloading = isDownloading; self.readPathSet = readPathSet
+        self.onOpenDirectory = onOpenDirectory; self.onOpen = onOpen
+        self.onDownload = onDownload; self.onDisconnect = onDisconnect
+        _savedLayout = AppStorage(wrappedValue: "", BrowserLayout.preferenceKey(source: "nas:" + sourceID, location: path))
     }
-
-    private var hasMoreEntries: Bool {
-        visibleLimit < allEntries.count
+    private var layout: BrowserLayout { BrowserLayout(rawValue: savedLayout) ?? .list }
+    private var layoutSelection: Binding<BrowserLayout> {
+        Binding(get: { layout }, set: { savedLayout = $0.rawValue })
     }
-
     var body: some View {
         Group {
             if isLoading {
-                ProgressView("加载中…")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                ProgressView("加载中…").frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let error {
                 ContentUnavailableView {
                     Label("加载失败", systemImage: "exclamationmark.triangle")
-                } description: {
-                    Text(error)
-                } actions: {
-                    Button("重试") { loadEntries() }
-                }
+                } description: { Text(error) } actions: { Button("重试") { loadEntries() } }
             } else if allEntries.isEmpty {
                 ContentUnavailableView("空文件夹", systemImage: "folder")
             } else {
-                switch viewMode {
-                case .list: listLayout
-                case .grid: gridLayout
-                }
+                NASDirectoryContent(entries: visibleEntries, layout: layout, connection: connection,
+                    isDownloading: isDownloading, readPathSet: readPathSet, totalCount: allEntries.count,
+                    onOpenDirectory: onOpenDirectory, onOpen: { onOpen($0, allEntries) },
+                    onDownload: onDownload, onLoadMore: loadMoreEntries)
             }
         }
         .appSurface()
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                Button("断开") { onDisconnect() }
-            }
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    viewMode = viewMode == .list ? .grid : .list
-                } label: {
-                    Image(systemName: viewMode == .list ? "square.grid.2x2" : "list.bullet")
-                }
-            }
+            ToolbarItem(placement: .topBarLeading) { Button("断开", action: onDisconnect) }
+            ToolbarItem(placement: .topBarTrailing) { BrowserLayoutMenu(layout: layoutSelection) }
         }
         .task { loadEntries() }
     }
-
-    // MARK: - List layout
-
-    private var listLayout: some View {
-        ScrollView {
-            LazyVStack(spacing: 0) {
-                ForEach(visibleEntries) { entry in
-                    listRow(entry)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    Divider()
-                        .padding(.leading, 60)
-                }
-                if hasMoreEntries {
-                    loadMoreFooter
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .appSurface()
-    }
-
-    // MARK: - Grid layout
-
-    private var gridLayout: some View {
-        ScrollView {
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 100), spacing: 12)], spacing: 12) {
-                ForEach(visibleEntries) { entry in
-                    if entry.isDirectory {
-                        Button {
-                            onOpenDirectory(entry.path)
-                        } label: {
-                            fileGridCell(entry)
-                        }
-                        .buttonStyle(.plain)
-                    } else {
-                        fileGridCell(entry)
-                            .onTapGesture {
-                                if !isDownloading { onOpen(entry, allEntries) }
-                            }
-                    }
-                }
-                if hasMoreEntries {
-                    loadMoreFooter
-                        .gridCellColumns(2)
-                }
-            }
-            .padding()
-        }
-    }
-
-    private var loadMoreFooter: some View {
-        HStack(spacing: 8) {
-            ProgressView()
-                .scaleEffect(0.75)
-            Text("显示 \(min(visibleLimit, allEntries.count)) / \(allEntries.count)")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 12)
-        .onAppear { loadMoreEntries() }
-    }
-
-    // MARK: - Row views
-
-    @ViewBuilder
-    private func listRow(_ entry: NASFileEntry) -> some View {
-        if entry.isDirectory {
-            Button {
-                onOpenDirectory(entry.path)
-            } label: {
-                directoryRow(entry)
-            }
-            .contentShape(Rectangle())
-            .buttonStyle(.plain)
-        } else {
-            fileRow(entry)
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    if !isDownloading { onOpen(entry, allEntries) }
-                }
-        }
-    }
-
-    private func directoryRow(_ entry: NASFileEntry) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: "folder.fill")
-                .font(.title3)
-                .foregroundStyle(.blue)
-                .frame(width: 32, height: 32)
-            Text(entry.name).lineLimit(1)
-            Spacer(minLength: 8)
-            Image(systemName: "chevron.right")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.tertiary)
-        }
-        .padding(.horizontal, 16)
-        .frame(maxWidth: .infinity, minHeight: 54, alignment: .leading)
-        .contentShape(Rectangle())
-    }
-
-    private func fileRow(_ entry: NASFileEntry) -> some View {
-        HStack(spacing: 12) {
-            NASFileThumbnail(entry: entry, connection: connection, size: 32)
-                .frame(width: 32, height: 32)
-                .clipShape(RoundedRectangle(cornerRadius: 6))
-            VStack(alignment: .leading, spacing: 2) {
-                Text(entry.name).lineLimit(1)
-                Text(entry.displaySize)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer()
-            if isRead(entry) {
-                Image(systemName: "checkmark.circle.fill")
-                    .font(.caption)
-                    .foregroundStyle(.green)
-            }
-            Button {
-                onDownload(entry)
-            } label: {
-                Image(systemName: "arrow.down.circle")
-                    .foregroundStyle(.secondary)
-            }
-            .buttonStyle(.plain)
-        }
-        .padding(.horizontal, 16)
-        .frame(maxWidth: .infinity, minHeight: 54, alignment: .leading)
-        .opacity(isDownloading ? 0.5 : 1)
-    }
-
-    private func fileGridCell(_ entry: NASFileEntry) -> some View {
-        VStack(spacing: 6) {
-            ZStack(alignment: .bottomTrailing) {
-                if entry.isDirectory {
-                    Image(systemName: "folder.fill")
-                        .font(.system(size: 40))
-                        .foregroundStyle(.blue)
-                        .frame(width: 80, height: 80)
-                } else {
-                    NASFileThumbnail(entry: entry, connection: connection, size: 80)
-                        .frame(width: 80, height: 80)
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
-                }
-                if isRead(entry) {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 14))
-                        .foregroundStyle(.green)
-                        .offset(x: 4, y: 4)
-                }
-            }
-            Text(entry.name)
-                .font(.caption)
-                .lineLimit(2)
-                .multilineTextAlignment(.center)
-        }
-        .padding(8)
-        .contentShape(Rectangle())
-        .opacity(isDownloading ? 0.5 : 1)
-    }
-
-    // MARK: - Helpers
-
-    private func isRead(_ entry: NASFileEntry) -> Bool {
-        guard !entry.isDirectory else { return false }
-        let ft = entry.fileType
-        guard ft == .video || ft == .cbz || ft == .cbr else { return false }
-        return readPathSet.contains(entry.path)
-    }
-
     private func loadEntries() {
-        isLoading = true
-        error = nil
-        let conn = connection
-        let p = path
+        isLoading = true; error = nil
         Task {
             do {
-                let items: [NASFileEntry]
-                if p == "/" {
-                    items = try await conn.listRoot()
-                } else {
-                    items = try await conn.listDirectory(path: p)
-                }
-                await MainActor.run {
-                    allEntries = items
-                    visibleLimit = min(initialVisibleCount, items.count)
-                    isLoading = false
-                }
-            } catch {
-                await MainActor.run {
-                    self.error = error.localizedDescription
-                    isLoading = false
-                }
-            }
+                let items = try await connection.listDirectory(path: path)
+                allEntries = items; visibleEntries = Array(items.prefix(200)); isLoading = false
+            } catch { self.error = error.localizedDescription; isLoading = false }
         }
     }
-
     private func loadMoreEntries() {
-        guard hasMoreEntries else { return }
-        visibleLimit = min(visibleLimit + loadMoreCount, allEntries.count)
+        let start = visibleEntries.count, end = min(start + 200, allEntries.count)
+        guard end > start else { return }
+        visibleEntries.append(contentsOf: allEntries[start..<end])
     }
 }

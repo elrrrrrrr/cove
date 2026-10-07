@@ -129,7 +129,7 @@ struct HomeView: View {
     // MARK: - Recent horizontal scroll
 
     private var recentRow: some View {
-        BentoVideoGrid(items: recentHistory, columns: columns) { item, cardSize in
+        BentoGrid(items: recentHistory, columns: columns) { item, cardSize in
             NavigationLink(destination: destinationView(for: item)) {
                 RecentCard(item: item, cardSize: cardSize)
             }

@@ -295,6 +295,9 @@ struct SettingsView: View {
         try? FileManager.default.removeItem(at: offlineDir)
 
         // 4. Reset UserDefaults settings
+        for key in UserDefaults.standard.dictionaryRepresentation().keys where key.hasPrefix(BrowserLayout.preferencePrefix) {
+            UserDefaults.standard.removeObject(forKey: key)
+        }
         fontSize = 17
         theme = .system
         readingMode = .paged

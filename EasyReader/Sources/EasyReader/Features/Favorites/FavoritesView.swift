@@ -79,7 +79,7 @@ struct FavoritesView: View {
             LazyVStack(alignment: .leading, spacing: 24) {
                 // Video favorites
                 if !videoFavs.isEmpty {
-                    BentoVideoGrid(items: videoFavs, columns: columns) { fav, cardSize in
+                    BentoGrid(items: videoFavs, columns: columns) { fav, cardSize in
                         if let pageURL = fav.pageURL {
                             NavigationLink(destination: VideoDetailView(item: ParsedItem(
                                 title: fav.title,

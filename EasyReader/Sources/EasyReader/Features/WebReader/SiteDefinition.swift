@@ -33,7 +33,7 @@ struct SiteDefinition: Codable, Sendable, Equatable, Identifiable {
             try require(["catalog", "video", "comic", "chapter", "tags"].contains(rule.role), "未知页面角色：\(rule.role)")
             if let match = rule.match { try match.validate(requireHost: false) }
             if let kind = rule.contentType { try require(ItemKind(string: kind) != nil, "未知内容类型：\(kind)") }
-            if let layout = rule.presentation?.layout { try require(GalleryLayout(rawValue: layout) != nil, "未知布局：\(layout)") }
+            if let layout = rule.presentation?.layout { try require(BrowserLayout(rawValue: layout) != nil, "未知布局：\(layout)") }
             if let seconds = rule.load?.waitSeconds { try require(seconds.isFinite && (0...30).contains(seconds), "等待时间必须在 0–30 秒之间") }
             if let mode = rule.load?.mode { try require(["auto", "webView"].contains(mode), "未知加载方式：\(mode)") }
             try require((rule.extract != nil) != (rule.request != nil), "规则 \(rule.id) 需要且只能选择 extract 或 request")

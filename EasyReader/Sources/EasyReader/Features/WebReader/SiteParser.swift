@@ -53,18 +53,11 @@ enum ItemKind: Sendable {
     }
 }
 
-// MARK: - GalleryLayout
-
-enum GalleryLayout: String, Sendable, CaseIterable {
-    case bento     // 视频风格: BentoVideoGrid, 16:9, 混合大小卡片
-    case portrait  // 漫画风格: LazyVGrid, 2:3 竖版, 等宽卡片
-    case list      // 导航风格: LazyVStack, 水平卡片列表
-
-    /// Default layout for the given item kind.
-    static func defaultLayout(for kind: ItemKind) -> GalleryLayout {
+extension BrowserLayout {
+    static func defaultLayout(for kind: ItemKind) -> BrowserLayout {
         switch kind {
-        case .video:   .bento
-        case .comic:   .portrait
+        case .video: .bento
+        case .comic: .portrait
         case .navLink: .list
         }
     }
@@ -167,7 +160,7 @@ struct SiteParser: Sendable {
 
     /// Visual layout style for the gallery grid.
     /// Defaults to the natural layout for `itemKind` (video→bento, comic→portrait, navLink→list).
-    let galleryLayout : GalleryLayout
+    let galleryLayout : BrowserLayout
 
     /// URL template for keyword search. Use `{keyword}` as placeholder.
     /// e.g. `/search/{keyword}/`, `/?s={keyword}`
@@ -177,7 +170,7 @@ struct SiteParser: Sendable {
     init(hostPattern: String, itemKind: ItemKind, preNavigateJS: String? = nil,
          waitSeconds: Double, extractItemsJS: String, paginationMode: PaginationMode,
          categories: [SiteParserCategory] = [], needsJS: Bool = false, portalURL: String? = nil,
-         galleryLayout: GalleryLayout? = nil, searchURLTemplate: String? = nil) {
+         galleryLayout: BrowserLayout? = nil, searchURLTemplate: String? = nil) {
         self.hostPattern = hostPattern; self.itemKind = itemKind
         self.preNavigateJS = preNavigateJS; self.waitSeconds = waitSeconds
         self.extractItemsJS = extractItemsJS; self.paginationMode = paginationMode
@@ -242,7 +235,7 @@ final class SiteParserRegistry: @unchecked Sendable {
             extractItemsJS: rule.extract?.javascript ?? "'[]'", paginationMode: pagination,
             categories: (rule.categories ?? []).map { .init(name: $0.name, urlString: $0.path) },
             needsJS: rule.load?.mode == "webView", portalURL: definition.portal?.url,
-            galleryLayout: rule.presentation?.layout.flatMap(GalleryLayout.init(rawValue:)),
+            galleryLayout: rule.presentation?.layout.flatMap(BrowserLayout.init(rawValue:)),
             searchURLTemplate: rule.searchURLTemplate)
         parser.definitionID = definition.id
         parser.ruleID = rule.id
@@ -346,7 +339,7 @@ extension SiteParser {
         }
 
         // galleryLayout
-        let resolvedLayout = o.galleryLayout.flatMap { GalleryLayout(rawValue: $0) } ?? galleryLayout
+        let resolvedLayout = o.galleryLayout.flatMap { BrowserLayout(rawValue: $0) } ?? galleryLayout
 
         var result = SiteParser(
             hostPattern:    hostPattern,

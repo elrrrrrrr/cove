@@ -14,6 +14,8 @@ struct SiteGalleryView: View {
         siteURLString   = site.urlString
         bookmarkSite    = site
         _loader         = State(wrappedValue: Self.makeLoader())
+        _parser = State(initialValue: SiteParserRegistry.parser(for: site.urlString, definitionID: site.definitionID).applying(site.parserOverrides))
+        _savedLayout = AppStorage(wrappedValue: "", BrowserLayout.preferenceKey(source: "web", location: site.id.uuidString))
     }
 
     // Sub-site navigation.
@@ -23,6 +25,8 @@ struct SiteGalleryView: View {
         siteURLString = urlString
         bookmarkSite  = nil
         _loader       = State(wrappedValue: Self.makeLoader())
+        _parser = State(initialValue: SiteParserRegistry.parser(for: urlString, definitionID: definitionID))
+        _savedLayout = AppStorage(wrappedValue: "", BrowserLayout.preferenceKey(source: "web:" + (definitionID ?? ""), location: urlString))
     }
 
     /// Creates a bare PageLoader — cache is pre-populated asynchronously in .task
@@ -53,17 +57,27 @@ struct SiteGalleryView: View {
     @Query private var allFavorites: [FavoriteVideo]
 
     @State private var library = SiteDefinitionStore.shared
-    private var parser: SiteParser {
-        let id = bookmarkSite?.definitionID ?? definitionID
-        let _ = library.definitions
-        return SiteParserRegistry.parser(for: siteURLString, definitionID: id).applying(bookmarkSite?.parserOverrides)
+    @State private var parser: SiteParser
+    @AppStorage private var savedLayout: String
+    @State private var navigationItem: ParsedItem?
+    @State private var visibleItemID: UUID?
+    @State private var automaticImages = false
+    private var layout: BrowserLayout { BrowserLayout(rawValue: savedLayout) ?? parser.galleryLayout }
+    private var layoutSelection: Binding<BrowserLayout> {
+        Binding(get: { layout }, set: { savedLayout = $0.rawValue })
+    }
+    private func refreshParser() {
+        parser = SiteParserRegistry.parser(for: siteURLString, definitionID: bookmarkSite?.definitionID ?? definitionID)
+            .applying(bookmarkSite?.parserOverrides)
+        guard let url = siteURL else { return }
+        loader.load(url: url, parser: parser, forceRefresh: true)
     }
     private var effectiveURLString: String { activeCategoryURL ?? siteURLString }
     private var siteURL: URL? { URL(string: effectiveURLString) }
 
     // Grid columns based on gallery layout
     private var columns: Int {
-        switch parser.galleryLayout {
+        switch layout {
         case .list:     return 1
         case .portrait: return hSizeClass == .regular ? 4 : 3
         case .bento:    return hSizeClass == .regular ? 3 : 2
@@ -98,9 +112,14 @@ struct SiteGalleryView: View {
             favoriteURLCache = Set(favorites.map(\.pageURLString))
         }
         .onChange(of: library.definitions) { _, _ in
-            guard let url = URL(string: activeCategoryURL ?? siteURLString) else { return }
-            loader.load(url: url, parser: parser, forceRefresh: true)
+            refreshParser()
         }
+        .onChange(of: bookmarkSite?.customParserConfig) { _, _ in refreshParser() }
+        .onChange(of: bookmarkSite?.definitionID) { _, _ in refreshParser() }
+        .onChange(of: loader.state, initial: true) { _, state in
+            if case .done(let items) = state { automaticImages = isImageContent(items) }
+        }
+        .navigationDestination(item: $navigationItem) { item in destinationView(for: item) }
         .task(id: "favorites") {
             favoriteURLCache = Set(allFavorites.map(\.pageURLString))
         }
@@ -196,10 +215,10 @@ struct SiteGalleryView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 Color.clear.frame(height: 0).id("gallery-top")
-                if isImageContent(items) {
+                if savedLayout.isEmpty && automaticImages {
                     imageGalleryLayout(items)
                 } else {
-                    switch parser.galleryLayout {
+                    switch layout {
                     case .list:
                         listLayout(items)
                     case .portrait:
@@ -208,6 +227,10 @@ struct SiteGalleryView: View {
                         bentoLayout(items)
                     }
                 }
+            }
+            .scrollPosition(id: $visibleItemID, anchor: .top)
+            .onChange(of: layout) { _, _ in
+                if let visibleItemID { proxy.scrollTo(visibleItemID, anchor: .top) }
             }
         }
     }
@@ -228,14 +251,14 @@ struct SiteGalleryView: View {
     private func listLayout(_ items: [ParsedItem]) -> some View {
         LazyVStack(spacing: 10) {
             ForEach(items) { item in
-                NavigationLink(destination: destinationView(for: item)) {
-                    NavLinkCard(item: item)
-                }
-                .buttonStyle(CardPressStyle())
+                Button { openItem(item) } label: { NavLinkCard(item: item) }
+                    .buttonStyle(CardPressStyle())
+                    .contextMenu { itemMenu(for: item) }
             }
             infiniteScrollFooter
         }
         .padding(12)
+        .scrollTargetLayout()
     }
 
     // MARK: - Layout: Portrait grid (2:3 cards)
@@ -248,6 +271,7 @@ struct SiteGalleryView: View {
                     portraitCard(for: item)
                 }
             }
+            .scrollTargetLayout()
             .padding(.horizontal, 12)
             infiniteScrollFooter
         }
@@ -336,23 +360,38 @@ struct SiteGalleryView: View {
     // MARK: - Layout: Bento grid (16:9 variable-size cards)
 
     private func bentoLayout(_ items: [ParsedItem]) -> some View {
-        BentoVideoGrid(items: items, columns: columns) { item, cardSize in
+        BentoGrid(items: items, columns: columns) { item, cardSize in
             VideoCard(
                 item:        item,
                 isFavorited: favoriteURLCache.contains(item.pageURL.absoluteString),
                 cardSize:    cardSize,
-                onTap: { videoFullScreen = item },
-                onLongPress: { handleVideoCardLongPress(item) },
+                onTap: { openItem(item) },
+                onLongPress: parser.itemKind == .navLink && !isMixedMediaItem(item) ? nil : { handleVideoCardLongPress(item) },
+                placeholder: parser.itemKind == .video ? "play.rectangle.fill" : "photo.on.rectangle.angled",
                 onExtraTap: !item.extra.isEmpty ? { tag in
                     extraNavTarget = extraSearchTarget(for: tag)
                 } : nil
             )
+            .id(item.id)
+            .contextMenu { itemMenu(for: item) }
         } footer: {
             infiniteScrollFooter
         }
     }
 
     // MARK: - Destination routing (based on itemKind)
+
+    private func openItem(_ item: ParsedItem) {
+        if parser.itemKind == .video { videoFullScreen = item }
+        else { navigationItem = item }
+    }
+
+    @ViewBuilder private func itemMenu(for item: ParsedItem) -> some View {
+        if parser.itemKind != .navLink { favoriteMenuButton(for: item) }
+        if parser.itemKind == .video, let count = listEpisodeCount(for: item) {
+            Button("选集") { episodePickerTarget = GalleryEpisodePickerTarget(item: item, count: count) }
+        }
+    }
 
     @ViewBuilder
     private func destinationView(for item: ParsedItem) -> some View {
@@ -420,7 +459,7 @@ struct SiteGalleryView: View {
 
     @ViewBuilder
     private var skeletonGrid: some View {
-        switch parser.galleryLayout {
+        switch layout {
         case .bento:
             BentoSkeletonGrid(columns: max(columns, 2))
         case .portrait:
@@ -607,6 +646,9 @@ struct SiteGalleryView: View {
                 }
             }
         }
+        if !showWeb {
+            ToolbarItem(placement: .topBarTrailing) { BrowserLayoutMenu(layout: layoutSelection) }
+        }
         // ── Menu 2: tools ───────────────────────────────────────
         ToolbarItem(placement: .topBarTrailing) {
             Menu {
@@ -766,6 +808,7 @@ struct VideoCard: View {
     var cardSize: BentoCardSize = .small
     var onTap: (() -> Void)?
     var onLongPress: (() -> Void)?
+    var placeholder = "play.rectangle.fill"
     /// Called with the tapped tag string (e.g. actress name, category keyword).
     var onExtraTap: ((String) -> Void)?
 
@@ -853,11 +896,11 @@ struct VideoCard: View {
     private var thumbnailView: some View {
         ZStack(alignment: .bottomTrailing) {
             if item.thumbnail != nil {
-                CachedThumbnail(url: item.thumbnail, placeholder: "play.rectangle.fill", referer: item.pageURL)
+                CachedThumbnail(url: item.thumbnail, placeholder: placeholder, referer: item.pageURL)
             } else {
                 Color(.secondarySystemBackground)
                     .overlay {
-                        Image(systemName: "play.rectangle.fill")
+                        Image(systemName: placeholder)
                             .font(.title).foregroundStyle(.tertiary)
                     }
             }

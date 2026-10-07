@@ -11,7 +11,7 @@ import os
 @MainActor
 final class PageLoader: NSObject {
 
-    enum State {
+    enum State: Equatable {
         case idle, loading, extracting, done([ParsedItem]), failed(String)
 
         var isActive: Bool {
