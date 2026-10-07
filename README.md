@@ -20,6 +20,8 @@ Cove 是可配置的 iOS 浏览与阅读应用，支持网页、SMB、本地文�
 
 项目只维护当前一套配置格式：schemaVersion: 1。站点规则用 .site YAML，普通规则用 CSS，复杂规则用 JavaScript。
 
+在“设置 → 管理网站”点击站点右侧的文档按钮，可直接查看、编辑、校验和导出完整配置。
+
 - [站点、收藏与备份格式](docs/site-format.md)
 - [代码结构](docs/architecture.md)
 - [审计修复与剩余工作](docs/review-status.md)

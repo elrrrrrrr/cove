@@ -2,6 +2,91 @@ import XCTest
 import Network
 
 @MainActor final class SiteSetupUITests: XCTestCase {
+    func testManagementShowsCompleteSchemaWithoutLoadingPage() throws {
+        let server = try LocalPageServer()
+        defer { server.listener.cancel() }
+        let app = XCUIApplication()
+        let title = "配置查看-" + String(UUID().uuidString.prefix(6))
+        app.launch(); app.tabBars.buttons["设置"].tap()
+        let management = app.buttons["管理网站"]
+        reveal(management, in: app); management.tap()
+        app.buttons["添加或导入站点"].tap(); app.buttons["创建站点规则"].tap()
+        let name = app.textFields["站点名称"]
+        XCTAssertTrue(name.waitForExistence(timeout: 5)); name.tap(); name.typeText(title)
+        let address = app.textFields["入口 URL"]
+        address.tap(); address.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 8)); address.typeText(server.url)
+        app.buttons["创建配置并打开页面"].tap(); app.segmentedControls.buttons["高级"].tap()
+        let yaml = app.textViews["完整站点 YAML"]
+        XCTAssertTrue(yaml.waitForExistence(timeout: 5))
+        replaceCode(yaml, with: """
+        schemaVersion: 1
+        id: ui.configuration.\(UUID().uuidString)
+        name: \(title)
+        match:
+          hosts: [127.0.0.1]
+        entries:
+          - id: main
+            name: \(title)
+            path: \(server.url)
+            category: video
+          - id: books
+            name: 配置附加入口
+            path: \(server.url)/books
+            category: comic
+        rules:
+          - id: catalog
+            role: catalog
+            contentType: video
+            extract:
+              script: |
+                return [{title:'配置内容',url:'/watch/1'}];
+          - id: detail
+            role: video
+            extract:
+              fields:
+                url: {selector: video, attribute: src}
+        portal:
+          url: https://portal.example/
+        images:
+          key: '1111111111111111'
+          iv: '0000000000000000'
+        """, in: app)
+        app.buttons["保存"].tap()
+        XCTAssertTrue(app.navigationBars["网站"].waitForExistence(timeout: 5))
+        let cell = app.cells.containing(.staticText, identifier: title).firstMatch
+        reveal(cell, in: app)
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "management-configuration-button"; screenshot.lifetime = .keepAlways; add(screenshot)
+        let requests = server.requestCount.value
+        cell.buttons["site-configuration-button"].tap()
+        XCTAssertTrue(app.navigationBars["站点配置"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.segmentedControls.buttons["高级"].isSelected)
+        let original = try XCTUnwrap(yaml.value as? String)
+        for field in ["schemaVersion: 1", "entries:", "rules:", "portal:", "images:", "id: detail", "id: books"] {
+            XCTAssertTrue(original.contains(field), "Complete configuration must include \(field)")
+        }
+        XCTAssertEqual(server.requestCount.value, requests, "Viewing configuration must not request the site")
+        let codeScreenshot = XCTAttachment(screenshot: app.screenshot())
+        codeScreenshot.name = "complete-site-configuration"; codeScreenshot.lifetime = .keepAlways; add(codeScreenshot)
+
+        let renamed = title + " 已编辑"
+        replaceCode(yaml, with: original.replacingOccurrences(of: title, with: renamed), in: app)
+        app.buttons["取消"].tap()
+        XCTAssertTrue(app.navigationBars["网站"].waitForExistence(timeout: 5))
+        cell.buttons["site-configuration-button"].tap()
+        XCTAssertTrue(app.navigationBars["站点配置"].waitForExistence(timeout: 5))
+        XCTAssertEqual(yaml.value as? String, original, "Cancel must preserve the stored configuration")
+        replaceCode(yaml, with: original.replacingOccurrences(of: title, with: renamed), in: app)
+        app.buttons["保存"].tap()
+        XCTAssertTrue(app.navigationBars["网站"].waitForExistence(timeout: 5))
+        cell.buttons["site-configuration-button"].tap()
+        XCTAssertTrue(app.navigationBars["站点配置"].waitForExistence(timeout: 5))
+        let saved = try XCTUnwrap(yaml.value as? String)
+        let savedName = saved.components(separatedBy: .newlines).first { $0.hasPrefix("name:") }
+        XCTAssertTrue(savedName?.contains(renamed) == true, "Direct YAML save must retain the edited schema name")
+        XCTAssertTrue(saved.contains("portal:")); XCTAssertTrue(saved.contains("images:"))
+    }
+
     func testCreateCSSConfigurationAndEditCustomJavaScript() throws {
         let app = XCUIApplication()
         let title = "测试配置-" + String(UUID().uuidString.prefix(6))
@@ -192,6 +277,12 @@ import Network
         reveal(management, in: app); management.tap(); reveal(cell, in: app); cell.tap()
         XCTAssertTrue(app.buttons["browser-layout-menu"].waitForExistence(timeout: 5))
         XCTAssertEqual(app.buttons["browser-layout-menu"].value as? String, "Bento")
+    }
+
+    private func replaceCode(_ editor: XCUIElement, with text: String, in app: XCUIApplication) {
+        editor.tap(); editor.press(forDuration: 1)
+        let selectAll = app.menuItems["Select All"].exists ? app.menuItems["Select All"] : app.menuItems["全选"]
+        XCTAssertTrue(selectAll.waitForExistence(timeout: 3)); selectAll.tap(); editor.typeText(text)
     }
 
     private func reveal(_ cell: XCUIElement, in app: XCUIApplication) {

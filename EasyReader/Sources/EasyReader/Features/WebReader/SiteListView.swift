@@ -13,7 +13,8 @@ struct SiteListView: View {
     @State private var operationError: String?
     @State private var showAddSheet    = false
     @State private var editTarget: BookmarkSite?   // nil = add, non-nil = edit
-    @State private var jsTarget: BookmarkSite?     // site whose JS is being edited
+    @State private var ruleTarget: BookmarkSite?
+    @State private var configurationTarget: BookmarkSite?
     @State private var editMode: EditMode = .inactive
     @State private var filterCategory: SiteCategory? = nil
 
@@ -58,7 +59,9 @@ struct SiteListView: View {
                         .accessibilityLabel("添加或导入站点")
                 }
                 ToolbarItem(placement: .topBarLeading) {
-                    EditButton()
+                    Button(editMode.isEditing ? "完成" : "编辑") {
+                        withAnimation { editMode = editMode.isEditing ? .inactive : .active }
+                    }
                 }
             }
             .environment(\.editMode, $editMode)
@@ -66,8 +69,11 @@ struct SiteListView: View {
                 if let editTarget { SiteEditSheet(existing: editTarget) }
                 else { SiteSetupWizard() }
             }
-            .sheet(item: $jsTarget) { site in
+            .sheet(item: $ruleTarget) { site in
                 SiteSetupWizard(existing: site)
+            }
+            .sheet(item: $configurationTarget) { site in
+                SiteSetupWizard(existing: site, opensConfiguration: true)
             }
             .sheet(item: $library.pendingImport) { SiteImportSheet(definition: $0) }
             .fileImporter(isPresented: $showImport, allowedContentTypes: [.coveSite, .plainText, .data]) { result in
@@ -128,11 +134,25 @@ struct SiteListView: View {
     private var siteList: some View {
         List {
             ForEach(displayed) { site in
-                NavigationLink(destination: SiteGalleryView(site: site)) {
-                    SiteRow(site: site)
+                HStack(spacing: 8) {
+                    NavigationLink(destination: SiteGalleryView(site: site)) {
+                        SiteRow(site: site)
+                    }
+                    Button {
+                        configurationTarget = site
+                    } label: {
+                        Image(systemName: "doc.text")
+                            .frame(minWidth: 44, minHeight: 44)
+                            .foregroundColor(.accentColor)
+                    }
+                    .buttonStyle(.borderless)
+                    .accessibilityLabel("查看配置")
+                    .accessibilityHint(site.name)
+                    .accessibilityIdentifier("site-configuration-button")
                 }
                 // Long-press to edit
                 .contextMenu {
+                    Button("查看配置", systemImage: "doc.text") { configurationTarget = site }
                     Button {
                         editTarget = site
                         showAddSheet = true
@@ -140,7 +160,7 @@ struct SiteListView: View {
                         Label("编辑", systemImage: "pencil")
                     }
                     Button {
-                        jsTarget = site
+                        ruleTarget = site
                     } label: {
                         Label("解析规则", systemImage: "chevron.left.forwardslash.chevron.right")
                     }
@@ -152,7 +172,7 @@ struct SiteListView: View {
                 }
                 .swipeActions(edge: .leading) {
                     Button {
-                        jsTarget = site
+                        ruleTarget = site
                     } label: {
                         Label("解析规则", systemImage: "chevron.left.forwardslash.chevron.right")
                     }

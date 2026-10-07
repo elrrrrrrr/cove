@@ -7,6 +7,7 @@ struct SiteSetupWizard: View {
     var imported: SiteDefinition?
     var initialURL: URL?
     var onSaved: (() -> Void)?
+    var opensConfiguration = false
     @Environment(\.modelContext) private var context
     @Environment(\.dismiss) private var dismiss
     @State private var library = SiteDefinitionStore.shared
@@ -26,6 +27,7 @@ struct SiteSetupWizard: View {
     @State private var error: String?
     @State private var exporting = false
     @State private var exportDocument = SiteFileDocument(text: "")
+    @State private var configurationNeedsSaving = false
 
     private var ruleIndex: Int? { draft?.rules.firstIndex { $0.id == activeRuleID } }
     private var activeRule: SiteRule? { ruleIndex.flatMap { draft?.rules[$0] } }
@@ -53,7 +55,7 @@ struct SiteSetupWizard: View {
                 if let error { Text(error).font(.caption).foregroundStyle(.red).padding().textSelection(.enabled) }
             }
             .appSurface()
-            .navigationTitle(existing == nil ? "站点解析引导" : "编辑解析规则")
+            .navigationTitle(opensConfiguration ? "站点配置" : (existing == nil ? "站点解析引导" : "编辑解析规则"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
@@ -68,6 +70,8 @@ struct SiteSetupWizard: View {
             .onChange(of: step) { _, value in
                 error = nil
                 if value == 3, let draft { yamlText = (try? draft.yaml()) ?? "" }
+                if (value == 1 || value == 2), picker.currentURL == nil, !picker.isLoading,
+                   let url = URL(string: address) { picker.load(url) }
                 if value != 1 { selectedField = nil; picker.pick(field: nil, items: nil) }
             }
             .onChange(of: advancedMode) { _, value in
@@ -197,6 +201,10 @@ struct SiteSetupWizard: View {
                 Text("完整 YAML").tag(0); Text("JavaScript").tag(1)
             }.pickerStyle(.segmented).padding(.horizontal)
             if advancedMode == 0 {
+                if opensConfiguration {
+                    Text(configurationNeedsSaving ? "尚未保存站点规则，以下为配置草稿。" : "当前完整配置 · schemaVersion \(draft?.schemaVersion ?? 1)")
+                        .font(.caption).foregroundStyle(.secondary).padding(.horizontal)
+                }
                 Text("完整 YAML：常规提取使用 fields，复杂提取使用 script: | 和 return。")
                     .font(.caption).foregroundStyle(.secondary).padding(.horizontal)
                 CodeTextEditor(text: $yamlText, label: "完整站点 YAML")
@@ -221,15 +229,19 @@ struct SiteSetupWizard: View {
         guard draft == nil else { return }
         if let imported { draft = imported }
         else if let existing, let url = existing.url {
-            draft = library.definition(id: existing.definitionID) ?? SiteParserRegistry.definition(for: url)
-                ?? .starter(name: existing.name, url: url)
+            let saved = library.definition(id: existing.definitionID) ?? SiteParserRegistry.definition(for: url)
+            configurationNeedsSaving = saved == nil
+            draft = saved ?? .starter(name: existing.name, url: url)
             if let overrides = existing.parserOverrides { materialize(overrides, url: url) }
         } else if let initialURL { draft = .starter(name: initialURL.host() ?? "新站点", url: initialURL) }
         if let draft {
             name = draft.name
             address = existing?.urlString ?? draft.entries.first?.url(in: draft)?.absoluteString ?? "https://"
             activeRuleID = draft.rules.first?.id ?? "catalog"
-            if let url = URL(string: address) { picker.load(url) }
+            if opensConfiguration {
+                yamlText = (try? draft.yaml()) ?? ""
+                step = 3
+            } else if let url = URL(string: address) { picker.load(url) }
         }
     }
 
@@ -360,7 +372,11 @@ struct SiteSetupWizard: View {
     }
 
     private func validatedDraft() throws -> SiteDefinition {
-        if step == 3 && advancedMode == 0 { draft = try SiteDefinition.decode(yamlText) }
+        if step == 3 && advancedMode == 0 {
+            let value = try SiteDefinition.decode(yamlText)
+            draft = value
+            name = value.name
+        }
         if step == 3 && advancedMode == 1 {
             guard ruleIndex != nil else { throw SiteDefinitionError.invalid("请选择需要编辑的规则") }
             updateRule { $0.extract = .init(script: scriptText); $0.request = nil }
