@@ -318,6 +318,8 @@ enum SiteSchema {
         "images": ["hosts", "key", "iv"]
     ]
 
+    static func fieldNames(for type: String) -> Set<String> { keys[type] ?? [] }
+
     static func check(_ yaml: String) throws {
         guard let root = try Yams.compose(yaml: yaml), root.mapping != nil else { throw SiteDefinitionError.invalid(".site 顶层必须是 YAML 配置对象") }
         try visit(root, type: "site", path: "site", depth: 0)

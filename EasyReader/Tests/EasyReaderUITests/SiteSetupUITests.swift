@@ -37,6 +37,9 @@ import Network
           - id: catalog
             role: catalog
             contentType: video
+            load:
+              mode: auto
+              waitSeconds: 0.125
             extract:
               script: |
                 return [{title:'配置内容',url:'/watch/1'}];
@@ -61,6 +64,45 @@ import Network
         cell.buttons["site-configuration-button"].tap()
         XCTAssertTrue(app.navigationBars["站点配置"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.segmentedControls.buttons["高级"].isSelected)
+        XCTAssertTrue(app.segmentedControls.buttons["表单"].isSelected)
+        let formName = app.descendants(matching: .any).matching(identifier: "schema-form-name").firstMatch
+        XCTAssertTrue(formName.waitForExistence(timeout: 5))
+        let formTitle = title + " 表单编辑"
+        replaceCode(formName, with: formTitle, in: app)
+        app.buttons["schema-form-entries"].tap()
+        app.buttons["schema-form-entries.0"].tap()
+        let entryPath = app.descendants(matching: .any).matching(identifier: "schema-form-entries.0.path").firstMatch
+        XCTAssertTrue(entryPath.waitForExistence(timeout: 5))
+        replaceCode(entryPath, with: server.url + "/updated", in: app)
+        app.navigationBars[title].buttons.firstMatch.tap()
+        app.navigationBars["入口"].buttons.firstMatch.tap()
+        app.buttons["schema-form-rules"].tap()
+        app.buttons["schema-form-rules.0"].tap()
+        app.buttons["schema-form-rules.0.load"].tap()
+        let wait = app.descendants(matching: .any).matching(identifier: "schema-form-rules.0.load.waitSeconds").firstMatch
+        XCTAssertTrue(wait.waitForExistence(timeout: 5))
+        replaceCode(wait, with: "0.75", in: app)
+        XCTAssertEqual(wait.value as? String, "0.75")
+        app.navigationBars["加载方式"].buttons.firstMatch.tap()
+        app.navigationBars["catalog"].buttons.firstMatch.tap()
+        app.navigationBars["解析规则"].buttons.firstMatch.tap()
+        let formScreenshot = XCTAttachment(screenshot: app.screenshot())
+        formScreenshot.name = "interactive-schema-form"; formScreenshot.lifetime = .keepAlways; add(formScreenshot)
+        app.segmentedControls.buttons["源码"].tap()
+        XCTAssertTrue(yaml.waitForExistence(timeout: 5))
+        XCTAssertTrue((yaml.value as? String)?.contains(formTitle) == true)
+        let waitLine = (yaml.value as? String)?.components(separatedBy: .newlines).first { $0.contains("waitSeconds:") }
+        let waitValue = waitLine?.split(separator: ":", maxSplits: 1).last.map { String($0).trimmingCharacters(in: .whitespaces) }
+        XCTAssertEqual(waitValue.flatMap(Double.init), 0.75)
+        XCTAssertTrue((yaml.value as? String)?.contains("/updated") == true)
+        app.segmentedControls.buttons["表单"].tap()
+        XCTAssertEqual(formName.value as? String, formTitle)
+        app.buttons["保存"].tap()
+        XCTAssertTrue(app.navigationBars["网站"].waitForExistence(timeout: 5))
+        cell.buttons["site-configuration-button"].tap()
+        XCTAssertTrue(app.navigationBars["站点配置"].waitForExistence(timeout: 5))
+        XCTAssertEqual(formName.value as? String, formTitle)
+        app.segmentedControls.buttons["源码"].tap()
         let original = try XCTUnwrap(yaml.value as? String)
         for field in ["schemaVersion: 1", "entries:", "rules:", "portal:", "images:", "id: detail", "id: books"] {
             XCTAssertTrue(original.contains(field), "Complete configuration must include \(field)")
@@ -75,16 +117,25 @@ import Network
         XCTAssertTrue(app.navigationBars["网站"].waitForExistence(timeout: 5))
         cell.buttons["site-configuration-button"].tap()
         XCTAssertTrue(app.navigationBars["站点配置"].waitForExistence(timeout: 5))
+        app.segmentedControls.buttons["源码"].tap()
         XCTAssertEqual(yaml.value as? String, original, "Cancel must preserve the stored configuration")
         replaceCode(yaml, with: original.replacingOccurrences(of: title, with: renamed), in: app)
         app.buttons["保存"].tap()
         XCTAssertTrue(app.navigationBars["网站"].waitForExistence(timeout: 5))
-        cell.buttons["site-configuration-button"].tap()
+        let renamedCell = app.cells.containing(.staticText, identifier: renamed).firstMatch
+        reveal(renamedCell, in: app)
+        renamedCell.buttons["site-configuration-button"].tap()
         XCTAssertTrue(app.navigationBars["站点配置"].waitForExistence(timeout: 5))
+        app.segmentedControls.buttons["源码"].tap()
         let saved = try XCTUnwrap(yaml.value as? String)
         let savedName = saved.components(separatedBy: .newlines).first { $0.hasPrefix("name:") }
         XCTAssertTrue(savedName?.contains(renamed) == true, "Direct YAML save must retain the edited schema name")
         XCTAssertTrue(saved.contains("portal:")); XCTAssertTrue(saved.contains("images:"))
+        let invalid = saved + "\nunknownOption: true\n"
+        replaceCode(yaml, with: invalid, in: app)
+        app.segmentedControls.buttons["表单"].tap()
+        XCTAssertTrue(app.segmentedControls.buttons["源码"].isSelected, "Invalid source must remain available for repair")
+        XCTAssertEqual(yaml.value as? String, invalid)
     }
 
     func testCreateCSSConfigurationAndEditCustomJavaScript() throws {
