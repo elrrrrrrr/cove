@@ -9,6 +9,10 @@ final class SMBStreamLoader: NSObject, AVAssetResourceLoaderDelegate, @unchecked
     /// Custom URL scheme that triggers the resource loader delegate.
     static let scheme = "smb-stream"
 
+    static func supportsVideo(path: String) -> Bool {
+        ["mp4", "mov", "m4v", "ts"].contains((path as NSString).pathExtension.lowercased())
+    }
+
     private let client: SMBClient
     private let remotePath: String
     private let queue = DispatchQueue(label: "smb-stream", qos: .userInitiated)

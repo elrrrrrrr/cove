@@ -42,7 +42,7 @@ struct NASConfigSnapshot: Sendable {
 }
 
 /// Wrapper around AMSMB2 providing async SMB2/3 file operations.
-actor SMBClient {
+actor SMBClient: SMBRangeSource {
 
     typealias FileEntry = NASFileEntry
 
@@ -125,9 +125,15 @@ actor SMBClient {
 
     /// Reads a byte range from a remote file. Used for thumbnail extraction and streaming.
     func readRange(at remotePath: String, offset: UInt64, length: Int) async throws -> Data {
+        try Task.checkCancellation()
+        guard length > 0, length <= SMBFileRead.chunkBytes, offset <= UInt64.max - UInt64(length) else {
+            throw SMBError.invalidRange
+        }
         guard let client else { throw SMBError.notConnected }
         let range: Range<UInt64> = offset ..< (offset + UInt64(length))
-        return try await client.contents(atPath: remotePath, range: range)
+        let data = try await client.contents(atPath: remotePath, range: range)
+        try Task.checkCancellation()
+        return data
     }
 
     // MARK: - File size
@@ -141,16 +147,9 @@ actor SMBClient {
         return 0
     }
 
-    // MARK: - Read file into memory
-
-    /// Reads a remote file entirely into memory.
+    /// Bounded encoded image reads; media and documents use streams or disk downloads.
     func readFile(at remotePath: String, progress: (@Sendable (Double) -> Void)? = nil) async throws -> Data {
-        guard let client else { throw SMBError.notConnected }
-        return try await client.contents(atPath: remotePath) { bytes, total in
-            let pct = total > 0 ? Double(bytes) / Double(total) : 0
-            progress?(pct)
-            return true
-        }
+        try await SMBFileRead.data(from: self, path: remotePath, progress: progress)
     }
 
     // MARK: - Download to file
@@ -159,38 +158,59 @@ actor SMBClient {
     func download(
         remotePath: String,
         to destination: URL,
+        maxBytes: Int64 = SMBFileRead.maxTemporaryBytes,
         progress: @Sendable @escaping (Double) -> Void
     ) async throws {
         guard let client else { throw SMBError.notConnected }
-
+        let size = try await fileSize(at: remotePath)
+        guard maxBytes > 0, size <= maxBytes else { throw SMBError.tooLarge(maxBytes) }
+        try Task.checkCancellation()
         try FileManager.default.createDirectory(
             at: destination.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
 
-        try await client.downloadItem(atPath: remotePath, to: destination) { completed, total -> Bool in
-            let pct = total > 0 ? Double(completed) / Double(total) : 0
-            progress(pct)
-            return true   // continue
+        let staging = destination.deletingLastPathComponent().appendingPathComponent(UUID().uuidString + ".partial")
+        defer { try? FileManager.default.removeItem(at: staging) }
+        let control = SMBTransferControl(maxBytes: maxBytes)
+        try await withTaskCancellationHandler {
+            do {
+                try await client.downloadItem(atPath: remotePath, to: staging) { completed, total in
+                    guard control.accept(completed: completed, total: total) else { return false }
+                    progress(total > 0 ? Double(completed) / Double(total) : 0)
+                    return true
+                }
+            } catch {
+                try control.check()
+                throw error
+            }
+            try control.check()
+            try Task.checkCancellation()
+            if FileManager.default.fileExists(atPath: destination.path) {
+                _ = try FileManager.default.replaceItemAt(destination, withItemAt: staging)
+            } else {
+                try FileManager.default.moveItem(at: staging, to: destination)
+            }
+        } onCancel: {
+            control.cancel()
         }
     }
 
-    // MARK: - Stream URL (for video — needs local file for AVPlayer)
-
-    /// Downloads to temp and returns a local file URL for AVPlayer playback.
-    func localURL(for remotePath: String, progress: (@Sendable (Double) -> Void)? = nil) async throws -> URL {
+    /// Downloads documents and nonstreamable media to a unique, bounded temporary file.
+    func temporaryFile(for remotePath: String, progress: (@Sendable (Double) -> Void)? = nil) async throws -> URL {
         let filename = URL(fileURLWithPath: remotePath).lastPathComponent
         let tempDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("NASStream", isDirectory: true)
+            .appendingPathComponent("NASOpen", isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
         let dest = tempDir.appendingPathComponent(filename)
-        if FileManager.default.fileExists(atPath: dest.path) {
+        do {
+            try await download(remotePath: remotePath, to: dest, progress: { progress?($0) })
             return dest
+        } catch {
+            try? FileManager.default.removeItem(at: tempDir)
+            throw error
         }
-        try await download(remotePath: remotePath, to: dest, progress: { pct in
-            progress?(pct)
-        })
-        return dest
     }
 }
 
@@ -199,11 +219,66 @@ actor SMBClient {
 enum SMBError: LocalizedError {
     case notConnected
     case invalidURL
+    case invalidRange
+    case tooLarge(Int64)
 
     var errorDescription: String? {
         switch self {
         case .notConnected: "NAS 未连接"
         case .invalidURL:   "无效的 NAS 地址"
+        case .invalidRange: "文件读取范围无效"
+        case .tooLarge(let limit): "文件超过加载上限（\(ByteCountFormatter.string(fromByteCount: limit, countStyle: .file))），请使用流式播放或先保存到本地"
+        }
+    }
+}
+
+protocol SMBRangeSource: Sendable {
+    func fileSize(at path: String) async throws -> Int64
+    func readRange(at path: String, offset: UInt64, length: Int) async throws -> Data
+}
+
+enum SMBFileRead {
+    static let chunkBytes = 512 * 1024
+    static let maxMemoryBytes: Int64 = 32 * 1024 * 1024
+    static let maxTemporaryBytes: Int64 = 500 * 1024 * 1024
+
+    static func data(from source: any SMBRangeSource, path: String,
+                     progress: (@Sendable (Double) -> Void)? = nil) async throws -> Data {
+        try Task.checkCancellation()
+        let size = try await source.fileSize(at: path)
+        guard size >= 0, size <= maxMemoryBytes else { throw SMBError.tooLarge(maxMemoryBytes) }
+        var result = Data()
+        while result.count < size {
+            try Task.checkCancellation()
+            let length = min(chunkBytes, Int(size) - result.count)
+            let chunk = try await source.readRange(at: path, offset: UInt64(result.count), length: length)
+            guard chunk.count <= length else { throw SMBError.invalidRange }
+            try Task.checkCancellation()
+            result.append(chunk)
+            progress?(Double(result.count) / Double(size))
+            if chunk.count < length { break }
+        }
+        return result
+    }
+}
+
+final class SMBTransferControl: @unchecked Sendable {
+    private let lock = NSLock()
+    private let maxBytes: Int64
+    private var cancelled = false
+    private var exceeded = false
+    init(maxBytes: Int64) { self.maxBytes = maxBytes }
+    func cancel() { lock.withLock { cancelled = true } }
+    func accept(completed: Int64, total: Int64) -> Bool {
+        lock.withLock {
+            exceeded = exceeded || completed > maxBytes || total > maxBytes
+            return !cancelled && !exceeded
+        }
+    }
+    func check() throws {
+        try lock.withLock {
+            if cancelled { throw CancellationError() }
+            if exceeded { throw SMBError.tooLarge(maxBytes) }
         }
     }
 }

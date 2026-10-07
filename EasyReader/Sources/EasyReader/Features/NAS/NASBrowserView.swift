@@ -167,6 +167,7 @@ struct NASBrowserView: View {
     // MARK: - Reader routing
 
     private func closeReader() {
+        if let openedFileURL { try? FileManager.default.removeItem(at: openedFileURL.deletingLastPathComponent()) }
         openedFileURL = nil
         openedFileData = nil
         openedStreamItem = nil
@@ -371,9 +372,7 @@ struct NASBrowserView: View {
 
     private func openVideo(entry: NASFileEntry, connection: NASConnection, ft: FileType) {
         if case .smb(let client) = connection {
-            let ext = (entry.name as NSString).pathExtension.lowercased()
-            let streamable = ["mp4", "mov", "m4v", "ts"]
-            if streamable.contains(ext) {
+            if SMBStreamLoader.supportsVideo(path: entry.path) {
                 let item = SMBStreamLoader.makePlayerItem(client: client, remotePath: entry.path)
                 openedFileType = ft
                 openedStreamItem = item
@@ -429,17 +428,12 @@ struct NASBrowserView: View {
         downloadProgress = (entry.name, 0, isVideo)
         Task {
             do {
-                let data = try await connection.readFile(at: entry.path) { pct in
+                guard let client = connection.smbClient else { throw SMBError.notConnected }
+                let dest = try await client.temporaryFile(for: entry.path) { pct in
                     Task { @MainActor in
                         downloadProgress = (entry.name, pct, isVideo)
                     }
                 }
-                let tempDir = FileManager.default.temporaryDirectory
-                    .appendingPathComponent("NASOpen", isDirectory: true)
-                try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
-                let dest = tempDir.appendingPathComponent(entry.name)
-                try data.write(to: dest)
-
                 await MainActor.run {
                     isDownloading = false
                     downloadProgress = nil

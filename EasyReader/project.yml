@@ -115,6 +115,7 @@ targets:
         UISupportedInterfaceOrientations~iphone:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationPortraitUpsideDown
+        UIRequiresFullScreen: false
         NSLocalNetworkUsageDescription: "用于连接局域网内的 NAS 设备（SMB 协议）"
         NSBonjourServices:
           - "_smb._tcp"
@@ -122,7 +123,6 @@ targets:
           - audio
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
-          NSAllowsArbitraryLoads: true
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: true
           UISceneConfigurations: {}

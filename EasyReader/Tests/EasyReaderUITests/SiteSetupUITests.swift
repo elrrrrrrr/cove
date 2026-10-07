@@ -1,4 +1,5 @@
 import XCTest
+import Network
 
 @MainActor final class SiteSetupUITests: XCTestCase {
     func testCreateCSSConfigurationAndEditCustomJavaScript() throws {
@@ -6,7 +7,10 @@ import XCTest
         let title = "测试配置-" + String(UUID().uuidString.prefix(6))
         app.launch()
         app.tabBars.buttons["设置"].tap()
-        app.buttons["管理网站"].tap()
+        let management = app.buttons["管理网站"]
+        reveal(management, in: app)
+        XCTAssertTrue(management.waitForExistence(timeout: 5))
+        management.tap()
         app.buttons["添加或导入站点"].tap()
         app.buttons["创建站点规则"].tap()
         let name = app.textFields["站点名称"]
@@ -25,8 +29,8 @@ import XCTest
         app.buttons["保存"].tap()
         XCTAssertTrue(app.navigationBars["网站"].waitForExistence(timeout: 5))
         let cell = app.cells.containing(.staticText, identifier: title).firstMatch
-        XCTAssertTrue(cell.waitForExistence(timeout: 5))
         reveal(cell, in: app)
+        XCTAssertTrue(cell.waitForExistence(timeout: 5))
         cell.swipeRight()
         app.buttons["解析规则"].tap()
         app.segmentedControls.buttons["高级"].tap()
@@ -49,10 +53,105 @@ import XCTest
         screenshot.lifetime = .keepAlways
         add(screenshot)
     }
+    func testVideoTagSearchDoesNotAlsoPresentPlayer() throws {
+        let server = try LocalPageServer()
+        defer { server.listener.cancel() }
+        let app = XCUIApplication()
+        let title = "标签交互-" + String(UUID().uuidString.prefix(6))
+        app.launch()
+        app.tabBars.buttons["设置"].tap()
+        let management = app.buttons["管理网站"]
+        reveal(management, in: app)
+        XCTAssertTrue(management.waitForExistence(timeout: 5))
+        management.tap()
+        app.buttons["添加或导入站点"].tap()
+        app.buttons["创建站点规则"].tap()
+        let name = app.textFields["站点名称"]
+        XCTAssertTrue(name.waitForExistence(timeout: 5))
+        name.tap(); name.typeText(title)
+        let address = app.textFields["入口 URL"]
+        address.tap()
+        address.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 8))
+        address.typeText(server.url)
+        app.buttons["创建配置并打开页面"].tap()
+        app.segmentedControls.buttons["高级"].tap()
+        let yaml = app.textViews["完整站点 YAML"]
+        XCTAssertTrue(yaml.waitForExistence(timeout: 5))
+        yaml.tap(); yaml.press(forDuration: 1)
+        let selectAll = app.menuItems["Select All"].exists ? app.menuItems["Select All"] : app.menuItems["全选"]
+        XCTAssertTrue(selectAll.waitForExistence(timeout: 3))
+        selectAll.tap()
+        yaml.typeText("""
+        schemaVersion: 1
+        id: ui.tags.\(UUID().uuidString)
+        name: \(title)
+        match:
+          hosts: [127.0.0.1]
+        entries:
+          - id: main
+            name: \(title)
+            path: \(server.url)
+            category: video
+        rules:
+          - id: catalog
+            role: catalog
+            contentType: video
+            searchURLTemplate: '?q={keyword}'
+            extract:
+              script: |
+                return [{title:'交互视频',url:'/watch/1',extra:'交互标签'}];
+        """)
+        app.buttons["保存"].tap()
+        let cell = app.cells.containing(.staticText, identifier: title).firstMatch
+        reveal(cell, in: app)
+        XCTAssertTrue(cell.waitForExistence(timeout: 5))
+        cell.tap()
+        let tag = app.descendants(matching: .any).matching(identifier: "交互标签").firstMatch
+        XCTAssertTrue(tag.waitForExistence(timeout: 10))
+        tag.tap()
+        let search = app.navigationBars["交互标签"]
+        XCTAssertTrue(search.waitForExistence(timeout: 5))
+        XCTAssertTrue(search.isHittable, "Tag search must remain visible without a player covering it")
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+        search.buttons.firstMatch.tap()
+        let gallery = app.navigationBars[title]
+        XCTAssertTrue(gallery.waitForExistence(timeout: 5))
+        app.staticTexts["交互视频"].tap()
+        let presented = XCTNSPredicateExpectation(predicate: NSPredicate(format: "isHittable == false"), object: gallery)
+        XCTAssertEqual(XCTWaiter.wait(for: [presented], timeout: 5), .completed, "Card tap must still present playback")
+    }
+
     private func reveal(_ cell: XCUIElement, in app: XCUIApplication) {
         for _ in 0..<6 {
             if cell.isHittable { return }
             app.swipeUp()
         }
+    }
+}
+
+private final class LocalPageServer {
+    let listener: NWListener
+    let url: String
+    init() throws {
+        let ready = DispatchSemaphore(value: 0)
+        listener = try NWListener(using: .tcp, on: .any)
+        let queue = DispatchQueue(label: "CoveUITestHTTP")
+        listener.stateUpdateHandler = { if case .ready = $0 { ready.signal() } }
+        listener.newConnectionHandler = { connection in
+            connection.start(queue: queue)
+            connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { _, _, _, _ in
+                let body = "<html><body>Offline fixture</body></html>"
+                let response = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: \(body.utf8.count)\r\nConnection: close\r\n\r\n" + body
+                connection.send(content: Data(response.utf8), completion: .contentProcessed { _ in connection.cancel() })
+            }
+        }
+        listener.start(queue: queue)
+        guard ready.wait(timeout: .now() + 5) == .success, let port = listener.port else {
+            listener.cancel()
+            throw NSError(domain: "LocalPageServer", code: 1)
+        }
+        url = "http://127.0.0.1:\(port.rawValue)/"
     }
 }

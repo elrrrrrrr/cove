@@ -1,0 +1,30 @@
+# 审计修复与剩余工作
+
+当前使用唯一的 `schemaVersion: 1` 和原 Cove 资料库。首页、封面、列表样式及现有功能应持续保留。
+
+| 问题 | 当前实现 | 验证范围 |
+| --- | --- | --- |
+| TLS 证书绕过 | 删除信任所有证书的处理，使用系统验证 | 构建与代码检查 |
+| 缩略图缓存路径穿越 | URL 哈希写入；已有缓存只允许安全路径读取 | 路径与符号链接测试 |
+| CBZ/EPUB 路径逃逸 | 解包路径、容器与 manifest 引用边界；EPUB 内容禁用 JS | 路径测试；完整恶意文档夹具待补 |
+| NAS 大文件整包读取 | 浏览和历史入口使用 SMB 视频/音频流；文档及非流式媒体直接下载到磁盘 | 合成大文件、读取分块与取消测试；真实 NAS 待测 |
+| 分类过滤拖动排序 | 在全量排序中替换当前分类的槽位，保存唯一全局序号 | 分类交错与多选移动测试 |
+| 标签与卡片手势重叠风险 | 标签使用独立 Button，播放/长按手势仅位于封面和文本区域 | iOS 26.3.1 localhost 对照中，原实现未复现双触发；新实现验证搜索与播放分别工作 |
+
+NAS 编码图片内存读取最多 32 MiB，单次范围读取最多 512 KiB。磁盘下载上限为 500 MiB，读取前及下载过程中检查；取消或失败清理部分文件，完成后再发布。超出上限的非流式文件提示先保存到本地。文件名使用独立目录，避免同名覆盖。视频是否能播放仍取决于系统支持的编码。
+
+## iPad 与 ATS
+
+恢复显式 `UIRequiresFullScreen: false`。删除这个 false 不会自动变成 true，也不能据此判断退出多任务；启用 true 才会请求兼容模式。[Apple 说明](https://developer.apple.com/documentation/bundleresources/information-property-list/uirequiresfullscreen)。
+
+删除多余的 `NSAllowsArbitraryLoads`，保留 `NSAllowsLocalNetworking: true`。在目标系统上，后者的存在本来就会使前者被忽略，删除不扩大网络许可。ATS 与 HTTPS 默认服务器信任评估是两层不同的检查。[Apple ATS 说明](https://developer.apple.com/documentation/bundleresources/information-property-list/nsapptransportsecurity/nsallowsarbitraryloads)。
+
+## 尚未完成
+
+- 统一 ImagePipeline：显示尺寸下采样、完整上下文缓存键、解码/编码预算、磁盘 TTL/索引和共享取消。
+- parser、历史集合、Bento 分组等派生结果的缓存；HTML/TXT 后台计算、漫画预取、共享 shimmer。
+- HTTP 下载状态码、大小上限、重试及相对路径持久化的完整整改。
+- EPUB 更新与阅读位置、进度历史去重、SMB 播放请求取消等后续检查。
+- 真实 NAS 大文件播放、内存实测、iPad 多任务和各列表布局的设备回归。
+
+本次针对具体审计问题补修，不代表完整性能专项或整体架构重构已完成。现存 SDK 弃用、PDF actor 隔离及依赖构建警告仍待处理。

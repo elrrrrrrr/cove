@@ -10,7 +10,7 @@ struct SiteListView: View {
 
     @State private var library = SiteDefinitionStore.shared
     @State private var showImport = false
-    @State private var importError: String?
+    @State private var operationError: String?
     @State private var showAddSheet    = false
     @State private var editTarget: BookmarkSite?   // nil = add, non-nil = edit
     @State private var jsTarget: BookmarkSite?     // site whose JS is being edited
@@ -75,11 +75,11 @@ struct SiteListView: View {
                     let scoped = url.startAccessingSecurityScopedResource()
                     defer { if scoped { url.stopAccessingSecurityScopedResource() } }
                     library.pendingImport = try SiteDefinition.decode(String(contentsOf: url, encoding: .utf8))
-                } catch { importError = error.localizedDescription }
+                } catch { operationError = error.localizedDescription }
             }
-            .alert("导入失败", isPresented: Binding(get: { importError != nil }, set: { if !$0 { importError = nil } })) {
-                Button("好") { importError = nil }
-            } message: { Text(importError ?? "") }
+            .alert("操作失败", isPresented: Binding(get: { operationError != nil }, set: { if !$0 { operationError = nil } })) {
+                Button("好") { operationError = nil }
+            } message: { Text(operationError ?? "") }
             .safeAreaInset(edge: .bottom) {
                 if !library.issues.isEmpty {
                     VStack(alignment: .leading, spacing: 4) {
@@ -173,11 +173,10 @@ struct SiteListView: View {
                 }
             }
             .onMove { indices, newOffset in
-                // Only reorder within same category view
-                var mutable = displayed
-                mutable.move(fromOffsets: indices, toOffset: newOffset)
-                for (i, site) in mutable.enumerated() {
-                    site.sortOrder = i
+                do {
+                    try SiteOrder.move(sites, category: filterCategory, from: indices, to: newOffset, context: context)
+                } catch {
+                    operationError = "排序失败：\(error.localizedDescription)"
                 }
             }
         }
@@ -198,6 +197,21 @@ struct SiteListView: View {
             }
             .buttonStyle(.borderedProminent)
         }
+    }
+}
+
+@MainActor enum SiteOrder {
+    static func move(_ sites: [BookmarkSite], category: SiteCategory?, from indices: IndexSet,
+                     to offset: Int, context: ModelContext) throws {
+        var visible = sites.filter { category == nil || $0.category == category }
+        guard indices.allSatisfy({ visible.indices.contains($0) }), (0...visible.count).contains(offset) else { return }
+        visible.move(fromOffsets: indices, toOffset: offset)
+        var iterator = visible.makeIterator()
+        let reordered = sites.map { category == nil || $0.category == category ? iterator.next()! : $0 }
+        try context.save()
+        for (index, site) in reordered.enumerated() { site.sortOrder = index }
+        do { try context.save() }
+        catch { context.rollback(); throw error }
     }
 }
 

@@ -195,6 +195,29 @@ import SwiftData
         XCTAssertEqual(object["schemaVersion"] as? Int, 1); XCTAssertNil(object["version"])
     }
 
+    func testFilteredMoveKeepsOtherCategoriesInTheirGlobalSlots() throws {
+        let context = try context()
+        let categories: [SiteCategory] = [.video, .comic, .video, .news, .video]
+        let sites = categories.enumerated().map { BookmarkSite(name: "站点\($0.offset)", urlString: "https://media.example/\($0.offset)", category: $0.element, sortOrder: 10 + $0.offset * 10) }
+        for site in sites { context.insert(site) }
+        try context.save()
+        try SiteOrder.move(sites, category: .video, from: [2], to: 0, context: context)
+        let reordered = try context.fetch(FetchDescriptor<BookmarkSite>(sortBy: [SortDescriptor(\.sortOrder)]))
+        XCTAssertEqual(reordered.map(\.id), [sites[4], sites[1], sites[0], sites[3], sites[2]].map(\.id))
+        XCTAssertEqual(reordered.map(\.sortOrder), [0, 1, 2, 3, 4])
+    }
+
+    func testUnfilteredMultiMovePersistsOneUniqueGlobalOrder() throws {
+        let context = try context()
+        let sites = (0..<5).map { BookmarkSite(name: "站点\($0)", urlString: "https://media.example/\($0)", sortOrder: $0) }
+        for site in sites { context.insert(site) }
+        try context.save()
+        try SiteOrder.move(sites, category: nil, from: [0, 2], to: 5, context: context)
+        let reordered = try context.fetch(FetchDescriptor<BookmarkSite>(sortBy: [SortDescriptor(\.sortOrder)]))
+        XCTAssertEqual(reordered.map(\.id), [sites[1], sites[3], sites[4], sites[0], sites[2]].map(\.id))
+        XCTAssertEqual(reordered.map(\.sortOrder), [0, 1, 2, 3, 4])
+    }
+
     func testIncompleteSMBConfigRequiresSetup() {
         let config = NASConfig(name: "连接", host: "", port: 445, username: "reader", shareName: "")
         XCTAssertTrue(config.requiresSMBSetup)

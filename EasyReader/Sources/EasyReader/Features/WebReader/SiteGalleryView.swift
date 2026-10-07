@@ -340,12 +340,12 @@ struct SiteGalleryView: View {
                 item:        item,
                 isFavorited: favoriteURLCache.contains(item.pageURL.absoluteString),
                 cardSize:    cardSize,
+                onTap: { videoFullScreen = item },
+                onLongPress: { handleVideoCardLongPress(item) },
                 onExtraTap: !item.extra.isEmpty ? { tag in
                     extraNavTarget = extraSearchTarget(for: tag)
                 } : nil
             )
-            .contentShape(Rectangle())
-            .gesture(videoCardGesture(for: item))
         } footer: {
             infiniteScrollFooter
         }
@@ -385,21 +385,6 @@ struct SiteGalleryView: View {
         } else {
             toggleFavorite(item)
         }
-    }
-
-    private func videoCardGesture(for item: ParsedItem) -> some Gesture {
-        LongPressGesture(minimumDuration: 0.45)
-            .exclusively(before: TapGesture())
-            .onEnded { value in
-                switch value {
-                case .first(true):
-                    handleVideoCardLongPress(item)
-                case .second:
-                    videoFullScreen = item
-                default:
-                    break
-                }
-            }
     }
 
     private func isFavorited(_ item: ParsedItem) -> Bool {
@@ -777,6 +762,8 @@ struct VideoCard: View {
     let item: ParsedItem
     var isFavorited: Bool = false
     var cardSize: BentoCardSize = .small
+    var onTap: (() -> Void)?
+    var onLongPress: (() -> Void)?
     /// Called with the tapped tag string (e.g. actress name, category keyword).
     var onExtraTap: ((String) -> Void)?
 
@@ -796,11 +783,15 @@ struct VideoCard: View {
         VStack(alignment: .leading, spacing: 0) {
             thumbnailView
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .contentShape(Rectangle())
+                .gesture(cardGesture)
             VStack(alignment: .leading, spacing: 3) {
                 Text(item.title)
                     .font(titleFont)
                     .lineLimit(titleLines)
                     .foregroundStyle(.primary)
+                    .contentShape(Rectangle())
+                    .gesture(cardGesture)
                 if !item.extra.isEmpty {
                     if onExtraTap != nil {
                         extraTagsView
@@ -809,6 +800,7 @@ struct VideoCard: View {
                             .font(extraFont)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
+                            .gesture(cardGesture)
                     }
                 }
             }
@@ -816,6 +808,18 @@ struct VideoCard: View {
             .padding(.vertical, 6)
         }
         .contentShape(Rectangle())
+    }
+
+    private var cardGesture: some Gesture {
+        LongPressGesture(minimumDuration: 0.45)
+            .exclusively(before: TapGesture())
+            .onEnded { value in
+                switch value {
+                case .first(true): onLongPress?()
+                case .second: onTap?()
+                default: break
+                }
+            }
     }
 
     // MARK: - Extra tags
@@ -830,11 +834,13 @@ struct VideoCard: View {
     private var extraTagsView: some View {
         HStack(spacing: 4) {
             ForEach(extraTags, id: \.self) { tag in
-                Text(tag)
-                    .font(extraFont)
-                    .foregroundColor(.accentColor)
-                    .lineLimit(1)
-                    .onTapGesture { onExtraTap?(tag) }
+                Button { onExtraTap?(tag) } label: {
+                    Text(tag)
+                        .font(extraFont)
+                        .foregroundColor(.accentColor)
+                        .lineLimit(1)
+                }
+                .buttonStyle(.plain)
             }
         }
     }
