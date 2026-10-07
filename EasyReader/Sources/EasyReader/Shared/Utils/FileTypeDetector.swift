@@ -10,7 +10,7 @@ enum FileTypeDetector {
         case "txt":                                         return .txt
         case "mp4", "mkv", "mov", "avi", "m4v", "ts",
              "wmv", "flv", "webm", "rmvb", "rm":           return .video
-        case "mp3", "m4a", "flac", "aac", "ogg",
+        case "mp3", "m4a", "flac", "aac", "ogg", "opus",
              "wav", "wma", "ape", "alac":                   return .audio
         case "jpg", "jpeg", "png", "gif", "webp",
              "bmp", "heic", "heif", "svg", "tiff", "tif":  return .image

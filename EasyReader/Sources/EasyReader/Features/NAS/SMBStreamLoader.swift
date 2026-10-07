@@ -13,14 +13,14 @@ final class SMBStreamLoader: NSObject, AVAssetResourceLoaderDelegate, @unchecked
         ["mp4", "mov", "m4v", "ts"].contains((path as NSString).pathExtension.lowercased())
     }
 
-    private let client: SMBClient
+    private let client: any SMBRangeSource
     private let remotePath: String
     private let queue = DispatchQueue(label: "smb-stream", qos: .userInitiated)
 
     /// Cached file size — fetched once on first request.
     private var cachedFileSize: Int64?
 
-    private init(client: SMBClient, remotePath: String) {
+    private init(client: any SMBRangeSource, remotePath: String) {
         self.client = client
         self.remotePath = remotePath
     }
@@ -28,7 +28,7 @@ final class SMBStreamLoader: NSObject, AVAssetResourceLoaderDelegate, @unchecked
     // MARK: - Public factory
 
     /// Creates an AVURLAsset that streams from NAS. The loader is retained on the asset.
-    static func makeAsset(client: SMBClient, remotePath: String) -> AVURLAsset {
+    static func makeAsset(client: any SMBRangeSource, remotePath: String) -> AVURLAsset {
         let loader = SMBStreamLoader(client: client, remotePath: remotePath)
 
         let encoded = remotePath.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? remotePath
@@ -42,7 +42,7 @@ final class SMBStreamLoader: NSObject, AVAssetResourceLoaderDelegate, @unchecked
     }
 
     /// Creates an AVPlayerItem that streams from NAS via SMB range reads.
-    static func makePlayerItem(client: SMBClient, remotePath: String) -> AVPlayerItem {
+    static func makePlayerItem(client: any SMBRangeSource, remotePath: String) -> AVPlayerItem {
         let asset = makeAsset(client: client, remotePath: remotePath)
         return AVPlayerItem(asset: asset)
     }

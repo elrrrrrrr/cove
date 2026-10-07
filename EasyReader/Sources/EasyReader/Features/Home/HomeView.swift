@@ -192,6 +192,7 @@ struct HomeView: View {
         case .epub:      EPUBReaderView(fileURL: fileURL)
         case .txt:       TXTReaderView(fileURL: fileURL)
         case .video:     VideoPlayerView(fileURL: fileURL)
+        case .audio:     NASAudioView(trackName: item.title, trackPath: item.localPath, fileURL: fileURL)
         default:         Text("不支持的格式")
         }
     }
@@ -273,6 +274,12 @@ struct HomeView: View {
     @ViewBuilder
     private func localDestinationView(for item: ReadingHistory) -> some View {
         switch item.fileType {
+        case .audio:
+            if let path = item.filePath {
+                NASAudioView(trackName: item.title, trackPath: path, fileURL: URL(fileURLWithPath: path))
+            } else if let address = item.url, let url = URL(string: address) {
+                NASAudioView(trackName: item.title, trackPath: address, fileURL: url)
+            }
         case .web:
             if let s = item.url, let url = URL(string: s) {
                 WebReaderView(url: url)

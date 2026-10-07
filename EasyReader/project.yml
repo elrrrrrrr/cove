@@ -58,6 +58,9 @@ targets:
       - path: Tests/Fixtures/Sites
         type: folder
         buildPhase: resources
+      - path: Tests/Fixtures/Audio
+        type: folder
+        buildPhase: resources
     dependencies:
       - target: EasyReader
     settings:

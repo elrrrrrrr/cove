@@ -6,6 +6,7 @@ import AVFoundation
 struct NASAudioView: View {
     var trackName: String = ""
     var trackPath: String = ""
+    var fileURL: URL?
 
     @Environment(\.dismiss) private var dismiss
     @State private var audioManager = AudioPlayerManager.shared
@@ -92,6 +93,13 @@ struct NASAudioView: View {
             }
         }
         .navigationBarHidden(true)
+        .task(id: fileURL) {
+            if let fileURL {
+                audioManager.play(url: fileURL,
+                    name: trackName.isEmpty ? fileURL.deletingPathExtension().lastPathComponent : trackName,
+                    path: trackPath.isEmpty ? fileURL.path : trackPath)
+            }
+        }
         .overlay(alignment: .topLeading) {
             Button { dismiss() } label: {
                 Image(systemName: "chevron.down")
