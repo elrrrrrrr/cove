@@ -184,13 +184,14 @@ struct ComicReaderView: View {
 
     private var hasPrev: Bool { currentChapterIndex > 0 }
     private var hasNext: Bool { currentChapterIndex < allChapters.count - 1 }
+    @State private var showParsingWeb = false
 
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
 
             // Hidden WebView
-            ChapterWebViewBridge(webView: extractor.webView)
+            HiddenWebView(webView: extractor.webView)
                 .frame(width: 1, height: 1)
                 .opacity(0)
                 .allowsHitTesting(false)
@@ -203,12 +204,23 @@ struct ComicReaderView: View {
             }
         }
         .statusBarHidden(!showBars)
+        .sheet(isPresented: $showParsingWeb) {
+            ParsingWebViewSheet(webView: extractor.webView, request: URLRequest(url: currentChapter.chapterURL), status: inspectionStatus)
+        }
         .task {
             extractor.load(url: currentChapter.chapterURL, definitionID: definitionID)
         }
         .onDisappear {
             extractor.cancel()
             saveProgress()
+        }
+    }
+
+    private var inspectionStatus: String {
+        switch extractor.state {
+        case .loading: "加载章节中…"
+        case .loaded: "章节解析已完成"
+        case .failed(let message): "解析失败：\(message)"
         }
     }
 
@@ -224,6 +236,7 @@ struct ComicReaderView: View {
                 Text("加载中…")
                     .foregroundStyle(.white.opacity(0.7))
                     .font(.subheadline)
+                Button("查看原始网页", systemImage: "safari") { showParsingWeb = true }.buttonStyle(.bordered).tint(.white)
             }
 
         case .loaded(let data):
@@ -240,6 +253,7 @@ struct ComicReaderView: View {
                     extractor.load(url: currentChapter.chapterURL, definitionID: definitionID)
                 }
                 .buttonStyle(.borderedProminent)
+                Button("查看原始网页", systemImage: "safari") { showParsingWeb = true }.buttonStyle(.bordered).tint(.white)
             }
         }
     }
@@ -484,12 +498,4 @@ private struct ComicPageImage: View {
             }
         }
     }
-}
-
-// MARK: - WebViewBridge
-
-private struct ChapterWebViewBridge: UIViewRepresentable {
-    let webView: WKWebView
-    func makeUIView(context: Context) -> WKWebView { webView }
-    func updateUIView(_ uiView: WKWebView, context: Context) {}
 }

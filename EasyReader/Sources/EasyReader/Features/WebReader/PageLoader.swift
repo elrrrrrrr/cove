@@ -53,6 +53,21 @@ final class PageLoader: NSObject {
 
     /// The URL the WebView actually settled on (may differ from currentURL after redirects/preNavigateJS).
     var resolvedBaseURL: URL? { _webView?.url ?? currentURL }
+    var originalPageRequest: URLRequest? {
+        guard let currentURL else { return nil }
+        var request = URLRequest(url: currentURL)
+        for (name, value) in parser?.requestHeaders ?? [:] { request.setValue(value, forHTTPHeaderField: name) }
+        return request
+    }
+    var inspectionStatus: String {
+        switch state {
+        case .idle: "等待加载网页"
+        case .loading: "加载网页中…"
+        case .extracting: "提取内容中…"
+        case .done: isLoadingMore ? "加载下一页中…" : "解析已完成"
+        case .failed(let message): "解析失败：\(message)"
+        }
+    }
 
     /// Lazily-created WKWebView — avoids blocking the main thread during view init.
     private(set) var webView: WKWebView {
@@ -616,6 +631,7 @@ struct HiddenWebView: UIViewRepresentable {
     init(loader: PageLoader) { self.webView = loader.webView }
     init(webView: WKWebView) { self.webView = webView }
 
-    func makeUIView(context: Context) -> WKWebView { webView }
-    func updateUIView(_ uiView: WKWebView, context: Context) {}
+    func makeUIView(context: Context) -> ParsingWebViewContainer { ParsingWebViewContainer(webView: webView) }
+    func updateUIView(_ uiView: ParsingWebViewContainer, context: Context) {}
+    static func dismantleUIView(_ uiView: ParsingWebViewContainer, coordinator: ()) { uiView.restore() }
 }

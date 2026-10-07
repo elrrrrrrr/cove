@@ -168,12 +168,13 @@ struct ComicDetailView: View {
     @State private var loader = ComicDetailLoader()
     @State private var showReaderFor: ComicChapter?
     @State private var lastReadChapterId: String?
+    @State private var showParsingWeb = false
     @Environment(\.modelContext) private var modelContext
 
     var body: some View {
         ZStack {
             // Hidden WebView for extraction
-            WebViewBridge(webView: loader.webView)
+            HiddenWebView(webView: loader.webView)
                 .frame(width: 1, height: 1)
                 .opacity(0)
                 .allowsHitTesting(false)
@@ -183,6 +184,14 @@ struct ComicDetailView: View {
         .appSurface()
         .navigationTitle(item.title)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("查看原始网页", systemImage: "safari") { showParsingWeb = true }
+            }
+        }
+        .sheet(isPresented: $showParsingWeb) {
+            ParsingWebViewSheet(webView: loader.webView, request: URLRequest(url: item.pageURL), status: inspectionStatus)
+        }
         .task {
             loader.load(url: item.pageURL, definitionID: definitionID)
             // Find last-read chapter using a targeted query instead of loading all history
@@ -198,6 +207,14 @@ struct ComicDetailView: View {
         .onDisappear { loader.cancel() }
         .fullScreenCover(item: $showReaderFor) { chapter in
             comicReaderDestination(chapter)
+        }
+    }
+
+    private var inspectionStatus: String {
+        switch loader.state {
+        case .loading: "加载漫画详情中…"
+        case .loaded: "漫画详情解析已完成"
+        case .failed(let message): "解析失败：\(message)"
         }
     }
 
@@ -241,6 +258,7 @@ struct ComicDetailView: View {
                     .font(.title2.bold())
                     .multilineTextAlignment(.center)
                 ProgressView("加载中…")
+                Button("查看原始网页", systemImage: "safari") { showParsingWeb = true }.buttonStyle(.bordered)
             }
             .padding()
             .frame(maxWidth: .infinity)
@@ -417,14 +435,6 @@ struct ComicDetailView: View {
             )
         }
     }
-}
-
-// MARK: - WebViewBridge (minimal UIViewRepresentable for hidden WKWebView)
-
-private struct WebViewBridge: UIViewRepresentable {
-    let webView: WKWebView
-    func makeUIView(context: Context) -> WKWebView { webView }
-    func updateUIView(_ uiView: WKWebView, context: Context) {}
 }
 
 // MARK: - FlowLayout (simple horizontal wrap)

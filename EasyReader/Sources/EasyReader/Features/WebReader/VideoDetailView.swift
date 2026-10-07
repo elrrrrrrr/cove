@@ -16,6 +16,7 @@ struct VideoDetailView: View {
     @State private var dragOffset      : CGFloat = 0
     @State private var isAdvancingEpisode = false
     @State private var loadingScrollable = false
+    @State private var showParsingWeb = false
     // Pre-populate from L0 synchronous cache — no blank frame when re-entering
     @State private var thumbImage      : UIImage?
     @Environment(\.dismiss) private var dismiss
@@ -46,25 +47,28 @@ struct VideoDetailView: View {
                     loadingOverlay.transition(.opacity)
 
                 case .found(let result):
-                    NativeVideoPlayer(
-                        url: result.streamURL,
-                        headers: result.headers,
-                        startTime: savedProgress,
-                        player: $player,
-                        onPlaybackEnded: { playNextEpisode(from: result) }
-                    )
-                        .id(currentPageURL)
-                        .ignoresSafeArea()
-                        .overlay(alignment: .topTrailing) {
-                            if let player {
-                                VideoNetworkSpeedBadge(player: player)
-                                    .padding(.top, 54)
-                                    .padding(.trailing, 16)
+                    if !showParsingWeb {
+                        NativeVideoPlayer(
+                            url: result.streamURL,
+                            headers: result.headers,
+                            startTime: savedProgress,
+                            player: $player,
+                            onPlaybackEnded: { playNextEpisode(from: result) }
+                        )
+                            .id(currentPageURL)
+                            .ignoresSafeArea()
+                            .overlay(alignment: .topTrailing) {
+                                if let player {
+                                    VideoNetworkSpeedBadge(player: player)
+                                        .padding(.top, 54)
+                                        .padding(.trailing, 16)
+                                }
                             }
-                        }
-                        .transition(.opacity)
+                            .transition(.opacity)
+                    }
 
                 case .notFound:
+                    if !showParsingWeb {
                     WebReaderView(url: currentPageURL)
                         .transition(.opacity)
                         .overlay(alignment: .topTrailing) {
@@ -80,6 +84,7 @@ struct VideoDetailView: View {
                             .padding(.trailing, 16)
                             .padding(.top, 52)
                         }
+                    }
                 }
 
                 // Diagnostic overlay (notFound only) — bottom-right floating button
@@ -96,6 +101,11 @@ struct VideoDetailView: View {
         .navigationBarHidden(true)
         .toolbar(.hidden, for: .tabBar)
         .background(SwipeBackEnabler())
+        .sheet(isPresented: $showParsingWeb) {
+            ParsingWebViewSheet(webView: extractor.webView,
+                request: extractor.originalPageRequest ?? URLRequest(url: currentPageURL),
+                status: extractor.state == .loading ? "解析视频地址中…" : "视频解析已结束")
+        }
         .onAppear {
             guard player == nil else { return }
             // Restore saved progress before starting extraction (must run first for cache hits)
@@ -212,7 +222,8 @@ struct VideoDetailView: View {
 
     private var loadingOverlay: some View {
         VideoLoadingView(title: item.title, duration: item.duration, image: thumbImage,
-            advancing: isAdvancingEpisode, onOverflow: { loadingScrollable = $0 }) {
+            advancing: isAdvancingEpisode, onOverflow: { loadingScrollable = $0 },
+            onViewPage: { showParsingWeb = true }) {
             extractor.cancel()
             dismiss()
         }
@@ -271,6 +282,7 @@ struct VideoLoadingView: View {
     let image: UIImage?
     var advancing = false
     var onOverflow: (Bool) -> Void = { _ in }
+    var onViewPage: (() -> Void)? = nil
     var onCancel: () -> Void
 
     var body: some View {
@@ -313,8 +325,13 @@ struct VideoLoadingView: View {
                     }
                     .scrollIndicators(.hidden)
                     .onScrollGeometryChange(for: Bool.self) { $0.contentSize.height > $0.containerSize.height + 1 } action: { _, value in onOverflow(value) }
-                    Button("取消", action: onCancel).buttonStyle(.bordered).tint(.white)
-                        .padding(.bottom, 16)
+                    HStack(spacing: 16) {
+                        if let onViewPage {
+                            Button("查看原始网页", systemImage: "safari", action: onViewPage)
+                                .accessibilityIdentifier("inspect-current-webpage")
+                        }
+                        Button("取消", action: onCancel)
+                    }.buttonStyle(.bordered).tint(.white).padding(.horizontal, 24).padding(.bottom, 16)
                 }
             }
             .frame(width: geometry.size.width, height: geometry.size.height)

@@ -35,6 +35,7 @@ struct SiteGalleryView: View {
 
     @State private var loader: PageLoader
     @State private var showWeb          = false
+    @State private var showParsingWeb = false
     @State private var showPageInput    = false
     @State private var pageInputText    = ""
     @State private var showJSConfig     = false
@@ -97,6 +98,19 @@ struct SiteGalleryView: View {
         .navigationTitle(siteName)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { toolbarItems }
+        .safeAreaInset(edge: .bottom) {
+            if !showWeb, loader.state.isActive {
+                Button("查看原始网页", systemImage: "safari") { showParsingWeb = true }
+                    .accessibilityIdentifier("inspect-current-webpage")
+                    .buttonStyle(.bordered).padding(10)
+                    .frame(maxWidth: .infinity).background(.bar)
+            }
+        }
+        .sheet(isPresented: $showParsingWeb) {
+            if let request = loader.originalPageRequest ?? siteURL.map({ URLRequest(url: $0) }) {
+                ParsingWebViewSheet(webView: loader.webView, request: request, status: loader.inspectionStatus)
+            }
+        }
         .task {
             guard let url = siteURL else { return }
             // Async cache pre-warm (disk I/O runs on actor, not main thread)
@@ -645,6 +659,8 @@ struct SiteGalleryView: View {
         // ── Menu 2: tools ───────────────────────────────────────
         ToolbarItem(placement: .topBarTrailing) {
             Menu {
+                Button("查看原始网页", systemImage: "safari") { showParsingWeb = true }
+                    .accessibilityIdentifier("inspect-current-webpage-menu")
                 Button { loader.reload() } label: {
                     Label("刷新", systemImage: "arrow.clockwise")
                 }
@@ -663,6 +679,7 @@ struct SiteGalleryView: View {
             } label: {
                 Image(systemName: "ellipsis.circle")
             }
+            .accessibilityLabel("站点工具")
         }
     }
 

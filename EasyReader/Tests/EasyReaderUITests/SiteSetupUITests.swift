@@ -370,7 +370,7 @@ final class LocalPageServer {
     let listener: NWListener
     let requestCount = RequestCounter()
     let url: String
-    init() throws {
+    init(body: String = "<html><body>Offline fixture</body></html>") throws {
         let ready = DispatchSemaphore(value: 0)
         listener = try NWListener(using: .tcp, on: .any)
         let queue = DispatchQueue(label: "CoveUITestHTTP")
@@ -380,8 +380,7 @@ final class LocalPageServer {
             connection.start(queue: queue)
             connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { _, _, _, _ in
                 counter.increment()
-                let body = "<html><body>Offline fixture</body></html>"
-                let response = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: \(body.utf8.count)\r\nConnection: close\r\n\r\n" + body
+                let response = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: \(body.utf8.count)\r\nConnection: close\r\n\r\n" + body
                 connection.send(content: Data(response.utf8), completion: .contentProcessed { _ in connection.cancel() })
             }
         }

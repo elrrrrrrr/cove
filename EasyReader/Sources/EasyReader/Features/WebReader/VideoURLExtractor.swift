@@ -70,6 +70,7 @@ final class VideoURLExtractor: NSObject {
     var diagnostic: String? = nil
     let webView: WKWebView
     private var targetURL: URL?
+    var originalPageRequest: URLRequest? { targetURL.map { pageRequest(url: $0) } }
     private var definitionID: String?
     private var extractTask: Task<Void, Never>?
     private var loadTimeoutTask: Task<Void, Never>?

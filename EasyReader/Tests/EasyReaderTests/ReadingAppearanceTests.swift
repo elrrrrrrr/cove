@@ -161,14 +161,14 @@ import WebKit
         let cover = renderer.image { ctx in UIColor.orange.setFill(); ctx.fill(CGRect(x: 0, y: 0, width: 2400, height: 300)) }
         var overflow = false
         let controller = try host(VideoLoadingView(title: title, duration: "12:34", image: cover,
-            onOverflow: { overflow = $0 }, onCancel: {}), size: CGSize(width: 320, height: 600))
+            onOverflow: { overflow = $0 }, onViewPage: {}, onCancel: {}), size: CGSize(width: 320, height: 600))
         try await Task.sleep(for: .milliseconds(150))
         let scroll = try XCTUnwrap(descendant(controller.view, as: UIScrollView.self))
         XCTAssertLessThanOrEqual(scroll.contentSize.width, 321)
         XCTAssertGreaterThan(scroll.contentSize.height, scroll.bounds.height)
         XCTAssertTrue(overflow)
         snapshot(controller.view, name: "loading-long-title")
-        let largeText = try host(VideoLoadingView(title: title, duration: "", image: nil, onCancel: {})
+        let largeText = try host(VideoLoadingView(title: title, duration: "", image: nil, onViewPage: {}, onCancel: {})
             .environment(\.dynamicTypeSize, .accessibility3), size: CGSize(width: 320, height: 600))
         try await Task.sleep(for: .milliseconds(150))
         XCTAssertLessThanOrEqual(try XCTUnwrap(descendant(largeText.view, as: UIScrollView.self)).contentSize.width, 321)
