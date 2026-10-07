@@ -63,8 +63,8 @@ import Network
         let requests = server.requestCount.value
         cell.buttons["site-configuration-button"].tap()
         XCTAssertTrue(app.navigationBars["站点配置"].waitForExistence(timeout: 5))
-        XCTAssertTrue(app.segmentedControls.buttons["高级"].isSelected)
-        XCTAssertTrue(app.segmentedControls.buttons["表单"].isSelected)
+        XCTAssertEqual(app.segmentedControls.count, 0, "Configuration must show a single editor without wizard tabs")
+        XCTAssertEqual(app.buttons["site-configuration-tools"].value as? String, "表单")
         let formName = app.descendants(matching: .any).matching(identifier: "schema-form-name").firstMatch
         XCTAssertTrue(formName.waitForExistence(timeout: 5))
         let formTitle = title + " 表单编辑"
@@ -88,21 +88,21 @@ import Network
         app.navigationBars["解析规则"].buttons.firstMatch.tap()
         let formScreenshot = XCTAttachment(screenshot: app.screenshot())
         formScreenshot.name = "interactive-schema-form"; formScreenshot.lifetime = .keepAlways; add(formScreenshot)
-        app.segmentedControls.buttons["源码"].tap()
+        chooseConfigurationTool("查看源码", in: app)
         XCTAssertTrue(yaml.waitForExistence(timeout: 5))
         XCTAssertTrue((yaml.value as? String)?.contains(formTitle) == true)
         let waitLine = (yaml.value as? String)?.components(separatedBy: .newlines).first { $0.contains("waitSeconds:") }
         let waitValue = waitLine?.split(separator: ":", maxSplits: 1).last.map { String($0).trimmingCharacters(in: .whitespaces) }
         XCTAssertEqual(waitValue.flatMap(Double.init), 0.75)
         XCTAssertTrue((yaml.value as? String)?.contains("/updated") == true)
-        app.segmentedControls.buttons["表单"].tap()
+        chooseConfigurationTool("表单编辑", in: app)
         XCTAssertEqual(formName.value as? String, formTitle)
         app.buttons["保存"].tap()
         XCTAssertTrue(app.navigationBars["网站"].waitForExistence(timeout: 5))
         cell.buttons["site-configuration-button"].tap()
         XCTAssertTrue(app.navigationBars["站点配置"].waitForExistence(timeout: 5))
         XCTAssertEqual(formName.value as? String, formTitle)
-        app.segmentedControls.buttons["源码"].tap()
+        chooseConfigurationTool("查看源码", in: app)
         let original = try XCTUnwrap(yaml.value as? String)
         for field in ["schemaVersion: 1", "entries:", "rules:", "portal:", "images:", "id: detail", "id: books"] {
             XCTAssertTrue(original.contains(field), "Complete configuration must include \(field)")
@@ -117,7 +117,7 @@ import Network
         XCTAssertTrue(app.navigationBars["网站"].waitForExistence(timeout: 5))
         cell.buttons["site-configuration-button"].tap()
         XCTAssertTrue(app.navigationBars["站点配置"].waitForExistence(timeout: 5))
-        app.segmentedControls.buttons["源码"].tap()
+        chooseConfigurationTool("查看源码", in: app)
         XCTAssertEqual(yaml.value as? String, original, "Cancel must preserve the stored configuration")
         replaceCode(yaml, with: original.replacingOccurrences(of: title, with: renamed), in: app)
         app.buttons["保存"].tap()
@@ -126,16 +126,29 @@ import Network
         reveal(renamedCell, in: app)
         renamedCell.buttons["site-configuration-button"].tap()
         XCTAssertTrue(app.navigationBars["站点配置"].waitForExistence(timeout: 5))
-        app.segmentedControls.buttons["源码"].tap()
+        chooseConfigurationTool("查看源码", in: app)
         let saved = try XCTUnwrap(yaml.value as? String)
         let savedName = saved.components(separatedBy: .newlines).first { $0.hasPrefix("name:") }
         XCTAssertTrue(savedName?.contains(renamed) == true, "Direct YAML save must retain the edited schema name")
         XCTAssertTrue(saved.contains("portal:")); XCTAssertTrue(saved.contains("images:"))
         let invalid = saved + "\nunknownOption: true\n"
         replaceCode(yaml, with: invalid, in: app)
-        app.segmentedControls.buttons["表单"].tap()
-        XCTAssertTrue(app.segmentedControls.buttons["源码"].isSelected, "Invalid source must remain available for repair")
+        chooseConfigurationTool("表单编辑", in: app)
+        XCTAssertEqual(app.buttons["site-configuration-tools"].value as? String, "源码", "Invalid source must remain available for repair")
         XCTAssertEqual(yaml.value as? String, invalid)
+        chooseConfigurationTool("基本设置", in: app)
+        XCTAssertTrue(yaml.exists, "Invalid source must also prevent leaving the editor through tools")
+        XCTAssertEqual(server.requestCount.value, requests)
+        replaceCode(yaml, with: saved, in: app)
+        chooseConfigurationTool("基本设置", in: app)
+        XCTAssertTrue(app.textFields["站点名称"].waitForExistence(timeout: 5))
+        XCTAssertEqual(app.segmentedControls.count, 0)
+        chooseConfigurationTool("表单编辑", in: app)
+        XCTAssertTrue(formName.waitForExistence(timeout: 5))
+        chooseConfigurationTool("解析预览", in: app)
+        XCTAssertTrue(app.buttons["运行解析预览"].waitForExistence(timeout: 5))
+        chooseConfigurationTool("表单编辑", in: app)
+        XCTAssertEqual(formName.value as? String, renamed + " 表单编辑")
     }
 
     func testCreateCSSConfigurationAndEditCustomJavaScript() throws {
@@ -158,6 +171,7 @@ import Network
         address.typeText("https://media.example/latest/")
         app.buttons["创建配置并打开页面"].tap()
         app.segmentedControls.buttons["高级"].tap()
+        XCTAssertEqual(app.segmentedControls.count, 1, "The guide must have only one row of steps")
         let yaml = app.textViews["完整站点 YAML"]
         XCTAssertTrue(yaml.waitForExistence(timeout: 5))
         let cssText = try XCTUnwrap(yaml.value as? String)
@@ -170,7 +184,7 @@ import Network
         cell.swipeRight()
         app.buttons["解析规则"].tap()
         app.segmentedControls.buttons["高级"].tap()
-        app.segmentedControls.buttons["JavaScript"].tap()
+        chooseConfigurationTool("JavaScript", in: app)
         app.buttons["清空脚本"].tap()
         let script = app.textViews["自定义 JavaScript"]
         script.tap()
@@ -211,6 +225,7 @@ import Network
         address.typeText(server.url)
         app.buttons["创建配置并打开页面"].tap()
         app.segmentedControls.buttons["高级"].tap()
+        XCTAssertEqual(app.segmentedControls.count, 1, "The guide must have only one row of steps")
         let yaml = app.textViews["完整站点 YAML"]
         XCTAssertTrue(yaml.waitForExistence(timeout: 5))
         yaml.tap(); yaml.press(forDuration: 1)
@@ -328,6 +343,13 @@ import Network
         reveal(management, in: app); management.tap(); reveal(cell, in: app); cell.tap()
         XCTAssertTrue(app.buttons["browser-layout-menu"].waitForExistence(timeout: 5))
         XCTAssertEqual(app.buttons["browser-layout-menu"].value as? String, "Bento")
+    }
+
+    private func chooseConfigurationTool(_ title: String, in app: XCUIApplication) {
+        let menu = app.buttons["site-configuration-tools"]
+        XCTAssertTrue(menu.waitForExistence(timeout: 5)); menu.tap()
+        let action = app.buttons[title]
+        XCTAssertTrue(action.waitForExistence(timeout: 3)); action.tap()
     }
 
     private func replaceCode(_ editor: XCUIElement, with text: String, in app: XCUIApplication) {

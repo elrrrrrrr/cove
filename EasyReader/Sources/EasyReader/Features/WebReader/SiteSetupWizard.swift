@@ -42,13 +42,18 @@ struct SiteSetupWizard: View {
         }
     }
     private var isScriptRule: Bool { activeRule?.extract?.script != nil || activeRule?.extract?.expression != nil }
+    private var editorName: String {
+        switch advancedMode { case 2: "表单"; case 0: "源码"; default: "JavaScript" }
+    }
 
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                Picker("设置步骤", selection: Binding(get: { step }, set: changeStep)) {
-                    Text("基本").tag(0); Text("点选").tag(1); Text("预览").tag(2); Text("高级").tag(3)
-                }.pickerStyle(.segmented).padding()
+                if !opensConfiguration {
+                    Picker("设置步骤", selection: Binding(get: { step }, set: changeStep)) {
+                        Text("基本").tag(0); Text("点选").tag(1); Text("预览").tag(2); Text("高级").tag(3)
+                    }.pickerStyle(.segmented).padding()
+                }
                 if step == 0 { basics }
                 else if step == 1 { selectorEditor }
                 else if step == 2 { previewView }
@@ -60,6 +65,9 @@ struct SiteSetupWizard: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
+                if opensConfiguration || step == 3 {
+                    ToolbarItem(placement: .topBarTrailing) { configurationMenu }
+                }
                 ToolbarItem(placement: .confirmationAction) { Button("保存") { save() }.disabled(draft == nil) }
                 ToolbarItem(placement: .bottomBar) {
                     Button("导出 .site", systemImage: "square.and.arrow.up") { export() }.disabled(draft == nil)
@@ -73,6 +81,30 @@ struct SiteSetupWizard: View {
                 if case .failure(let issue) = result { error = issue.localizedDescription }
             }
         }
+    }
+
+    private var configurationMenu: some View {
+        Menu {
+            Section("编辑配置") {
+                Button("表单编辑", systemImage: "slider.horizontal.3") { showEditor(2) }
+                Button("查看源码", systemImage: "chevron.left.forwardslash.chevron.right") { showEditor(0) }
+                if !opensConfiguration {
+                    Button("JavaScript", systemImage: "curlybraces") { showEditor(1) }
+                }
+            }
+            if opensConfiguration {
+                Section("解析工具") {
+                    Button("基本设置", systemImage: "gearshape") { changeStep(0) }
+                    Button("网页点选", systemImage: "hand.tap") { changeStep(1) }
+                    Button("解析预览", systemImage: "play") { changeStep(2) }
+                }
+            }
+        } label: {
+            Text(step == 3 ? editorName : "配置工具")
+        }
+        .accessibilityLabel("配置工具")
+        .accessibilityIdentifier("site-configuration-tools")
+        .accessibilityValue(step == 3 ? editorName : "解析工具")
     }
 
     private var basics: some View {
@@ -180,11 +212,6 @@ struct SiteSetupWizard: View {
 
     private var advancedEditor: some View {
         VStack(alignment: .leading) {
-            Picker("高级编辑方式", selection: Binding(get: { advancedMode }, set: changeEditor)) {
-                Text("表单").tag(2)
-                Text(opensConfiguration ? "源码" : "完整 YAML").tag(0)
-                if !opensConfiguration { Text("JavaScript").tag(1) }
-            }.pickerStyle(.segmented).padding(.horizontal)
             if advancedMode == 2 {
                 if configurationNeedsSaving {
                     Text("尚未保存站点规则，以下为配置草稿。")
@@ -280,6 +307,10 @@ struct SiteSetupWizard: View {
             try prepareEditor(mode)
             advancedMode = mode; error = nil
         } catch { self.error = error.localizedDescription }
+    }
+    private func showEditor(_ mode: Int) {
+        changeStep(3)
+        if step == 3 { changeEditor(mode) }
     }
     private func changeStep(_ next: Int) {
         guard next != step else { return }
