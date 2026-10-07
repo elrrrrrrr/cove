@@ -2,38 +2,56 @@ import UIKit
 import Foundation
 import CryptoKit
 
+/// Immutable ownership and transform snapshot for one image request.
+struct ThumbnailRequest: Hashable, Sendable {
+    let url: URL
+    let referer: URL?
+    let definitionID: String?
+    let transform: SiteImageTransform?
+    let cacheID: String
+
+    init(url: URL, referer: URL? = nil, definitionID: String? = nil) {
+        self.url = url; self.referer = referer; self.definitionID = definitionID
+        transform = SiteParserRegistry.imageTransform(for: url, referer: referer, definitionID: definitionID)
+        let fields = [url.absoluteString, referer?.absoluteString ?? "", definitionID ?? "", transform?.key ?? "", transform?.iv ?? ""]
+        let context = fields.map { "\($0.utf8.count):\($0)" }.joined()
+        cacheID = SHA256.hash(data: Data(context.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+}
+
 // MARK: - ImageMemoryCache
 //
-// NSCache<NSURL, UIImage> is thread-safe and can be read synchronously from any context,
+// NSCache<NSString, UIImage> is thread-safe and can be read synchronously from any context,
 // including SwiftUI View.init. This is the "L0" layer that eliminates the blank-frame
 // flash when CachedThumbnail is recreated during navigation.
 
 final class ImageMemoryCache: @unchecked Sendable {
     static let shared = ImageMemoryCache()
-    private let cache = NSCache<NSURL, UIImage>()
+    private let cache = NSCache<NSString, UIImage>()
 
-    /// L0 max decoded UIImage count (compressed in memory by OS).
+    /// Soft count limit for decoded images; the full image budget is a separate follow-up.
     private static let l0MaxCount = 300
 
     private init() {
         cache.countLimit = Self.l0MaxCount
     }
 
-    func store(_ image: UIImage, for url: URL) {
-        cache.setObject(image, forKey: url as NSURL)
+    func store(_ image: UIImage, for request: ThumbnailRequest) {
+        cache.setObject(image, forKey: request.cacheID as NSString)
     }
-
-    func image(for url: URL) -> UIImage? {
-        cache.object(forKey: url as NSURL)
+    func image(for request: ThumbnailRequest) -> UIImage? {
+        cache.object(forKey: request.cacheID as NSString)
     }
+    func store(_ image: UIImage, for url: URL) { store(image, for: ThumbnailRequest(url: url)) }
+    func image(for url: URL) -> UIImage? { image(for: ThumbnailRequest(url: url)) }
 }
 
 // MARK: - ThumbnailCache
 //
 // Three-level cache:
-//   L0 (ImageMemoryCache) — NSCache<URL, UIImage>  synchronous, no await needed
-//   L1 (actor mem)        — [URL: Data] LRU, up to memMaxCount entries
-//   L2 (disk)             — CoverCache/<host>/<url-path>, up to diskMaxBytes, mtime LRU
+//   L0 (ImageMemoryCache) — NSCache<NSString, UIImage>  synchronous, no await needed
+//   L1 (actor mem)        — [request ID: Data] LRU, up to memMaxCount entries
+//   L2 (disk)             — CoverCache/<request-hash>.image, up to diskMaxBytes, mtime LRU
 
 actor ThumbnailCache {
     static let shared = ThumbnailCache()
@@ -43,18 +61,20 @@ actor ThumbnailCache {
     private let diskMaxBytes = 500 * 1024 * 1024   // 500 MB
 
     // ── L1: actor-isolated Data LRU (tick-counter for O(1) touch) ────────
-    private var mem: [URL: (data: Data, tick: UInt64)] = [:]
+    private var mem: [String: (data: Data, tick: UInt64)] = [:]
     private var tick: UInt64 = 0
 
     // ── L2: disk root ────────────────────────────────────────────────────
     private let root: URL
 
     // ── in-flight dedup ──────────────────────────────────────────────────
-    private var inFlight: [URL: Task<Data?, Never>] = [:]
+    private var inFlight: [String: Task<Data?, Never>] = [:]
 
     // ── URLSession with Safari UA ────────────────────────────────────────
     private let session: URLSession = {
         let cfg = URLSessionConfiguration.default
+        cfg.urlCache = nil
+        cfg.requestCachePolicy = .reloadIgnoringLocalCacheData
         cfg.httpAdditionalHeaders = [
             "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1",
             "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8"
@@ -70,79 +90,66 @@ actor ThumbnailCache {
 
     // MARK: - Public
 
-    func data(for url: URL, referer: URL? = nil) async -> Data? {
-        // Handle data: URIs (e.g. data:image/jpeg;base64,...) — decode inline
-        if url.scheme == "data" {
-            return decodeDataURI(url)
-        }
+    func data(for url: URL, referer: URL? = nil, definitionID: String? = nil) async -> Data? {
+        await data(for: ThumbnailRequest(url: url, referer: referer, definitionID: definitionID))
+    }
 
-        // L1 hit — L0 (ImageMemoryCache) was already populated when this was first loaded
-        if let entry = mem[url] { touch(mem: url); return entry.data }
-
-        // L2 hit — read disk off the actor serial queue to avoid blocking concurrent loads
-        let file = diskPath(for: url)
-        if let d = await Self.readDisk(file: file) {
-            store(mem: url, data: d)
-            let f = file
-            Task.detached(priority: .utility) { Self.touchDisk(file: f) }
-            if let img = UIImage(data: d) { ImageMemoryCache.shared.store(img, for: url) }
-            return d
-        }
-
-        // Reuse existing thumbnail files after containment checks.
-        // All subsequent writes use the URL hash above.
-        if let legacy = Self.legacyFile(for: url, under: root),
-           let data = await Self.readDisk(file: legacy), UIImage(data: data) != nil {
-            persist(data, url: url, file: file)
+    func data(for imageRequest: ThumbnailRequest) async -> Data? {
+        let url = imageRequest.url, key = imageRequest.cacheID
+        if url.scheme == "data" { return decodeDataURI(imageRequest) }
+        if let entry = mem[key] { touch(mem: key); return entry.data }
+        let file = root.appendingPathComponent(key + ".image")
+        if let data = await Self.readDisk(file: file), let image = UIImage(data: data) {
+            store(mem: key, data: data)
+            Task.detached(priority: .utility) { Self.touchDisk(file: file) }
+            ImageMemoryCache.shared.store(image, for: imageRequest)
             return data
         }
-
-        // Deduplicate concurrent fetches
-        if let existing = inFlight[url] { return await existing.value }
-
-        let refererCopy = referer
+        // Only unscoped requests may reuse caches without an ownership signature.
+        if imageRequest.definitionID == nil, imageRequest.referer == nil {
+            let oldHash = SHA256.hash(data: Data(url.absoluteString.utf8)).map { String(format: "%02x", $0) }.joined()
+            let oldFiles = [root.appendingPathComponent(oldHash + ".image"), Self.legacyFile(for: url, under: root)].compactMap { $0 }
+            for oldFile in oldFiles {
+                if let data = await Self.readDisk(file: oldFile), UIImage(data: data) != nil {
+                    persist(data, request: imageRequest, file: file); return data
+                }
+            }
+        }
+        if let existing = inFlight[key] { return await existing.value }
         let task = Task<Data?, Never> {
             var request = URLRequest(url: url)
-            // Use provided referer (e.g. item page URL) so CDN anti-hotlinking passes.
-            // Fall back to the image's own origin if no referer supplied.
-            let ref = refererCopy ?? url
+            let ref = imageRequest.referer ?? url
             request.setValue(ref.absoluteString, forHTTPHeaderField: "Referer")
-            if let scheme = ref.scheme, let host = ref.host() {
-                request.setValue("\(scheme)://\(host)", forHTTPHeaderField: "Origin")
+            if var origin = URLComponents(url: ref, resolvingAgainstBaseURL: true) {
+                origin.path = ""; origin.query = nil; origin.fragment = nil; origin.user = nil; origin.password = nil
+                request.setValue(origin.string, forHTTPHeaderField: "Origin")
             }
-            guard let (d, resp) = try? await self.session.data(for: request),
-                  (resp as? HTTPURLResponse)?.statusCode == 200,
-                  !d.isEmpty else { return nil }
-            // If raw data is a valid image, use it directly.
-            // Apply only the transformation declared by the matching site configuration.
-            let imageData: Data
-            if UIImage(data: d) != nil {
-                imageData = d
-            } else if let transform = SiteParserRegistry.imageTransform(for: url, referer: refererCopy),
-                      let decrypted = SiteCrypto.decrypt(d, key: Data(transform.key.utf8), iv: Data(transform.iv.utf8)),
-                      UIImage(data: decrypted) != nil {
-                imageData = decrypted
-            } else {
-                return nil
-            }
-            self.persist(imageData, url: url, file: file)
-            return imageData
+            guard let (data, response) = try? await self.session.data(for: request),
+                  (response as? HTTPURLResponse)?.statusCode == 200, !data.isEmpty else { return nil }
+            let decoded: Data
+            if UIImage(data: data) != nil { decoded = data }
+            else if let transform = imageRequest.transform,
+                    let plain = SiteCrypto.decrypt(data, key: Data(transform.key.utf8), iv: Data(transform.iv.utf8)),
+                    UIImage(data: plain) != nil { decoded = plain }
+            else { return nil }
+            self.persist(decoded, request: imageRequest, file: file)
+            return decoded
         }
-        inFlight[url] = task
+        inFlight[key] = task
         let result = await task.value
-        inFlight.removeValue(forKey: url)
+        inFlight.removeValue(forKey: key)
         return result
     }
 
     /// Decodes a `data:` URI (e.g. `data:image/jpeg;base64,/9j/...`) into raw Data.
-    private func decodeDataURI(_ url: URL) -> Data? {
-        let str = url.absoluteString
+    private func decodeDataURI(_ request: ThumbnailRequest) -> Data? {
+        let str = request.url.absoluteString
         guard let commaIndex = str.firstIndex(of: ",") else { return nil }
         let payload = String(str[str.index(after: commaIndex)...])
         guard let data = Data(base64Encoded: payload, options: .ignoreUnknownCharacters),
               !data.isEmpty else { return nil }
         // Warm L0 cache
-        if let img = UIImage(data: data) { ImageMemoryCache.shared.store(img, for: url) }
+        if let img = UIImage(data: data) { ImageMemoryCache.shared.store(img, for: request) }
         return data
     }
 
@@ -163,9 +170,9 @@ actor ThumbnailCache {
 
     // MARK: - Private
 
-    private func persist(_ data: Data, url: URL, file: URL) {
-        store(mem: url, data: data)
-        if let img = UIImage(data: data) { ImageMemoryCache.shared.store(img, for: url) }
+    private func persist(_ data: Data, request: ThumbnailRequest, file: URL) {
+        store(mem: request.cacheID, data: data)
+        if let img = UIImage(data: data) { ImageMemoryCache.shared.store(img, for: request) }
         // Write to disk off the actor queue
         let f = file
         Task.detached(priority: .utility) {
@@ -189,7 +196,7 @@ actor ThumbnailCache {
             [.modificationDate: Date()], ofItemAtPath: file.path)
     }
 
-    private func store(mem url: URL, data: Data) {
+    private func store(mem url: String, data: Data) {
         tick += 1
         if mem[url] == nil && mem.count >= memMaxCount {
             evictOldestBatch()
@@ -207,7 +214,7 @@ actor ThumbnailCache {
         }
     }
 
-    private func touch(mem url: URL) {
+    private func touch(mem url: String) {
         tick += 1
         mem[url]?.tick = tick
     }
@@ -218,12 +225,6 @@ actor ThumbnailCache {
         guard !parts.isEmpty, !parts.contains("..") else { return nil }
         return try? ReaderContainedPath.resolve(([host] + parts).joined(separator: "/"), under: root)
     }
-
-    private func diskPath(for url: URL) -> URL {
-        let digest = SHA256.hash(data: Data(url.absoluteString.utf8)).map { String(format: "%02x", $0) }.joined()
-        return root.appendingPathComponent(digest + ".image")
-    }
-
 
     private var isEvicting = false
     private func evictDiskIfNeeded() {
@@ -266,18 +267,16 @@ import SwiftUI
 /// Thumbnail view with three-level cache: L0 NSCache (sync) → L1 actor mem → L2 disk → network.
 /// The explicit init pre-populates @State from L0 so the very first render already shows the image.
 struct CachedThumbnail: View {
-    let url: URL?
     var placeholder: String = "photo"
-    var referer: URL? = nil
+    private let request: ThumbnailRequest?
 
     @State private var image: UIImage?
 
-    init(url: URL?, placeholder: String = "photo", referer: URL? = nil) {
-        self.url         = url
+    init(url: URL?, placeholder: String = "photo", referer: URL? = nil, definitionID: String? = nil) {
         self.placeholder = placeholder
-        self.referer     = referer
+        request = url.map { ThumbnailRequest(url: $0, referer: referer, definitionID: definitionID) }
         // Synchronous L0 read — no await, no blank frame on repeated navigation
-        _image = State(initialValue: url.flatMap { ImageMemoryCache.shared.image(for: $0) })
+        _image = State(initialValue: request.flatMap { ImageMemoryCache.shared.image(for: $0) })
     }
 
     var body: some View {
@@ -302,15 +301,15 @@ struct CachedThumbnail: View {
                 }
             }
             .clipped()
-        .task(id: url) {
-            guard let url else { image = nil; return }
+        .task(id: request) {
+            guard let request else { image = nil; return }
             // L0 hit already handled in init — skip async path
-            if let cached = ImageMemoryCache.shared.image(for: url) {
+            if let cached = ImageMemoryCache.shared.image(for: request) {
                 image = cached; return
             }
             // L1/L2/network — show placeholder while waiting, then fade in
             image = nil
-            if let data = await ThumbnailCache.shared.data(for: url, referer: referer) {
+            if let data = await ThumbnailCache.shared.data(for: request) {
                 withAnimation(.easeIn(duration: 0.15)) {
                     image = UIImage(data: data)
                 }

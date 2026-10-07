@@ -240,7 +240,7 @@ struct SiteGalleryView: View {
     private func imageGalleryLayout(_ items: [ParsedItem]) -> some View {
         LazyVStack(spacing: 2) {
             ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                ThreadImageCard(url: item.thumbnail, index: index)
+                ThreadImageCard(url: item.thumbnail, index: index, referer: item.pageURL, definitionID: parser.definitionID)
             }
             infiniteScrollFooter
         }
@@ -251,7 +251,7 @@ struct SiteGalleryView: View {
     private func listLayout(_ items: [ParsedItem]) -> some View {
         LazyVStack(spacing: 10) {
             ForEach(items) { item in
-                Button { openItem(item) } label: { NavLinkCard(item: item) }
+                Button { openItem(item) } label: { NavLinkCard(item: item, definitionID: parser.definitionID) }
                     .buttonStyle(CardPressStyle())
                     .contextMenu { itemMenu(for: item) }
             }
@@ -281,15 +281,8 @@ struct SiteGalleryView: View {
     private func portraitCard(for item: ParsedItem) -> some View {
         if parser.itemKind == .video {
             ZStack(alignment: .topLeading) {
-                Button {
-                    videoFullScreen = item
-                } label: {
-                    ComicCard(
-                        item: item,
-                        isFavorited: favoriteURLCache.contains(item.pageURL.absoluteString)
-                    )
-                }
-                .buttonStyle(CardPressStyle())
+                ComicCard(item: item, isFavorited: isFavorited(item), definitionID: parser.definitionID,
+                    onTap: { openItem(item) }, onExtraTap: extraAction(for: item))
 
                 if let count = listEpisodeCount(for: item) {
                     Button {
@@ -313,7 +306,8 @@ struct SiteGalleryView: View {
             NavigationLink(destination: destinationView(for: item)) {
                 ComicCard(
                     item: item,
-                    isFavorited: favoriteURLCache.contains(item.pageURL.absoluteString)
+                    isFavorited: favoriteURLCache.contains(item.pageURL.absoluteString),
+                    definitionID: parser.definitionID
                 )
             }
             .buttonStyle(CardPressStyle())
@@ -365,12 +359,11 @@ struct SiteGalleryView: View {
                 item:        item,
                 isFavorited: favoriteURLCache.contains(item.pageURL.absoluteString),
                 cardSize:    cardSize,
+                definitionID: parser.definitionID,
                 onTap: { openItem(item) },
                 onLongPress: parser.itemKind == .navLink && !isMixedMediaItem(item) ? nil : { handleVideoCardLongPress(item) },
                 placeholder: parser.itemKind == .video ? "play.rectangle.fill" : "photo.on.rectangle.angled",
-                onExtraTap: !item.extra.isEmpty ? { tag in
-                    extraNavTarget = extraSearchTarget(for: tag)
-                } : nil
+                onExtraTap: extraAction(for: item)
             )
             .id(item.id)
             .contextMenu { itemMenu(for: item) }
@@ -677,15 +670,11 @@ struct SiteGalleryView: View {
 
     /// Build a full search URL from the parser's template and a keyword.
     private func buildSearchURL(keyword: String) -> URL? {
-        guard let template = parser.searchURLTemplate,
-              let encoded = keyword.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) else { return nil }
-        let urlString = template.replacingOccurrences(of: "{keyword}", with: encoded)
-        // Absolute URL → use directly; relative → resolve against current base
-        if urlString.hasPrefix("http") {
-            return URL(string: urlString)
-        }
-        let base = loader.resolvedBaseURL ?? URL(string: siteURLString)
-        return base.flatMap { URL(string: urlString, relativeTo: $0)?.absoluteURL }
+        parser.searchURL(keyword: keyword, base: loader.resolvedBaseURL ?? URL(string: siteURLString))
+    }
+    private func extraAction(for item: ParsedItem) -> ((String) -> Void)? {
+        guard !item.extra.isEmpty, parser.searchURLTemplate != nil else { return nil }
+        return { tag in extraNavTarget = extraSearchTarget(for: tag) }
     }
 
     private func executeSearch() {
@@ -764,6 +753,7 @@ private struct GalleryEpisodePickerSheet: View {
 
 struct NavLinkCard: View {
     let item: ParsedItem
+    var definitionID: String?
 
     private var hasThumbnail: Bool { item.thumbnail != nil }
 
@@ -771,7 +761,7 @@ struct NavLinkCard: View {
         HStack(spacing: 14) {
             // Only show thumbnail area when one exists
             if hasThumbnail {
-                CachedThumbnail(url: item.thumbnail, placeholder: "globe", referer: item.pageURL)
+                CachedThumbnail(url: item.thumbnail, placeholder: "globe", referer: item.pageURL, definitionID: definitionID)
                     .frame(width: 48, height: 48)
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
@@ -806,6 +796,7 @@ struct VideoCard: View {
     let item: ParsedItem
     var isFavorited: Bool = false
     var cardSize: BentoCardSize = .small
+    var definitionID: String?
     var onTap: (() -> Void)?
     var onLongPress: (() -> Void)?
     var placeholder = "play.rectangle.fill"
@@ -869,25 +860,8 @@ struct VideoCard: View {
 
     // MARK: - Extra tags
 
-    private var extraTags: [String] {
-        item.extra
-            .split(separator: ",")
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty }
-    }
-
     private var extraTagsView: some View {
-        HStack(spacing: 4) {
-            ForEach(extraTags, id: \.self) { tag in
-                Button { onExtraTap?(tag) } label: {
-                    Text(tag)
-                        .font(extraFont)
-                        .foregroundColor(.accentColor)
-                        .lineLimit(1)
-                }
-                .buttonStyle(.plain)
-            }
-        }
+        ItemTagLinks(text: item.extra, font: extraFont) { onExtraTap?($0) }
     }
 
     // MARK: - Thumbnail
@@ -896,7 +870,7 @@ struct VideoCard: View {
     private var thumbnailView: some View {
         ZStack(alignment: .bottomTrailing) {
             if item.thumbnail != nil {
-                CachedThumbnail(url: item.thumbnail, placeholder: placeholder, referer: item.pageURL)
+                CachedThumbnail(url: item.thumbnail, placeholder: placeholder, referer: item.pageURL, definitionID: definitionID)
             } else {
                 Color(.secondarySystemBackground)
                     .overlay {
@@ -1065,15 +1039,17 @@ struct ListSkeletonView: View {
 
 private struct ThreadImageCard: View {
     let url: URL?
+    private let request: ThumbnailRequest?
     let index: Int
 
     @State private var image: UIImage?
     @State private var failed = false
 
-    init(url: URL?, index: Int) {
+    init(url: URL?, index: Int, referer: URL?, definitionID: String?) {
         self.url = url
         self.index = index
-        _image = State(initialValue: url.flatMap { ImageMemoryCache.shared.image(for: $0) })
+        request = url.map { ThumbnailRequest(url: $0, referer: referer, definitionID: definitionID) }
+        _image = State(initialValue: request.flatMap { ImageMemoryCache.shared.image(for: $0) })
     }
 
     var body: some View {
@@ -1101,10 +1077,10 @@ private struct ThreadImageCard: View {
                     .background(Color(.secondarySystemBackground))
             }
         }
-        .task(id: url) {
-            guard let url, image == nil else { return }
+        .task(id: request) {
+            guard let request, image == nil else { return }
             failed = false
-            if let data = await ThumbnailCache.shared.data(for: url),
+            if let data = await ThumbnailCache.shared.data(for: request),
                let img = UIImage(data: data) {
                 withAnimation(.easeIn(duration: 0.15)) {
                     image = img
@@ -1114,8 +1090,8 @@ private struct ThreadImageCard: View {
             }
         }
         .onAppear {
-            if image == nil, !failed, let url {
-                image = ImageMemoryCache.shared.image(for: url)
+            if image == nil, !failed, let request {
+                image = ImageMemoryCache.shared.image(for: request)
             }
         }
         .onDisappear {

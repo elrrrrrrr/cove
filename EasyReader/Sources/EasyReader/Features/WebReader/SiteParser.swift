@@ -150,6 +150,12 @@ struct SiteParser: Sendable {
     var requestHeaders: [String: String] = [:]
     var presentation: SitePresentation = .init()
 
+    func searchURL(keyword: String, base: URL?) -> URL? {
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~"))
+        guard let template = searchURLTemplate, let encoded = keyword.addingPercentEncoding(withAllowedCharacters: allowed) else { return nil }
+        return URL(string: template.replacingOccurrences(of: "{keyword}", with: encoded), relativeTo: base)?.absoluteURL
+    }
+
     func cacheURL(for url: URL) -> URL {
         let signature = (definitionID ?? "generic") + extractItemsJS + itemKind.stringValue + galleryLayout.rawValue
         let hash = SHA256.hash(data: Data(signature.utf8)).map { String(format: "%02x", $0) }.joined()

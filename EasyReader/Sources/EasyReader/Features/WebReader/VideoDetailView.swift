@@ -112,13 +112,13 @@ struct VideoDetailView: View {
         .onAppear {
             // L0 synchronous read — instant if thumbnail was already cached this session
             if let url = item.thumbnail {
-                thumbImage = ImageMemoryCache.shared.image(for: url)
+                thumbImage = ImageMemoryCache.shared.image(for: ThumbnailRequest(url: url, referer: item.pageURL, definitionID: definitionID))
             }
         }
         .task(id: item.thumbnail) {
             guard let url = item.thumbnail else { return }
             if thumbImage != nil { return }   // already got it from L0
-            if let data = await ThumbnailCache.shared.data(for: url) {
+            if let data = await ThumbnailCache.shared.data(for: url, referer: item.pageURL, definitionID: definitionID) {
                 thumbImage = UIImage(data: data)
             }
         }

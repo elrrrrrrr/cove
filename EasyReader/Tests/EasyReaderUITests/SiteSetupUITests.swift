@@ -118,16 +118,23 @@ import Network
         search.buttons.firstMatch.tap()
         let gallery = app.navigationBars[title]
         XCTAssertTrue(gallery.waitForExistence(timeout: 5))
-        let requests = server.requestCount.value
         for layout in ["列表", "竖版", "Bento"] {
+            let requests = server.requestCount.value
             let menu = app.buttons["browser-layout-menu"]
             XCTAssertTrue(menu.waitForExistence(timeout: 3)); menu.tap()
             app.buttons[layout].tap()
-            XCTAssertTrue(app.staticTexts["交互视频"].waitForExistence(timeout: 3))
+            XCTAssertTrue(app.descendants(matching: .any).matching(identifier: "交互视频").firstMatch.waitForExistence(timeout: 3))
+            XCTAssertEqual(server.requestCount.value, requests, "Layout switching must reuse loaded items")
+            if layout != "列表" {
+                let actor = app.buttons["交互标签"]
+                XCTAssertTrue(actor.waitForExistence(timeout: 3)); actor.tap()
+                XCTAssertTrue(search.waitForExistence(timeout: 5)); XCTAssertTrue(search.isHittable)
+                search.buttons.firstMatch.tap()
+                XCTAssertTrue(gallery.waitForExistence(timeout: 5))
+            }
             let attachment = XCTAttachment(screenshot: app.screenshot())
             attachment.name = "web-" + layout; attachment.lifetime = .keepAlways; add(attachment)
         }
-        XCTAssertEqual(server.requestCount.value, requests, "Layout switching must reuse loaded items")
         app.staticTexts["交互视频"].tap()
         let presented = XCTNSPredicateExpectation(predicate: NSPredicate(format: "isHittable == false"), object: gallery)
         XCTAssertEqual(XCTWaiter.wait(for: [presented], timeout: 5), .completed, "Card tap must still present playback")

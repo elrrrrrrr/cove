@@ -124,7 +124,7 @@ struct FavoritesView: View {
                                             duration: "",
                                             extra: fav.siteName
                                         ),
-                                        isFavorited: true
+                                        isFavorited: true, definitionID: fav.definitionID
                                     )
                                 }
                                 .buttonStyle(.plain)
@@ -174,7 +174,7 @@ struct FavoriteCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             ZStack(alignment: .bottomTrailing) {
-                CachedThumbnail(url: fav.thumbnailURL, placeholder: "play.rectangle.fill")
+                CachedThumbnail(url: fav.thumbnailURL, placeholder: "play.rectangle.fill", referer: fav.pageURL, definitionID: fav.definitionID)
 
                 if !fav.duration.isEmpty {
                     LinearGradient(colors: [.clear, .black.opacity(0.55)],

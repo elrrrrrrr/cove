@@ -381,7 +381,7 @@ struct SitePortal: Codable, Sendable, Equatable {
     }
 }
 
-struct SiteImageTransform: Codable, Sendable, Equatable {
+struct SiteImageTransform: Codable, Sendable, Hashable {
     var hosts: [String]?
     var key: String
     var iv: String
