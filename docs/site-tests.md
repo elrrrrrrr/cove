@@ -48,6 +48,7 @@ config/site-tests/          # 私有；Git 忽略，公开导出排除
 | operation | 检查内容 | expected |
 | --- | --- | --- |
 | extract | CSS/JS 提取；视频、漫画、章节使用同样的结果合同 | JSON 数组或对象 |
+| search | 从入口规则生成搜索 URL，再选择结果页规则并提取 | `{"url": "…", "pagination": "none", "items": […]}` |
 | pagination | 下一页链接，或指定 `page` 的 AJAX 输出 | URL 字符串或条目数组 |
 | portal | 门户快照解析，保留目标页面路径和参数 | 解析后的 URL 字符串 |
 | image | localhost 返回原始加密字节，由实际 ThumbnailCache 解码 | `{"width": 120, "height": 80}` |
@@ -64,6 +65,10 @@ AJAX 样本额外填写 `page` 和 `responses`，将指定请求替换为快照�
 ```
 
 测试检查请求地址和次序；未配置的请求直接失败。WebKit 使用临时 profile，CSP 阻止页面脚本和外部网络，保留含数据的 script 标签供解析规则读取。图片请求仅访问 localhost，测试不会定时抓站或依赖互联网。
+
+搜索样本额外填写 `keyword`；如果结果页使用另一条列表规则，填写 `resultRuleID`。`pageURL` 是提交搜索前的入口 URL，`input` 是结果页 HTML。测试同时检查搜索地址、实际选中的提取规则、分页方式和条目，不只断言“有结果”。没有分页的搜索页应单独匹配规则并配置 `pagination: {mode: none}`，避免重复请求同一页。
+
+`SiteSearchTests` 覆盖中文/emoji、路径和查询参数转义、镜像域名、连续搜索、空输入、取消搜索返回分类、规则更新和分页切换。`SiteSearchUITests` 使用 localhost 走交互链路：搜索结果显示 → 取消返回分类 → 再次搜索 → 打开漫画详情；它可发现只跑解析脚本无法发现的规则复用和路由问题。
 
 ## 维护与覆盖范围
 

@@ -1,5 +1,27 @@
 [
   {
+    "name": "public-comic-search",
+    "definitionID": "example.media",
+    "operation": "search",
+    "ruleID": "comic-list",
+    "resultRuleID": "comic-search",
+    "pageURL": "https://media.example/books/",
+    "keyword": "漫画",
+    "input": "search-books.html",
+    "expected": "search-books.json"
+  },
+  {
+    "name": "public-comic-search-empty",
+    "definitionID": "example.media",
+    "operation": "search",
+    "ruleID": "comic-list",
+    "resultRuleID": "comic-search",
+    "pageURL": "https://media.example/books/",
+    "keyword": "missing",
+    "input": "search-empty.html",
+    "expected": "search-empty.json"
+  },
+  {
     "name": "public-catalog",
     "definitionID": "example.media",
     "operation": "extract",

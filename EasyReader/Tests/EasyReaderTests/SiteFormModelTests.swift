@@ -41,7 +41,7 @@ import XCTest
         XCTAssertThrowsError(try model.definition(validate: false))
         model.setNumber("0.", at: wait); model.setNumber("0.25", at: wait)
         XCTAssertEqual(try model.definition().rules[0].load?.waitSeconds, 0.25)
-        model.reorder([1, 0, 2, 3, 4], at: [.key("rules")])
+        model.reorder([1, 0] + Array(2..<value.rules.count), at: [.key("rules")])
         XCTAssertEqual(model.numericText(at: [.key("rules"), .index(1), .key("load"), .key("waitSeconds")]), "0.25")
         model.set(nil, at: [.key("rules"), .index(0)])
         XCTAssertEqual(try model.definition().rules[0].id, value.rules[0].id)

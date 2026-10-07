@@ -15,6 +15,7 @@ struct SiteGalleryView: View {
         bookmarkSite    = site
         _loader         = State(wrappedValue: Self.makeLoader())
         _parser = State(initialValue: SiteParserRegistry.parser(for: site.urlString, definitionID: site.definitionID).applying(site.parserOverrides))
+        _navigation = State(initialValue: SiteCatalogNavigation(entryURLString: site.urlString))
         _savedLayout = AppStorage(wrappedValue: "", BrowserLayout.preferenceKey(source: "web", location: site.id.uuidString))
     }
 
@@ -26,6 +27,7 @@ struct SiteGalleryView: View {
         bookmarkSite  = nil
         _loader       = State(wrappedValue: Self.makeLoader())
         _parser = State(initialValue: SiteParserRegistry.parser(for: urlString, definitionID: definitionID))
+        _navigation = State(initialValue: SiteCatalogNavigation(entryURLString: urlString))
         _savedLayout = AppStorage(wrappedValue: "", BrowserLayout.preferenceKey(source: "web:" + (definitionID ?? ""), location: urlString))
     }
 
@@ -48,11 +50,11 @@ struct SiteGalleryView: View {
     @State private var pendingEpisodeVideo: ParsedItem? = nil
     /// Cached Set so we don't allocate a new one on every body re-evaluation.
     @State private var favoriteURLCache : Set<String> = []
-    /// Currently active category URL (nil = use default siteURLString).
-    @State private var activeCategoryURL: String? = nil
+    @State private var navigation: SiteCatalogNavigation
     /// Search
     @State private var searchText       = ""
     @State private var isSearchActive   = false
+    @State private var searchUnavailable = false
     @Environment(\.horizontalSizeClass) private var hSizeClass
     @Environment(\.modelContext) private var modelContext
     @Query private var allFavorites: [FavoriteVideo]
@@ -68,13 +70,12 @@ struct SiteGalleryView: View {
         Binding(get: { layout }, set: { savedLayout = $0.rawValue })
     }
     private func refreshParser() {
-        parser = SiteParserRegistry.parser(for: siteURLString, definitionID: bookmarkSite?.definitionID ?? definitionID)
-            .applying(bookmarkSite?.parserOverrides)
+        parser = navigation.parser(definitionID: bookmarkSite?.definitionID ?? definitionID, overrides: bookmarkSite?.parserOverrides)
         guard let url = siteURL else { return }
         loader.load(url: url, parser: parser, forceRefresh: true)
     }
-    private var effectiveURLString: String { activeCategoryURL ?? siteURLString }
-    private var siteURL: URL? { URL(string: effectiveURLString) }
+    private var effectiveURLString: String { navigation.categoryURLString }
+    private var siteURL: URL? { navigation.currentURL }
 
     // Grid columns based on gallery layout
     private var columns: Int {
@@ -137,15 +138,20 @@ struct SiteGalleryView: View {
         .task(id: "favorites") {
             favoriteURLCache = Set(allFavorites.map(\.pageURLString))
         }
-        .searchable(text: $searchText, isPresented: $isSearchActive, prompt: "搜索")
+        .searchable(text: $searchText, isPresented: $isSearchActive,
+                    placement: .navigationBarDrawer(displayMode: .always), prompt: "搜索")
         .onSubmit(of: .search) { executeSearch() }
         .onChange(of: isSearchActive) { _, active in
-            if !active, !searchText.isEmpty {
+            if !active, navigation.searchURL != nil {
                 searchText = ""
-                if let url = URL(string: activeCategoryURL ?? siteURLString) {
-                    loader.load(url: url, parser: parser, forceRefresh: true)
-                }
+                navigation.cancelSearch()
+                refreshParser()
             }
+        }
+        .alert("搜索不可用", isPresented: $searchUnavailable) {
+            Button("知道了", role: .cancel) {}
+        } message: {
+            Text("请在站点解析规则中配置包含 {keyword} 的搜索地址。")
         }
         .refreshable { await loader.reloadAsync() }
         .alert("跳转到页码", isPresented: $showPageInput) {
@@ -517,10 +523,12 @@ struct SiteGalleryView: View {
 
     private var emptyView: some View {
         ContentUnavailableView {
-            Label("未能提取到内容", systemImage: "doc.questionmark")
+            Label(navigation.searchURL == nil ? "未能提取到内容" : "没有搜索结果", systemImage: "doc.questionmark")
         } description: {
             if let info = diagInfo {
                 Text(info).font(.caption2).foregroundStyle(.secondary)
+            } else if navigation.searchURL != nil {
+                Text("未找到「\(navigation.keyword)」的结果，可查看原始网页确认。")
             } else {
                 Text("该站点结构暂不支持，可在完整 WebView 中查看")
             }
@@ -588,8 +596,9 @@ struct SiteGalleryView: View {
                     resolved = nil
                 }
                 guard let url = resolved else { return }
-                activeCategoryURL = url.absoluteString
-                loader.load(url: url, parser: parser, forceRefresh: true)
+                navigation.selectCategory(url)
+                searchText = ""
+                refreshParser()
             }
         )
     }
@@ -696,8 +705,12 @@ struct SiteGalleryView: View {
 
     private func executeSearch() {
         let keyword = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !keyword.isEmpty, let url = buildSearchURL(keyword: keyword) else { return }
-        loader.load(url: url, parser: parser, forceRefresh: true)
+        guard !keyword.isEmpty else { return }
+        guard navigation.search(keyword, parser: parser, base: loader.resolvedBaseURL ?? siteURL) else {
+            searchUnavailable = true
+            return
+        }
+        refreshParser()
     }
 
     // MARK: - Extra tag navigation

@@ -46,6 +46,7 @@ rules:
     match: {pathPrefix: /books/}
     contentType: comic
     presentation: {layout: portrait}
+    searchURLTemplate: '/find-books?q={keyword}'
     extract:
       items: article.book-card
       fields:
@@ -74,3 +75,16 @@ rules:
         images: {selector: 'main img', attribute: src, all: true}
         prevChapter: {selector: 'a[rel="prev"]', attribute: href}
         nextChapter: {selector: 'a[rel="next"]', attribute: href}
+  - id: comic-search
+    role: catalog
+    match: {pathPrefix: /find-books}
+    contentType: comic
+    presentation: {layout: portrait}
+    searchURLTemplate: '/find-books?q={keyword}'
+    pagination: {mode: none}
+    extract:
+      items: article.book-card
+      fields:
+        title: {selector: .title, text: true}
+        url: {selector: a, attribute: href}
+        thumbnail: {selector: img, attribute: src}

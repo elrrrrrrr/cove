@@ -5,7 +5,7 @@ import UIKit
 
 /// Public fixtures exercise the runner; optional private snapshots exercise local rules.
 @MainActor final class SiteRegressionTests: XCTestCase {
-    private enum Operation: String, Decodable { case extract, pagination, portal, image }
+    private enum Operation: String, Decodable { case extract, search, pagination, portal, image }
     private struct Sample: Decodable {
         let name: String
         let definitionID: String
@@ -16,6 +16,8 @@ import UIKit
         let expected: String
         let page: Int?
         let responses: [Response]?
+        let keyword: String?
+        let resultRuleID: String?
     }
     private struct Response: Decodable { let url: URL; let file: String }
     private struct Fixture { let sample: Sample; let root: URL }
@@ -129,6 +131,27 @@ import UIKit
             try assertResult(value, fixture: fixture)
             let requests = try await page.webView.callAsyncJavaScript("return window.__fixtureRequests;", arguments: [:], in: nil, contentWorld: .page) as? [String]
             XCTAssertEqual(requests, fixture.sample.responses?.map { $0.url.absoluteString } ?? [], "分页请求地址或次序改变")
+        }
+    }
+
+    func testSearchSnapshots() async throws {
+        let values = try definitions()
+        for fixture in try fixtures(.search) {
+            let owner = try owner(fixture, definitions: values)
+            let sourceRule = try rule(fixture, owner: owner)
+            let parser = SiteParserRegistry.parser(definition: owner, rule: sourceRule)
+            let keyword = try XCTUnwrap(fixture.sample.keyword)
+            let url = try XCTUnwrap(parser.searchURL(keyword: keyword, base: fixture.sample.pageURL), "搜索地址未配置：\(fixture.sample.name)")
+            let resultRule = try XCTUnwrap(owner.rule(for: url, role: "catalog"))
+            XCTAssertEqual(resultRule.id, fixture.sample.resultRuleID ?? sourceRule.id, "搜索结果选中了另一条规则")
+            let page = RegressionPage()
+            try await page.load(bytes(fixture.sample.input, fixture: fixture), base: url)
+            try await installResponses(fixture, page: page)
+            let extracted = try await WebScript.string(try XCTUnwrap(resultRule.extract).javascript, in: page.webView)
+            let output = try XCTUnwrap(extracted)
+            let items = try JSONSerialization.jsonObject(with: Data(output.utf8))
+            let resultParser = SiteParserRegistry.parser(definition: owner, rule: resultRule)
+            try assertResult(["url": url.absoluteString, "items": items, "pagination": resultParser.paginationMode.typeString], fixture: fixture)
         }
     }
 

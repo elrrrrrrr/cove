@@ -151,9 +151,12 @@ struct SiteParser: Sendable {
     var presentation: SitePresentation = .init()
 
     func searchURL(keyword: String, base: URL?) -> URL? {
-        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~"))
-        guard let template = searchURLTemplate, let encoded = keyword.addingPercentEncoding(withAllowedCharacters: allowed) else { return nil }
-        return URL(string: template.replacingOccurrences(of: "{keyword}", with: encoded), relativeTo: base)?.absoluteURL
+        let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~")
+        guard let template = searchURLTemplate, template.contains("{keyword}"),
+              let encoded = keyword.addingPercentEncoding(withAllowedCharacters: allowed),
+              let url = URL(string: template.replacingOccurrences(of: "{keyword}", with: encoded), relativeTo: base)?.absoluteURL,
+              ["http", "https"].contains(url.scheme?.lowercased() ?? ""), url.host() != nil else { return nil }
+        return url
     }
 
     func cacheURL(for url: URL) -> URL {
