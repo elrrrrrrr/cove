@@ -366,7 +366,7 @@ import Network
     }
 }
 
-private final class LocalPageServer {
+final class LocalPageServer {
     let listener: NWListener
     let requestCount = RequestCounter()
     let url: String
@@ -394,7 +394,7 @@ private final class LocalPageServer {
     }
 }
 
-private final class RequestCounter: @unchecked Sendable {
+final class RequestCounter: @unchecked Sendable {
     private let lock = NSLock()
     private var count = 0
     var value: Int { lock.withLock { count } }

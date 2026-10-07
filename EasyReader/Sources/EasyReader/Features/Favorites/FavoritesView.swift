@@ -13,6 +13,7 @@ struct FavoritesView: View {
     @State private var showExporter = false
     @State private var document = JSONDataDocument()
     @State private var transferError: String?
+    @State private var showPinManager = false
 
     private var columns: Int { hSizeClass == .regular ? 3 : 2 }
 
@@ -27,8 +28,9 @@ struct FavoritesView: View {
 
     var body: some View {
         let items = filtered
-        let videoFavs = items.filter { !$0.isComic }
-        let comicFavs = items.filter { $0.isComic }
+        let pinned = FavoritePins.ordered(items)
+        let videoFavs = items.filter { !$0.isPinned && !$0.isComic }
+        let comicFavs = items.filter { !$0.isPinned && $0.isComic }
 
         NavigationStack {
             Group {
@@ -37,7 +39,7 @@ struct FavoritesView: View {
                 } else if items.isEmpty {
                     ContentUnavailableView.search(text: searchText)
                 } else {
-                    grid(videoFavs: videoFavs, comicFavs: comicFavs)
+                    grid(pinned: pinned, videoFavs: videoFavs, comicFavs: comicFavs)
                 }
             }
             .appSurface()
@@ -46,14 +48,18 @@ struct FavoritesView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
+                        Button("管理置顶", systemImage: "pin") { showPinManager = true }.disabled(favorites.isEmpty)
+                        Divider()
                         Button("导入收藏（合并）", systemImage: "square.and.arrow.down") { showImporter = true }
                         Button("导出收藏", systemImage: "square.and.arrow.up") {
                             do { document = JSONDataDocument(data: try FavoriteDataFile.export(favorites).json()); showExporter = true }
                             catch { transferError = error.localizedDescription }
                         }
                     } label: { Image(systemName: "ellipsis.circle") }
+                        .accessibilityLabel("收藏工具")
                 }
             }
+            .sheet(isPresented: $showPinManager) { FavoritePinsView() }
             .fileImporter(isPresented: $showImporter, allowedContentTypes: [.json]) { result in
                 do {
                     let url = try result.get()
@@ -66,7 +72,7 @@ struct FavoritesView: View {
             .fileExporter(isPresented: $showExporter, document: document, contentType: .json, defaultFilename: "favorites.json") { result in
                 if case .failure(let error) = result { transferError = error.localizedDescription }
             }
-            .alert("收藏导入导出", isPresented: Binding(get: { transferError != nil }, set: { if !$0 { transferError = nil } })) {
+            .alert("收藏操作失败", isPresented: Binding(get: { transferError != nil }, set: { if !$0 { transferError = nil } })) {
                 Button("好") { transferError = nil }
             } message: { Text(transferError ?? "") }
         }
@@ -74,9 +80,31 @@ struct FavoritesView: View {
 
     // MARK: - Grid
 
-    private func grid(videoFavs: [FavoriteVideo], comicFavs: [FavoriteVideo]) -> some View {
+    private func grid(pinned: [FavoriteVideo], videoFavs: [FavoriteVideo], comicFavs: [FavoriteVideo]) -> some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 24) {
+                if !pinned.isEmpty {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Label("置顶", systemImage: "pin.fill").font(.headline).foregroundColor(.accentColor)
+                        ForEach(pinned) { fav in
+                            if let url = fav.pageURL {
+                                NavigationLink {
+                                    let item = ParsedItem(title: fav.title, pageURL: url, thumbnail: fav.thumbnailURL,
+                                                          duration: fav.duration, extra: fav.siteName)
+                                    if fav.isComic { ComicDetailView(item: item, definitionID: fav.definitionID) }
+                                    else { VideoDetailView(item: item, definitionID: fav.definitionID) }
+                                } label: {
+                                    FavoritePinRow(favorite: fav).padding(12)
+                                        .background(.background, in: RoundedRectangle(cornerRadius: 12))
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel(fav.title)
+                                .accessibilityValue("已置顶")
+                                .contextMenu { favoriteActions(fav) }
+                            }
+                        }
+                    }.padding(.horizontal, 12).padding(.top, 10)
+                }
                 // Video favorites
                 if !videoFavs.isEmpty {
                     BentoGrid(items: videoFavs, columns: columns) { fav, cardSize in
@@ -91,13 +119,8 @@ struct FavoritesView: View {
                                 FavoriteCard(fav: fav, cardSize: cardSize)
                             }
                             .buttonStyle(.plain)
-                            .contextMenu {
-                                Button(role: .destructive) {
-                                    context.delete(fav)
-                                } label: {
-                                    Label("取消收藏", systemImage: "heart.slash")
-                                }
-                            }
+                            .accessibilityLabel(fav.title)
+                            .contextMenu { favoriteActions(fav) }
                         }
                     }
                 }
@@ -128,19 +151,26 @@ struct FavoritesView: View {
                                     )
                                 }
                                 .buttonStyle(.plain)
-                                .contextMenu {
-                                    Button(role: .destructive) {
-                                        context.delete(fav)
-                                    } label: {
-                                        Label("取消收藏", systemImage: "heart.slash")
-                                    }
-                                }
+                                .accessibilityLabel(fav.title)
+                                .contextMenu { favoriteActions(fav) }
                             }
                         }
                     }
                     .padding(.horizontal, 12)
                 }
             }
+        }
+    }
+
+    @ViewBuilder private func favoriteActions(_ favorite: FavoriteVideo) -> some View {
+        Button(favorite.isPinned ? "取消置顶" : "置顶", systemImage: favorite.isPinned ? "pin.slash" : "pin") {
+            do { try FavoritePins.set(favorite, pinned: !favorite.isPinned, context: context) }
+            catch { transferError = error.localizedDescription }
+        }
+        Button("取消收藏", systemImage: "heart.slash", role: .destructive) {
+            context.delete(favorite)
+            do { try context.save() }
+            catch { context.rollback(); transferError = error.localizedDescription }
         }
     }
 

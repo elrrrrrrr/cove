@@ -150,6 +150,6 @@ pagination:
 
 ## 收藏数据与备份
 
-预置收藏示例见 `examples/data/favorites.json`。`schemaVersion` 为 `1`，`favorites` 数组每项必需 `title / pageURL`，可选 `id / thumbnail / duration / siteName / isComic / definitionID / addedAt`。日期使用 ISO 8601。App 收藏页可导出这种格式，然后保存到私有 `data/favorites.json`。
+预置收藏示例见 `examples/data/favorites.json`。`schemaVersion` 为 `1`，`favorites` 数组每项必需 `title / pageURL`，可选 `id / thumbnail / duration / siteName / isComic / definitionID / addedAt / isPinned / pinOrder`。日期使用 ISO 8601。`isPinned` 为置顶开关，`pinOrder` 为非负顺序值；省略时默认不置顶。收藏页长按可置顶/取消置顶，右上角“管理置顶”可拖动排序。合并导入保留已有收藏的置顶选择和顺序，新导入的置顶项目按文件顺序追加（优先 `pinOrder`），取消置顶不删除收藏。App 收藏页可导出这种格式，然后保存到私有 `data/favorites.json`。
 
 配置备份同样使用 `schemaVersion: 1`，包含阅读设置、站点定义、入口身份、单站解析覆盖和 NAS UUID；不包含密码。配置备份的“导入并替换”与单站点导入分开；单站点导入不替换其他配置，收藏导入以合并为准。
