@@ -99,12 +99,12 @@ import SwiftData
         XCTAssertFalse(defaults.bool(forKey: SiteDefinitionStore.pendingBootstrapKey))
     }
 
-    func testUpgradeOnlyMigratesReferencedSitesAndPreservesCustomScript() throws {
+    func testExistingReferencesAreLinkedWithoutAddingBookmarks() throws {
         let saved = SiteParserRegistry.definitions
         defer { SiteParserRegistry.replaceDefinitions(saved) }
         let library = store(), context = try context()
         let bookmark = BookmarkSite(name: "我的入口", urlString: "https://media.example/latest/")
-        bookmark.customExtractJS = "JSON.stringify([])"
+        bookmark.parserOverrides = SiteParserOverrides(extractItemsJS: "JSON.stringify([])")
         let favorite = FavoriteVideo(title: "旧收藏", pageURLString: "https://media.example/watch/1")
         let history = ReadingHistory(title: "旧历史", url: "https://media.example/watch/1", fileType: .video)
         context.insert(bookmark); context.insert(favorite); context.insert(history); try context.save()
@@ -138,7 +138,7 @@ import SwiftData
         defer { SiteParserRegistry.replaceDefinitions(saved) }
         let library = store(), context = try context()
         let definition = try fixture(); try library.importDefinition(definition, context: context)
-        var invalid = definition; invalid.schemaVersion = 2
+        var invalid = definition; invalid.schemaVersion = 99
         XCTAssertThrowsError(try library.importDefinition(invalid, context: context))
         XCTAssertEqual(library.definitions, [definition])
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<BookmarkSite>()), 2)
@@ -146,13 +146,13 @@ import SwiftData
 
     func testFavoriteDataMergesWithoutDuplicatesAndRoundTrips() throws {
         let context = try context()
-        let data = Data(#"{"version":1,"favorites":[{"title":"收藏","pageURL":"https://media.example/watch/1"}]}"#.utf8)
+        let data = Data(#"{"schemaVersion":1,"favorites":[{"title":"收藏","pageURL":"https://media.example/watch/1"}]}"#.utf8)
         let file = try FavoriteDataFile.decode(data)
         try file.apply(to: context); try file.apply(to: context); try context.save()
         let values = try context.fetch(FetchDescriptor<FavoriteVideo>())
         XCTAssertEqual(values.count, 1)
         XCTAssertEqual(try FavoriteDataFile.decode(FavoriteDataFile.export(values).json()).favorites.first?.id, values[0].id)
-        let invalid = Data(#"{"version":1,"favorites":[{"title":"无效","pageURL":"javascript:alert(1)"}]}"#.utf8)
+        let invalid = Data(#"{"schemaVersion":1,"favorites":[{"title":"无效","pageURL":"javascript:alert(1)"}]}"#.utf8)
         XCTAssertThrowsError(try FavoriteDataFile.decode(invalid))
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<FavoriteVideo>()), 1)
     }
@@ -165,16 +165,40 @@ import SwiftData
         let backup = ConfigBackup.export(sites: [], nasConfigs: [config], fontSize: 17, theme: .system, blockerEnabled: true)
         try backup.apply(to: context)
         XCTAssertEqual(try context.fetch(FetchDescriptor<NASConfig>()).first?.id, configID)
-        var invalid = backup; invalid.version = 99
+        var invalid = backup; invalid.schemaVersion = 99
         XCTAssertThrowsError(try invalid.apply(to: context))
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<NASConfig>()), 1)
     }
 
-    func testLegacyRemoteConfigRequiresSMBSetupUntilEdited() {
-        let config = NASConfig(name: "旧连接", host: "", port: 0, username: "reader", shareName: "")
-        config.connectionType = "legacy"
+    func testBackupRoundTripUsesOnlyCurrentSchemaAndKeepsOverrides() throws {
+        let context = try context()
+        let site = BookmarkSite(name: "测试", urlString: "https://media.example/latest/", note: "说明", sortOrder: 4)
+        site.parserOverrides = SiteParserOverrides(extractItemsJS: "return []; ")
+        context.insert(site); try context.save()
+        let backup = ConfigBackup.export(sites: [site], nasConfigs: [], fontSize: 18, theme: .dark, blockerEnabled: true)
+        let file = try backup.writeToTempFile()
+        defer { try? FileManager.default.removeItem(at: file) }
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        XCTAssertEqual(json["schemaVersion"] as? Int, 1); XCTAssertNil(json["version"])
+        let loaded = try ConfigBackup.read(from: file)
+        XCTAssertEqual(loaded.sites.first?.id, site.id)
+        XCTAssertEqual(loaded.sites.first?.note, "说明")
+        XCTAssertEqual(loaded.sites.first?.parserConfig?.extractItemsJS, "return []; ")
+    }
+
+    func testSingleSchemaExportsHaveNoExtraVersionField() throws {
+        let definition = try fixture()
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(definition)) as? [String: Any])
+        XCTAssertEqual(json["schemaVersion"] as? Int, 1); XCTAssertNil(json["version"])
+        let favorites = try FavoriteDataFile.export([]).json()
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: favorites) as? [String: Any])
+        XCTAssertEqual(object["schemaVersion"] as? Int, 1); XCTAssertNil(object["version"])
+    }
+
+    func testIncompleteSMBConfigRequiresSetup() {
+        let config = NASConfig(name: "连接", host: "", port: 445, username: "reader", shareName: "")
         XCTAssertTrue(config.requiresSMBSetup)
-        config.connectionType = "smb"; config.host = "nas.example"; config.port = 445; config.shareName = "media"
+        config.host = "nas.example"; config.port = 445; config.shareName = "media"
         XCTAssertFalse(config.requiresSMBSetup)
     }
 }

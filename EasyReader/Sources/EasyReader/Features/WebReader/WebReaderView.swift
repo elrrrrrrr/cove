@@ -237,14 +237,6 @@ struct WebViewRepresentable: UIViewRepresentable {
             onLoading(true)
         }
 
-        func webView(
-            _ webView: WKWebView,
-            didReceive challenge: URLAuthenticationChallenge,
-            completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
-        ) {
-            if WebReaderTLS.handle(challenge, completionHandler: completionHandler) { return }
-            completionHandler(.performDefaultHandling, nil)
-        }
 
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
             onLoading(false)

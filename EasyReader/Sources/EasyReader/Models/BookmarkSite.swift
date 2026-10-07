@@ -18,34 +18,11 @@ final class BookmarkSite {
     /// JSON-encoded SiteParserOverrides — all overridable parser fields in one blob.
     var customParserConfig: Data?
 
-    // Legacy JS override fields (kept for migration compatibility)
-    var customExtractJS:    String?
-    var customPreNavigateJS: String?
-
-    /// Decoded overrides with legacy fallback.
     var parserOverrides: SiteParserOverrides? {
-        get {
-            if let data = customParserConfig {
-                return try? JSONDecoder().decode(SiteParserOverrides.self, from: data)
-            }
-            // Legacy: if old fields are set, build overrides from them
-            if customExtractJS != nil || customPreNavigateJS != nil {
-                var o = SiteParserOverrides()
-                o.extractItemsJS = customExtractJS
-                o.preNavigateJS = customPreNavigateJS
-                return o
-            }
-            return nil
-        }
+        get { customParserConfig.flatMap { try? JSONDecoder().decode(SiteParserOverrides.self, from: $0) } }
         set {
-            if let v = newValue, !v.isEmpty {
-                customParserConfig = try? JSONEncoder().encode(v)
-                customExtractJS = nil
-                customPreNavigateJS = nil
-            } else {
-                customParserConfig = nil
-                customExtractJS = nil
-                customPreNavigateJS = nil
+            customParserConfig = newValue.flatMap { value in
+                value.isEmpty ? nil : try? JSONEncoder().encode(value)
             }
         }
     }

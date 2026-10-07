@@ -8,31 +8,20 @@ struct SiteGalleryView: View {
     let siteURLString : String
     /// Non-nil when launched from BookmarkSite — used to apply custom JS overrides.
     let bookmarkSite  : BookmarkSite?
-    /// True when this view is one of the pages inside SiteTabsView's TabView.
-    /// In that context the navigation title is suppressed (the tab picker owns the title area)
-    /// and toolbar items are shown only for the currently selected page.
-    let isTabPage     : Bool
-    let isSelected    : Bool
-
-    // Called from SiteTabsView — controls tab-page behaviour.
-    init(site: BookmarkSite, isTabPage: Bool = false, isSelected: Bool = true) {
+    init(site: BookmarkSite) {
         definitionID = site.definitionID
         siteName        = site.name
         siteURLString   = site.urlString
         bookmarkSite    = site
-        self.isTabPage  = isTabPage
-        self.isSelected = isSelected
         _loader         = State(wrappedValue: Self.makeLoader())
     }
 
-    // Called via NavigationLink for sub-site navigation — always "selected".
+    // Sub-site navigation.
     init(name: String, urlString: String, definitionID: String? = nil) {
         self.definitionID = definitionID
         siteName      = name
         siteURLString = urlString
         bookmarkSite  = nil
-        isTabPage     = false
-        isSelected    = true
         _loader       = State(wrappedValue: Self.makeLoader())
     }
 
@@ -90,22 +79,11 @@ struct SiteGalleryView: View {
                 contentLayer
             }
         }
-        .navigationTitle(isTabPage ? "" : siteName)
+        .navigationTitle(siteName)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { toolbarItems }
-        // ── Deferred loading ─────────────────────────────────────────────────
-        // Problem: TabView(.page) keeps all page views live simultaneously.
-        // If every page called loader.load() in .task, N WebViews would navigate
-        // in parallel at startup → CPU/memory spike → frame drops.
-        //
-        // Fix: only load the initially-selected tab page here; non-selected tab
-        // pages stay idle (WebView exists but is not navigated) and load on demand
-        // when the user actually swipes to them.
         .task {
             guard let url = siteURL else { return }
-            // Non-selected tab pages skip both cache pre-warm and network load;
-            // they load via onChange(of: isSelected) when the user swipes to them.
-            guard !isTabPage || isSelected else { return }
             // Async cache pre-warm (disk I/O runs on actor, not main thread)
             if case .idle = loader.state,
                let (cached, _) = await GalleryCache.load(for: parser.cacheURL(for: url)) {
@@ -113,26 +91,13 @@ struct SiteGalleryView: View {
             }
             loader.load(url: url, parser: parser)
         }
-        // When the user swipes to this tab page, trigger its load for the first time.
-        .onChange(of: isSelected) { _, selected in
-            guard isTabPage, selected, let url = siteURL else { return }
-            if case .idle = loader.state {
-                Task {
-                    if let (cached, _) = await GalleryCache.load(for: parser.cacheURL(for: url)) {
-                        loader.preload(cached)
-                    }
-                    loader.load(url: url, parser: parser)
-                }
-            }
-        }
         // Keep favoriteURLCache in sync — avoids rebuilding a Set<String> on
         // every body re-evaluation (which can happen many times during a load).
         .onChange(of: allFavorites) { _, favorites in
             favoriteURLCache = Set(favorites.map(\.pageURLString))
         }
         .onChange(of: library.definitions) { _, _ in
-            guard !isTabPage || isSelected,
-                  let url = URL(string: activeCategoryURL ?? siteURLString) else { return }
+            guard let url = URL(string: activeCategoryURL ?? siteURLString) else { return }
             loader.load(url: url, parser: parser, forceRefresh: true)
         }
         .task(id: "favorites") {
@@ -625,59 +590,57 @@ struct SiteGalleryView: View {
 
     @ToolbarContentBuilder
     private var toolbarItems: some ToolbarContent {
-        if !isTabPage || isSelected {
-            // ── Status subtitle ─────────────────────────────────────
-            if !statusSubtitle.isEmpty {
-                ToolbarItem(placement: .status) {
-                    Text(statusSubtitle)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+        // ── Status subtitle ─────────────────────────────────────
+        if !statusSubtitle.isEmpty {
+            ToolbarItem(placement: .status) {
+                Text(statusSubtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
-            // ── Menu 1: category + jump to page ─────────────────────
-            if parser.itemKind != .navLink {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Menu {
-                        if parser.categories.count > 1 {
-                            Picker(activeCategoryName, selection: categorySelection) {
-                                ForEach(parser.categories, id: \.urlString) { cat in
-                                    Text(cat.name).tag(cat.urlString)
-                                }
-                            }
-                            Divider()
-                        }
-                        Button {
-                            pageInputText = "\(loader.currentPage)"
-                            showPageInput = true
-                        } label: {
-                            Label("跳转页码", systemImage: "number")
-                        }
-                    } label: {
-                        Image(systemName: "book.pages")
-                    }
-                }
-            }
-            // ── Menu 2: tools ───────────────────────────────────────
+        }
+        // ── Menu 1: category + jump to page ─────────────────────
+        if parser.itemKind != .navLink {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
-                    Button { loader.reload() } label: {
-                        Label("刷新", systemImage: "arrow.clockwise")
-                    }
-                    Button { showWeb.toggle() } label: {
-                        Label(showWeb ? "解析模式" : "网页模式", systemImage: "safari")
-                    }
-                    Divider()
-                    if bookmarkSite != nil {
-                        Button { showJSConfig = true } label: {
-                            Label("解析规则", systemImage: "chevron.left.forwardslash.chevron.right")
+                    if parser.categories.count > 1 {
+                        Picker(activeCategoryName, selection: categorySelection) {
+                            ForEach(parser.categories, id: \.urlString) { cat in
+                                Text(cat.name).tag(cat.urlString)
+                            }
                         }
+                        Divider()
                     }
-                    Button { showDebugSheet = true } label: {
-                        Label("解析结果", systemImage: "ant")
+                    Button {
+                        pageInputText = "\(loader.currentPage)"
+                        showPageInput = true
+                    } label: {
+                        Label("跳转页码", systemImage: "number")
                     }
                 } label: {
-                    Image(systemName: "ellipsis.circle")
+                    Image(systemName: "book.pages")
                 }
+            }
+        }
+        // ── Menu 2: tools ───────────────────────────────────────
+        ToolbarItem(placement: .topBarTrailing) {
+            Menu {
+                Button { loader.reload() } label: {
+                    Label("刷新", systemImage: "arrow.clockwise")
+                }
+                Button { showWeb.toggle() } label: {
+                    Label(showWeb ? "解析模式" : "网页模式", systemImage: "safari")
+                }
+                Divider()
+                if bookmarkSite != nil {
+                    Button { showJSConfig = true } label: {
+                        Label("解析规则", systemImage: "chevron.left.forwardslash.chevron.right")
+                    }
+                }
+                Button { showDebugSheet = true } label: {
+                    Label("解析结果", systemImage: "ant")
+                }
+            } label: {
+                Image(systemName: "ellipsis.circle")
             }
         }
     }

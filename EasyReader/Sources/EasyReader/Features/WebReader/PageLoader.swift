@@ -2,17 +2,6 @@ import WebKit
 import SwiftUI
 import os
 
-// MARK: - WebReader TLS policy
-
-enum WebReaderTLS {
-    static func handle(
-        _ challenge: URLAuthenticationChallenge,
-        completionHandler: (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
-    ) -> Bool {
-        return false
-    }
-}
-
 // MARK: - PageLoader
 
 /// Owns a WKWebView, renders a URL, then runs a JS extractor and returns ParsedItems.
@@ -582,14 +571,6 @@ final class PageLoader: NSObject {
 extension PageLoader: WKNavigationDelegate {
     nonisolated func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         Task { @MainActor in await self.extract() }
-    }
-    nonisolated func webView(
-        _ webView: WKWebView,
-        didReceive challenge: URLAuthenticationChallenge,
-        completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
-    ) {
-        if WebReaderTLS.handle(challenge, completionHandler: completionHandler) { return }
-        completionHandler(.performDefaultHandling, nil)
     }
     nonisolated func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
         Task { @MainActor in

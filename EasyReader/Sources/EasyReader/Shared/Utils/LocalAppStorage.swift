@@ -9,19 +9,19 @@ enum LocalAppStorage {
     static var config: URL { root.appendingPathComponent("config", isDirectory: true) }
     static var data: URL { root.appendingPathComponent("data", isDirectory: true) }
 
-    /// Copy the existing database and its journal before opening the new location.
-    /// The old files remain available if opening/migration fails.
+    /// Place the database and journals under the shared application data directory.
+    /// Retain the source files until the destination opens successfully.
     static func prepareModelStore() throws -> (url: URL, freshInstall: Bool) {
         let fm = FileManager.default
-        let legacy = ModelConfiguration().url
+        let sourceStore = ModelConfiguration().url
         let destination = data.appendingPathComponent("Cove.store")
-        let existed = fm.fileExists(atPath: destination.path) || fm.fileExists(atPath: legacy.path)
+        let existed = fm.fileExists(atPath: destination.path) || fm.fileExists(atPath: sourceStore.path)
         try fm.createDirectory(at: data, withIntermediateDirectories: true)
         try fm.createDirectory(at: config, withIntermediateDirectories: true)
-        if !fm.fileExists(atPath: destination.path), fm.fileExists(atPath: legacy.path) {
+        if !fm.fileExists(atPath: destination.path), fm.fileExists(atPath: sourceStore.path) {
             // The main file is committed last, so an interrupted copy can be retried safely.
             for suffix in ["-wal", "-shm", ""] {
-                let source = URL(fileURLWithPath: legacy.path + suffix)
+                let source = URL(fileURLWithPath: sourceStore.path + suffix)
                 let target = URL(fileURLWithPath: destination.path + suffix)
                 if fm.fileExists(atPath: source.path) {
                     if fm.fileExists(atPath: target.path) { try fm.removeItem(at: target) }

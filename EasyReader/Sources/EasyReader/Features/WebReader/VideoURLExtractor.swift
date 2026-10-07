@@ -287,14 +287,6 @@ extension VideoURLExtractor: WKNavigationDelegate {
     nonisolated func webView(_ wv: WKWebView, didFinish _: WKNavigation!) {
         Task { @MainActor in self.startExtraction() }
     }
-    nonisolated func webView(
-        _ webView: WKWebView,
-        didReceive challenge: URLAuthenticationChallenge,
-        completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
-    ) {
-        if WebReaderTLS.handle(challenge, completionHandler: completionHandler) { return }
-        completionHandler(.performDefaultHandling, nil)
-    }
     nonisolated func webView(_ wv: WKWebView, didFail _: WKNavigation!, withError _: Error) {
         Task { @MainActor in self.state = .notFound }
     }

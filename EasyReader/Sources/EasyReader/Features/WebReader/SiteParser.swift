@@ -374,12 +374,4 @@ extension SiteParser {
         return result
     }
 
-    /// Legacy compatibility — converts two JS overrides to SiteParserOverrides.
-    func applying(customExtractJS: String?, customPreNavigateJS: String?) -> SiteParser {
-        if customExtractJS == nil && customPreNavigateJS == nil { return self }
-        var o = SiteParserOverrides()
-        o.extractItemsJS = customExtractJS
-        o.preNavigateJS = customPreNavigateJS
-        return applying(o)
-    }
 }

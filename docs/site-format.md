@@ -1,4 +1,4 @@
-# Cove `.site` 配置规范（v1）
+# Cove `.site` 配置规范
 
 `.site` 是 UTF-8 YAML 文本，一份文件描述一个站点的完整规则。普通规则用 CSS 选择器，复杂规则用 JavaScript；两者使用同一结果结构。完整示例见 `examples/sites/demo.site`。
 
@@ -20,7 +20,7 @@ App Application Support/Cove/
 
 只有全新安装的第一次初始化会导入预置规则和收藏；空目录也记录初始化完成。以后升级、增加文件、删除站点，都不会触发自动导入。在“管理网站”手动导入配置；相同 `id` 可以替换或另存副本。导入收藏采用合并方式，以页面 URL 去重。
 
-旧版升级保留已有数据；本地构建携带对应 `.site` 时，迁移已存在书签、收藏、历史引用的规则，不新增预设入口。旧数据库及日志复制到新目录，原文件保留。旧远程 NAS 配置需手动补充 SMB 主机、端口和共享名。
+已有数据的配置引用只关联当前规则，不新增预设入口。应用始终使用现有 Cove 资料库。SMB 配置包含主机、端口、用户名和共享名。
 
 ## 顶层字段
 
@@ -28,7 +28,6 @@ App Application Support/Cove/
 | --- | --- |
 | `schemaVersion` | 必填；当前为 `1` |
 | `id` | 必填；稳定身份，字母、数字、点、下划线或连字符 |
-| `version` | 必填；大于零的配置版本号，供用户识别，更新仍需手动导入 |
 | `name` | 必填；显示名称 |
 | `match` | 必填；域名匹配 |
 | `entries` | 必填；入口数组，至少一个 |
@@ -103,7 +102,7 @@ extract:
     }));
 ```
 
-`script` 是函数体，支持 `await`、`return`、DOM 和 WebView 页面上下文中的 `fetch`。返回原生对象/数组，引擎负责 JSON 序列化；也兼容返回 JSON 文本。`expression` 用于完整 JavaScript 表达式及旧规则迁移。
+`script` 是函数体，支持 `await`、`return`、DOM 和 WebView 页面上下文中的 `fetch`。返回原生对象/数组，引擎负责 JSON 序列化；也兼容返回 JSON 文本。`expression` 用于完整 JavaScript 表达式。
 
 ## 页面角色及结果
 
@@ -119,7 +118,7 @@ extract:
 
 ## 加载、分页与展示
 
-`load` 支持 `mode: auto / webView`、`waitSeconds`（0–30）、`headers`，以及可选 `preNavigateScript`（返回跳转地址）、`preNavigateExpression`（兼容表达式）、`transformScript`（接收 `html`，返回资源标签剥离前的 HTML）。需要网页脚本生成内容时选择 `webView`。
+`load` 支持 `mode: auto / webView`、`waitSeconds`（0–30）、`headers`，以及可选 `preNavigateScript`（返回跳转地址）、`preNavigateExpression`（完整表达式）、`transformScript`（接收 `html`，返回资源标签剥离前的 HTML）。需要网页脚本生成内容时选择 `webView`。
 
 ```yaml
 pagination:
@@ -147,6 +146,6 @@ pagination:
 
 ## 收藏数据与备份
 
-预置收藏示例见 `examples/data/favorites.json`。`version` 为 `1`，`favorites` 数组每项必需 `title / pageURL`，可选 `id / thumbnail / duration / siteName / isComic / definitionID / addedAt`。日期使用 ISO 8601。App 收藏页可导出这种格式，然后保存到私有 `data/favorites.json`。
+预置收藏示例见 `examples/data/favorites.json`。`schemaVersion` 为 `1`，`favorites` 数组每项必需 `title / pageURL`，可选 `id / thumbnail / duration / siteName / isComic / definitionID / addedAt`。日期使用 ISO 8601。App 收藏页可导出这种格式，然后保存到私有 `data/favorites.json`。
 
-配置备份 v2 包含完整站点定义、入口身份与 NAS UUID；仍支持旧版备份和 JS 覆盖。配置备份的“导入并替换”与单站点导入分开；单站点导入不替换其他配置，收藏导入以合并为准。
+配置备份同样使用 `schemaVersion: 1`，包含阅读设置、站点定义、入口身份、单站解析覆盖和 NAS UUID；不包含密码。配置备份的“导入并替换”与单站点导入分开；单站点导入不替换其他配置，收藏导入以合并为准。

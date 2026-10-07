@@ -63,7 +63,7 @@ final class SiteDefinitionStore {
     }
 
     /// A fresh installation imports once, including when the bundle contains no definitions.
-    /// Upgrades only migrate existing bookmarks/referenced pages, never add new bundled entries.
+    /// Existing libraries associate referenced rules without adding bundled entries.
     func initialize(context: ModelContext, freshInstall: Bool, defaults: UserDefaults = .standard, bundle: Bundle = .main) {
         guard !initialized else { return }
         initialized = true
@@ -86,11 +86,11 @@ final class SiteDefinitionStore {
                 let favorites = try context.fetch(FetchDescriptor<FavoriteVideo>())
                 let histories = try context.fetch(FetchDescriptor<ReadingHistory>())
                 let references = bookmarks.map(\.urlString) + favorites.map(\.pageURLString) + histories.compactMap(\.url)
-                var migrated = definitions
-                for definition in bundled.definitions where !migrated.contains(where: { $0.id == definition.id }) {
-                    if references.compactMap(URL.init(string:)).contains(where: { definition.match.matches($0) }) { migrated.append(definition) }
+                var referencedDefinitions = definitions
+                for definition in bundled.definitions where !referencedDefinitions.contains(where: { $0.id == definition.id }) {
+                    if references.compactMap(URL.init(string:)).contains(where: { definition.match.matches($0) }) { referencedDefinitions.append(definition) }
                 }
-                try replace(migrated)
+                try replace(referencedDefinitions)
                 for favorite in favorites {
                     if let url = favorite.pageURL { favorite.definitionID = SiteParserRegistry.definition(for: url)?.id }
                 }
@@ -100,7 +100,6 @@ final class SiteDefinitionStore {
                 for bookmark in bookmarks {
                     guard let url = bookmark.url, let definition = SiteParserRegistry.definition(for: url) else { continue }
                     bookmark.definitionID = definition.id
-                    // Keep legacy user overrides until they are materialized by the editor.
                 }
             }
             try context.save()

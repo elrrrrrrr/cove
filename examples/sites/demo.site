@@ -1,6 +1,5 @@
 schemaVersion: 1
 id: example.media
-version: 1
 name: 示例媒体站
 match:
   hosts: [media.example]

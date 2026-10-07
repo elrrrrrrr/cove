@@ -41,7 +41,6 @@ struct SiteImportSheet: View {
                 Section("站点配置") {
                     LabeledContent("名称", value: definition.name)
                     LabeledContent("标识", value: definition.id)
-                    LabeledContent("版本", value: String(definition.version))
                     LabeledContent("解析规则", value: String(definition.rules.count))
                 }
                 Section("入口") {

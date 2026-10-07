@@ -83,13 +83,13 @@ actor ThumbnailCache {
         let file = diskPath(for: url)
         if let d = await Self.readDisk(file: file) {
             store(mem: url, data: d)
-            nonisolated(unsafe) let f = file
+            let f = file
             Task.detached(priority: .utility) { Self.touchDisk(file: f) }
             if let img = UIImage(data: d) { ImageMemoryCache.shared.store(img, for: url) }
             return d
         }
 
-        // Reuse the user's existing thumbnail files during recovery, after containment checks.
+        // Reuse existing thumbnail files after containment checks.
         // All subsequent writes use the URL hash above.
         if let legacy = Self.legacyFile(for: url, under: root),
            let data = await Self.readDisk(file: legacy), UIImage(data: data) != nil {
@@ -125,7 +125,7 @@ actor ThumbnailCache {
             } else {
                 return nil
             }
-            await self.persist(imageData, url: url, file: file)
+            self.persist(imageData, url: url, file: file)
             return imageData
         }
         inFlight[url] = task
@@ -167,7 +167,7 @@ actor ThumbnailCache {
         store(mem: url, data: data)
         if let img = UIImage(data: data) { ImageMemoryCache.shared.store(img, for: url) }
         // Write to disk off the actor queue
-        nonisolated(unsafe) let f = file
+        let f = file
         Task.detached(priority: .utility) {
             let dir = f.deletingLastPathComponent()
             try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

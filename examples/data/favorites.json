@@ -1,5 +1,4 @@
 {
-  "version": 1,
   "favorites": [
     {
       "title": "示例视频",
@@ -9,5 +8,6 @@
       "definitionID": "example.media",
       "isComic": false
     }
-  ]
+  ],
+  "schemaVersion": 1
 }

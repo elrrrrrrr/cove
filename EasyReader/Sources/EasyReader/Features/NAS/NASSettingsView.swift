@@ -99,7 +99,6 @@ struct NASSettingsView: View {
                                        username: username.trimmed, shareName: shareName.trimmed)
         value.name = name.trimmed; value.host = normalizedSMBHost; value.port = validPort
         value.username = username.trimmed; value.shareName = shareName.trimmed
-        value.connectionType = "smb"; value.quickConnectID = nil; value.fnConnectID = nil
         if config == nil { context.insert(value) }
         if !password.isEmpty { NASKeychain.save(password: password, for: value.id) }
         do { try context.save(); dismiss() } catch { self.error = error.localizedDescription }

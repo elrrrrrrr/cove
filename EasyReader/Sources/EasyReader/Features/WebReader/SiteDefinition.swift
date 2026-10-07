@@ -5,7 +5,6 @@ import Yams
 struct SiteDefinition: Codable, Sendable, Equatable, Identifiable {
     var schemaVersion: Int = 1
     var id: String
-    var version: Int = 1
     var name: String
     var match: SiteMatch
     var entries: [SiteEntry]
@@ -18,7 +17,6 @@ struct SiteDefinition: Codable, Sendable, Equatable, Identifiable {
             if !condition { throw SiteDefinitionError.invalid(message) }
         }
         try require(schemaVersion == 1, "不支持的格式版本：\(schemaVersion)")
-        try require(version > 0, "配置版本必须大于零")
         try require(id.range(of: #"^[A-Za-z0-9][A-Za-z0-9._-]*$"#, options: .regularExpression) != nil, "站点 id 只能包含字母、数字、点、下划线和连字符")
         try require(!name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, "站点名称不能为空")
         try match.validate()
@@ -224,7 +222,7 @@ struct SiteExtraction: Codable, Sendable, Equatable {
     var fields: [String: SiteField]?
     /// Function body; `return` native objects/arrays. Async JavaScript is supported.
     var script: String?
-    /// Migration compatibility for complete JavaScript expressions.
+    /// A complete JavaScript expression.
     var expression: String?
 
     func validate() throws {
@@ -305,7 +303,7 @@ struct SiteField: Codable, Sendable, Equatable {
 /// Catch misspelled keys and duplicate YAML keys before Codable can silently discard them.
 enum SiteSchema {
     private static let keys: [String: Set<String>] = [
-        "site": ["schemaVersion", "id", "version", "name", "match", "entries", "rules", "portal", "images"],
+        "site": ["schemaVersion", "id", "name", "match", "entries", "rules", "portal", "images"],
         "match": ["hosts", "includeSubdomains", "hostPattern", "pathPrefix", "pathPattern", "query"],
         "entry": ["id", "name", "path", "category"],
         "rule": ["id", "role", "contentType", "priority", "match", "load", "presentation", "extract", "pagination", "categories", "searchURLTemplate", "request"],
