@@ -97,7 +97,7 @@ import CommonCrypto
     }
 }
 
-private final class ImageFixtureServer {
+final class ImageFixtureServer {
     let listener: NWListener
     let url: URL
     let count = ImageRequestCounter()
@@ -120,7 +120,7 @@ private final class ImageFixtureServer {
         url = URL(string: "http://127.0.0.1:\(port.rawValue)/cover.bin")!
     }
 }
-private final class ImageRequestCounter: @unchecked Sendable {
+final class ImageRequestCounter: @unchecked Sendable {
     private let lock = NSLock()
     private var count = 0
     var value: Int { lock.withLock { count } }

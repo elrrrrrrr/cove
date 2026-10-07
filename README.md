@@ -24,6 +24,7 @@ Cove 是可配置的 iOS 浏览与阅读应用，支持网页、SMB、本地文�
 - [代码结构](docs/architecture.md)
 - [审计修复与剩余工作](docs/review-status.md)
 - [虚构站点示例](examples/sites/demo.site)
+- [本地站点规则回归测试](docs/site-tests.md)
 - [预置收藏示例](examples/data/favorites.json)
 
 真实规则放 sites/，可选收藏预置放 data/favorites.json；两个目录和 config/ 被 Git 忽略。存在时本地打包自动加载，不存在也能构建。预置仅在首次初始化导入一次。
@@ -37,4 +38,4 @@ Cove 是可配置的 iOS 浏览与阅读应用，支持网页、SMB、本地文�
     xcodebuild -project EasyReader.xcodeproj -scheme EasyReader \
       -destination 'platform=iOS Simulator,name=iPhone 17 Pro' test
 
-测试使用虚构配置和本地页面。真实站点、NAS 和真机性能需要实际环境验证。RAR/CBR 尚未包含实际解码器。仓库保持 Private。
+测试使用虚构配置和本地页面，可从 Git 忽略的 `config/site-tests/` 加载真实规则的离线快照，检查列表、分页、门户及封面解码。缺少样本的规则会在覆盖清单中列出。真实站点、NAS 和真机性能需要实际环境验证。RAR/CBR 尚未包含实际解码器。仓库保持 Private。

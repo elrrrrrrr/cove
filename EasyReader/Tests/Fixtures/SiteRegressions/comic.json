@@ -1,0 +1,17 @@
+{
+  "title": "漫画案例",
+  "cover": "https://media.example/cover.png",
+  "tags": [
+    "标签"
+  ],
+  "chapters": [
+    {
+      "title": "第一章",
+      "url": "https://media.example/chapter/1"
+    },
+    {
+      "title": "第二章",
+      "url": "https://media.example/chapter/2"
+    }
+  ]
+}

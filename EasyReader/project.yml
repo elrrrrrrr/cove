@@ -61,6 +61,13 @@ targets:
       - path: Tests/Fixtures/Audio
         type: folder
         buildPhase: resources
+      - path: Tests/Fixtures/SiteRegressions
+        type: folder
+        buildPhase: resources
+    preBuildScripts:
+      - name: Bundle private regression snapshots for tests
+        script: '"${SRCROOT}/../scripts/bundle-site-tests.sh"'
+        basedOnDependencyAnalysis: false
     dependencies:
       - target: EasyReader
     settings:

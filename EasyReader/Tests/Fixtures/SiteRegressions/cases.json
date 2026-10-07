@@ -1,0 +1,47 @@
+[
+  {
+    "name": "public-catalog",
+    "definitionID": "example.media",
+    "operation": "extract",
+    "ruleID": "video-list",
+    "pageURL": "https://media.example/latest/",
+    "input": "catalog.html",
+    "expected": "catalog.json"
+  },
+  {
+    "name": "public-next-page",
+    "definitionID": "example.media",
+    "operation": "pagination",
+    "ruleID": "video-list",
+    "pageURL": "https://media.example/latest/",
+    "input": "catalog.html",
+    "expected": "next.json"
+  },
+  {
+    "name": "public-video",
+    "definitionID": "example.media",
+    "operation": "extract",
+    "ruleID": "video-detail",
+    "pageURL": "https://media.example/watch/1",
+    "input": "video.html",
+    "expected": "video.json"
+  },
+  {
+    "name": "public-comic",
+    "definitionID": "example.media",
+    "operation": "extract",
+    "ruleID": "comic-detail",
+    "pageURL": "https://media.example/book/1",
+    "input": "comic.html",
+    "expected": "comic.json"
+  },
+  {
+    "name": "public-chapter",
+    "definitionID": "example.media",
+    "operation": "extract",
+    "ruleID": "comic-chapter",
+    "pageURL": "https://media.example/chapter/2",
+    "input": "chapter.html",
+    "expected": "chapter.json"
+  }
+]

@@ -11,6 +11,7 @@ spec.loader.exec_module(module)
 class ExportPolicyTests(unittest.TestCase):
     def test_private_and_generated_paths_are_never_exported(self):
         for path in ["sites/local.site", "data/favorites.json", "config/reference.swift",
+                     "config/site-tests/cases.json", "config/site-tests/source/cover.bin",
                      "Nested/.env", ".env.production", "keys/signing.p8", "cert.p12",
                      "Nested/id_ed25519", ".netrc", "Nested/credentials.json",
                      "Other/EasyReader.xcodeproj/project.pbxproj", "private-copy.site", "Nested/PRIVATE.SITE"]:
