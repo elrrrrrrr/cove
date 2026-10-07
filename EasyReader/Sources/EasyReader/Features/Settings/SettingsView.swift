@@ -8,7 +8,8 @@ struct SettingsView: View {
     @Environment(\.modelContext) private var context
 
     @AppStorage("readerFontSize") private var fontSize: Double = 17
-    @AppStorage("readerTheme") private var theme: ReaderTheme = .system
+    @AppStorage(AppTheme.storageKey) private var theme: AppTheme = .system
+    @AppStorage(NovelReadingMode.storageKey) private var readingMode: NovelReadingMode = .paged
     @AppStorage("contentBlockerEnabled") private var blockerEnabled: Bool = true
 
     @State private var showAddNAS = false
@@ -70,6 +71,13 @@ struct SettingsView: View {
                     }
                 }
 
+                Section("外观") {
+                    Picker("全局主题", selection: $theme) {
+                        ForEach(AppTheme.allCases) { t in Text(t.label).tag(t) }
+                    }
+                    .accessibilityIdentifier("app-theme-picker")
+                }
+
                 // Reader settings
                 Section("阅读设置") {
                     HStack {
@@ -77,10 +85,8 @@ struct SettingsView: View {
                         Spacer()
                         Stepper("\(Int(fontSize)) pt", value: $fontSize, in: 12...28, step: 1)
                     }
-                    Picker("主题", selection: $theme) {
-                        ForEach(ReaderTheme.allCases) { t in
-                            Text(t.label).tag(t)
-                        }
+                    Picker("小说翻页", selection: $readingMode) {
+                        ForEach(NovelReadingMode.allCases) { mode in Text(mode.label).tag(mode) }
                     }
                 }
 
@@ -163,6 +169,7 @@ struct SettingsView: View {
                     Link("问题反馈", destination: URL(string: "https://github.com")!)
                 }
             }
+            .appSurface()
             .navigationTitle("设置")
             .sheet(isPresented: $showSiteList) {
                 SiteListView()
@@ -213,7 +220,7 @@ struct SettingsView: View {
             nasConfigs: nasConfigs,
             fontSize: fontSize,
             theme: theme,
-            blockerEnabled: blockerEnabled
+            blockerEnabled: blockerEnabled, readingMode: readingMode
         )
         do {
             exportFileURL = try backup.writeToTempFile()
@@ -247,9 +254,10 @@ struct SettingsView: View {
             // Refresh AppStorage bindings from UserDefaults
             fontSize = UserDefaults.standard.double(forKey: "readerFontSize")
             if let raw = UserDefaults.standard.string(forKey: "readerTheme"),
-               let t = ReaderTheme(rawValue: raw) {
+               let t = AppTheme(rawValue: raw) {
                 theme = t
             }
+            readingMode = NovelReadingMode(rawValue: UserDefaults.standard.string(forKey: NovelReadingMode.storageKey) ?? "") ?? .paged
             blockerEnabled = UserDefaults.standard.bool(forKey: "contentBlockerEnabled")
             pendingBackup = nil
             showImportSuccess = true
@@ -289,6 +297,7 @@ struct SettingsView: View {
         // 4. Reset UserDefaults settings
         fontSize = 17
         theme = .system
+        readingMode = .paged
         blockerEnabled = true
     }
 }
@@ -311,6 +320,7 @@ struct BlockerRulesView: View {
             Text("内置 EasyList 精简规则（已加载）")
                 .foregroundStyle(.secondary)
         }
+        .appSurface()
         .navigationTitle("拦截规则")
     }
 }

@@ -7,6 +7,7 @@ struct CBZReaderView: View {
     let fileURL: URL
     var historyItem: ReadingHistory?
 
+    @AppStorage(AppTheme.storageKey) private var theme: AppTheme = .system
     @Environment(\.modelContext) private var context
     @Environment(\.dismiss) private var dismiss
 
@@ -22,7 +23,7 @@ struct CBZReaderView: View {
 
     var body: some View {
         ZStack(alignment: .bottom) {
-            Color.black.ignoresSafeArea()
+            theme.backgroundColor.ignoresSafeArea()
 
             if isLoading {
                 VStack(spacing: 16) {
@@ -102,7 +103,7 @@ struct CBZReaderView: View {
         Button { dismiss() } label: {
             Image(systemName: "chevron.left")
                 .font(.system(size: 17, weight: .medium))
-                .foregroundStyle(.white)
+                .foregroundStyle(theme.textColor)
                 .padding(10)
                 .background(.ultraThinMaterial, in: Circle())
         }
@@ -124,7 +125,7 @@ struct CBZReaderView: View {
             Text("\(currentPage + 1) / \(pages.count)")
                 .foregroundStyle(.secondary)
         }
-        .foregroundStyle(.white)
+        .foregroundStyle(theme.textColor)
         .padding(.horizontal)
         .padding(.vertical, 8)
         .background(.ultraThinMaterial)

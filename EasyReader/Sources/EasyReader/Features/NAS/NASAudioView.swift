@@ -8,12 +8,13 @@ struct NASAudioView: View {
     var trackPath: String = ""
     var fileURL: URL?
 
+    @AppStorage(AppTheme.storageKey) private var theme: AppTheme = .system
     @Environment(\.dismiss) private var dismiss
     @State private var audioManager = AudioPlayerManager.shared
 
     var body: some View {
         ZStack {
-            Color.black.ignoresSafeArea()
+            theme.backgroundColor.ignoresSafeArea()
 
             VStack(spacing: 32) {
                 Spacer()
@@ -21,12 +22,12 @@ struct NASAudioView: View {
                 // Album art placeholder
                 Image(systemName: "waveform.circle.fill")
                     .font(.system(size: 120))
-                    .foregroundStyle(.white.opacity(0.3))
+                    .foregroundStyle(theme.textColor.opacity(0.3))
 
                 // Filename
                 Text(audioManager.trackName.isEmpty ? trackName : audioManager.trackName)
                     .font(.title3.weight(.medium))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(theme.textColor)
                     .lineLimit(2)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 32)
@@ -37,7 +38,7 @@ struct NASAudioView: View {
                         get: { audioManager.currentTime },
                         set: { audioManager.seek(to: $0) }
                     ), in: 0...max(audioManager.duration, 1))
-                    .tint(.white)
+                    .tint(theme.textColor)
 
                     HStack {
                         Text(formatTime(audioManager.currentTime))
@@ -45,7 +46,7 @@ struct NASAudioView: View {
                         Text(formatTime(audioManager.duration))
                     }
                     .font(.caption.monospacedDigit())
-                    .foregroundStyle(.white.opacity(0.6))
+                    .foregroundStyle(theme.textColor.opacity(0.6))
                 }
                 .padding(.horizontal, 32)
 
@@ -80,13 +81,13 @@ struct NASAudioView: View {
                     .disabled(!audioManager.hasNext)
                     .opacity(audioManager.hasNext ? 1 : 0.3)
                 }
-                .foregroundStyle(.white)
+                .foregroundStyle(theme.textColor)
 
                 // Track counter
                 if audioManager.siblings.count > 1 {
                     Text("\(audioManager.currentIndex + 1) / \(audioManager.siblings.count)")
                         .font(.caption.monospacedDigit())
-                        .foregroundStyle(.white.opacity(0.5))
+                        .foregroundStyle(theme.textColor.opacity(0.5))
                 }
 
                 Spacer()
@@ -104,9 +105,9 @@ struct NASAudioView: View {
             Button { dismiss() } label: {
                 Image(systemName: "chevron.down")
                     .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(theme.textColor)
                     .frame(width: 36, height: 36)
-                    .background(.black.opacity(0.45), in: Circle())
+                    .background(.ultraThinMaterial, in: Circle())
             }
             .padding(.top, 56)
             .padding(.leading, 16)
@@ -118,9 +119,9 @@ struct NASAudioView: View {
             } label: {
                 Image(systemName: "stop.circle")
                     .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(theme.textColor)
                     .frame(width: 36, height: 36)
-                    .background(.black.opacity(0.45), in: Circle())
+                    .background(.ultraThinMaterial, in: Circle())
             }
             .padding(.top, 56)
             .padding(.trailing, 16)

@@ -40,6 +40,7 @@ struct FavoritesView: View {
                     grid(videoFavs: videoFavs, comicFavs: comicFavs)
                 }
             }
+            .appSurface()
             .navigationTitle("收藏")
             .searchable(text: $searchText, prompt: "搜索标题或站点")
             .toolbar {

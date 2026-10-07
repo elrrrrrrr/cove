@@ -76,6 +76,7 @@ struct HomeView: View {
                 }
                 .padding(.vertical)
             }
+            .appSurface()
             .navigationTitle("主页")
         }
     }
@@ -298,7 +299,7 @@ struct HomeView: View {
             }
         case .txt:
             if let p = item.filePath {
-                TXTReaderView(fileURL: URL(fileURLWithPath: p))
+                TXTReaderView(fileURL: URL(fileURLWithPath: p), historyItem: item)
             }
         case .video:
             if let p = item.filePath {

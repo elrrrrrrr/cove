@@ -12,7 +12,7 @@ struct EPUBReaderView: View {
     @Environment(\.dismiss) private var dismiss
 
     @AppStorage("readerFontSize") private var fontSize: Double = 17
-    @AppStorage("readerTheme")    private var theme: ReaderTheme = .system
+    @AppStorage(AppTheme.storageKey) private var theme: AppTheme = .system
 
     @State private var chapters: [EPUBChapter] = []
     @State private var currentChapter = 0
@@ -23,6 +23,7 @@ struct EPUBReaderView: View {
 
     var body: some View {
         ZStack(alignment: .bottom) {
+            theme.backgroundColor.ignoresSafeArea()
             if isLoading {
                 VStack(spacing: 16) {
                     ProgressView()
@@ -124,6 +125,7 @@ struct EPUBReaderView: View {
                 }
                 .foregroundStyle(idx == currentChapter ? Color.accentColor : .primary)
             }
+            .appSurface()
             .navigationTitle("目录")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -299,8 +301,9 @@ enum EPUBError: LocalizedError {
 struct EPUBWebView: UIViewRepresentable {
     let chapter : EPUBChapter
     let fontSize : Double
-    let theme    : ReaderTheme
+    let theme    : AppTheme
     var onTap    : () -> Void
+    @Environment(\.colorScheme) private var colorScheme
 
     func makeUIView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
@@ -310,36 +313,51 @@ struct EPUBWebView: UIViewRepresentable {
         let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleTap))
         tap.delegate = context.coordinator
         wv.addGestureRecognizer(tap)
-        load(into: wv)
         return wv
     }
 
     func updateUIView(_ uiView: WKWebView, context: Context) {
-        load(into: uiView)
+        let coordinator = context.coordinator
+        coordinator.parent = self
+        let changed = coordinator.css != css
+        coordinator.css = css
+        if coordinator.loadedURL != chapter.htmlURL {
+            coordinator.loadedURL = chapter.htmlURL
+            uiView.loadFileURL(chapter.htmlURL, allowingReadAccessTo: chapter.htmlURL.deletingLastPathComponent())
+        } else if changed && !uiView.isLoading {
+            coordinator.applyStyle(to: uiView)
+        }
     }
 
-    private func load(into wv: WKWebView) {
-        let bgColor  = theme == .sepia ? "#fdf6e3" : (theme == .dark ? "#1c1c1e" : "#ffffff")
-        let txtColor = theme == .dark  ? "#f0f0f0" : "#1c1c1e"
-        let css = """
-        <style>
+    private var css: String {
+        let dark = (theme.colorScheme ?? colorScheme) == .dark
+        let bgColor = theme == .sepia ? "#faf2de" : (dark ? "#1c1c1e" : "#ffffff")
+        let txtColor = theme == .sepia ? "#4d381f" : (dark ? "#f0f0f0" : "#1c1c1e")
+        return """
         body { font-size: \(Int(fontSize))px; line-height: 1.7; margin: 16px;
-               background: \(bgColor); color: \(txtColor);
-               font-family: -apple-system, 'PingFang SC', sans-serif; }
+               background: \(bgColor) !important; color: \(txtColor) !important;
+               font-family: sans-serif; }
         img  { max-width: 100%; height: auto; }
-        </style>
         """
-        wv.loadFileURL(chapter.htmlURL, allowingReadAccessTo: chapter.htmlURL.deletingLastPathComponent())
-        wv.evaluateJavaScript("document.head.insertAdjacentHTML('beforeend', `\(css)`)")
     }
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     final class Coordinator: NSObject, WKNavigationDelegate, UIGestureRecognizerDelegate {
         var parent: EPUBWebView
+        var loadedURL: URL?
+        var css = ""
         init(_ parent: EPUBWebView) { self.parent = parent }
 
         @objc func handleTap() { parent.onTap() }
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { applyStyle(to: webView) }
+        func applyStyle(to webView: WKWebView) {
+            webView.callAsyncJavaScript("""
+            let style = document.getElementById('cove-reader-style');
+            if (!style) { style = document.createElement('style'); style.id = 'cove-reader-style'; document.head.appendChild(style); }
+            style.textContent = css;
+            """, arguments: ["css": css], in: nil, in: .defaultClient, completionHandler: nil)
+        }
         func gestureRecognizer(
             _ gr: UIGestureRecognizer,
             shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer

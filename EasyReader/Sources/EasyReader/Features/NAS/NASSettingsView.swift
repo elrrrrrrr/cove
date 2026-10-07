@@ -78,6 +78,7 @@ struct NASSettingsView: View {
                     }
                 }
             }
+            .appSurface()
             .navigationTitle(config == nil ? "添加 NAS" : "编辑 NAS")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

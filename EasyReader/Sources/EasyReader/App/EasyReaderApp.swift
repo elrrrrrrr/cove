@@ -27,6 +27,7 @@ struct EasyReaderApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
+                .appAppearance()
                 .task {
                     SiteDefinitionStore.shared.initialize(context: modelContainer.mainContext, freshInstall: freshInstall)
                 }

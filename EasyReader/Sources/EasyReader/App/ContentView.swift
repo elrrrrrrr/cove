@@ -61,6 +61,7 @@ private struct iPadRootView: View {
                 Label(tab.label, systemImage: tab.icon)
                     .tag(tab)
             }
+            .appSurface()
             .navigationTitle("EasyReader")
         } detail: {
             switch selectedTab {

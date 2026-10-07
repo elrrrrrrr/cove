@@ -180,6 +180,7 @@ struct ComicDetailView: View {
 
             contentLayer
         }
+        .appSurface()
         .navigationTitle(item.title)
         .navigationBarTitleDisplayMode(.inline)
         .task {

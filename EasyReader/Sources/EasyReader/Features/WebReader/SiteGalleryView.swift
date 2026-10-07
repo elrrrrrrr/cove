@@ -79,6 +79,7 @@ struct SiteGalleryView: View {
                 contentLayer
             }
         }
+        .appSurface()
         .navigationTitle(siteName)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { toolbarItems }
@@ -705,6 +706,7 @@ private struct GalleryEpisodePickerSheet: View {
                 }
                 .padding()
             }
+            .appSurface()
             .navigationTitle("选集 · 共 \(target.count) 集")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -1214,6 +1216,7 @@ struct ParsedItemsDebugSheet: View {
                     }
                 }
             }
+            .appSurface()
             .navigationTitle("解析结果")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

@@ -175,12 +175,15 @@ import SwiftData
         let site = BookmarkSite(name: "测试", urlString: "https://media.example/latest/", note: "说明", sortOrder: 4)
         site.parserOverrides = SiteParserOverrides(extractItemsJS: "return []; ")
         context.insert(site); try context.save()
-        let backup = ConfigBackup.export(sites: [site], nasConfigs: [], fontSize: 18, theme: .dark, blockerEnabled: true)
+        let backup = ConfigBackup.export(sites: [site], nasConfigs: [], fontSize: 18, theme: .dark, blockerEnabled: true, readingMode: .scroll)
         let file = try backup.writeToTempFile()
         defer { try? FileManager.default.removeItem(at: file) }
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
         XCTAssertEqual(json["schemaVersion"] as? Int, 1); XCTAssertNil(json["version"])
         let loaded = try ConfigBackup.read(from: file)
+        XCTAssertEqual(loaded.settings.novelReadingMode, "scroll")
+        var invalid = loaded; invalid.settings.novelReadingMode = "unknown"
+        XCTAssertThrowsError(try invalid.validate())
         XCTAssertEqual(loaded.sites.first?.id, site.id)
         XCTAssertEqual(loaded.sites.first?.note, "说明")
         XCTAssertEqual(loaded.sites.first?.parserConfig?.extractItemsJS, "return []; ")

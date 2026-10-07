@@ -50,6 +50,7 @@ struct HistoryView: View {
                     .listStyle(.insetGrouped)
                 }
             }
+            .appSurface()
             .navigationTitle("历史记录")
             .toolbar {
                 if !allHistory.isEmpty {

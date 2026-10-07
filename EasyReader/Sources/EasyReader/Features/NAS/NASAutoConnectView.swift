@@ -63,6 +63,7 @@ struct NASAutoConnectView: View {
                 }
             }
         }
+        .appSurface()
         .navigationTitle(historyItem.title)
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { connectAndLoad() }
@@ -83,7 +84,7 @@ struct NASAutoConnectView: View {
             NASImageView(initialData: imageData)
         } else if let url = fileURL {
             switch ft {
-            case .txt: TXTReaderView(fileURL: url)
+            case .txt: TXTReaderView(fileURL: url, historyItem: historyItem)
             case .pdf: PDFReaderView(fileURL: url)
             case .cbz, .cbr: CBZReaderView(fileURL: url)
             case .epub: EPUBReaderView(fileURL: url)

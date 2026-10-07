@@ -40,6 +40,7 @@ struct NASBrowserView: View {
 
     // File open routing
     @State private var openedFileURL: URL?
+    @State private var openedHistory: ReadingHistory?
     @State private var openedFileType: FileType?
     @State private var openedFileData: Data?
     @State private var openedStreamItem: AVPlayerItem?
@@ -88,6 +89,7 @@ struct NASBrowserView: View {
                     configPickerView
                 }
             }
+            .appSurface()
             .navigationTitle("NAS")
             .navigationDestination(for: String.self) { dirPath in
                 if let connection {
@@ -169,6 +171,7 @@ struct NASBrowserView: View {
     private func closeReader() {
         if let openedFileURL { try? FileManager.default.removeItem(at: openedFileURL.deletingLastPathComponent()) }
         openedFileURL = nil
+        openedHistory = nil
         openedFileData = nil
         openedStreamItem = nil
         openedStreamURL = nil
@@ -195,7 +198,7 @@ struct NASBrowserView: View {
     private func readerView(for url: URL, fileType: FileType) -> some View {
         switch fileType {
         case .txt:
-            TXTReaderView(fileURL: url)
+            TXTReaderView(fileURL: url, historyItem: openedHistory)
         case .pdf:
             PDFReaderView(fileURL: url)
         case .cbz, .cbr:
@@ -282,6 +285,7 @@ struct NASBrowserView: View {
                     }
                 }
             }
+            .appSurface()
             .navigationTitle("NAS 登录")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -439,7 +443,7 @@ struct NASBrowserView: View {
                     downloadProgress = nil
                     openedFileType = ft
                     openedFileURL = dest
-                    saveHistory(entry: entry, fileType: ft)
+                    openedHistory = saveHistory(entry: entry, fileType: ft)
                 }
             } catch {
                 await MainActor.run {
@@ -453,10 +457,12 @@ struct NASBrowserView: View {
 
     // MARK: - History (with dedup)
 
-    private func saveHistory(entry: NASFileEntry, fileType: FileType) {
-        if let existing = readHistory.first(where: { $0.filePath == entry.path }) {
+    @discardableResult private func saveHistory(entry: NASFileEntry, fileType: FileType) -> ReadingHistory {
+        let configID = selectedConfig?.id.uuidString
+        if let existing = readHistory.first(where: { $0.filePath == entry.path && $0.nasConfigID == configID }) {
             existing.lastReadAt = Date()
             existing.nasConfigID = selectedConfig?.id.uuidString
+            return existing
         } else {
             let history = ReadingHistory(
                 title: (entry.name as NSString).deletingPathExtension,
@@ -465,6 +471,7 @@ struct NASBrowserView: View {
             )
             history.nasConfigID = selectedConfig?.id.uuidString
             modelContext.insert(history)
+            return history
         }
     }
 
@@ -544,6 +551,7 @@ struct NASDirectoryListView: View {
                 }
             }
         }
+        .appSurface()
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -578,7 +586,7 @@ struct NASDirectoryListView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .background(Color(.systemBackground))
+        .appSurface()
     }
 
     // MARK: - Grid layout

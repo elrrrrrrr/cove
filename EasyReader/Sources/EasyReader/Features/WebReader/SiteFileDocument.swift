@@ -58,6 +58,7 @@ struct SiteImportSheet: View {
                 }
                 if let error { Section { Text(error).foregroundStyle(.red) } }
             }
+            .appSurface()
             .navigationTitle("导入 .site")
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } } }
             .sheet(isPresented: $showEditor) { SiteSetupWizard(imported: definition, onSaved: { dismiss() }) }

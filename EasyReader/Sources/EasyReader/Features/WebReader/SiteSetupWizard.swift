@@ -52,6 +52,7 @@ struct SiteSetupWizard: View {
                 else { advancedEditor }
                 if let error { Text(error).font(.caption).foregroundStyle(.red).padding().textSelection(.enabled) }
             }
+            .appSurface()
             .navigationTitle(existing == nil ? "站点解析引导" : "编辑解析规则")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

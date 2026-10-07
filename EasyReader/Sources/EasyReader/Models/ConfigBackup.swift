@@ -14,6 +14,7 @@ struct SettingsBackup: Codable {
     var readerFontSize: Double
     var readerTheme: String
     var contentBlockerEnabled: Bool
+    var novelReadingMode: String?
 }
 
 struct SiteBackup: Codable {
@@ -39,9 +40,9 @@ struct NASConfigBackup: Codable {
 
 extension ConfigBackup {
     @MainActor static func export(sites: [BookmarkSite], nasConfigs: [NASConfig],
-                                 fontSize: Double, theme: ReaderTheme, blockerEnabled: Bool) -> ConfigBackup {
+                                 fontSize: Double, theme: AppTheme, blockerEnabled: Bool, readingMode: NovelReadingMode = .paged) -> ConfigBackup {
         ConfigBackup(exportDate: Date(),
-            settings: SettingsBackup(readerFontSize: fontSize, readerTheme: theme.rawValue, contentBlockerEnabled: blockerEnabled),
+            settings: SettingsBackup(readerFontSize: fontSize, readerTheme: theme.rawValue, contentBlockerEnabled: blockerEnabled, novelReadingMode: readingMode.rawValue),
             sites: sites.map { SiteBackup(id: $0.id, name: $0.name, urlString: $0.urlString, category: $0.category.rawValue,
                 note: $0.note, sortOrder: $0.sortOrder, parserConfig: $0.parserOverrides, definitionID: $0.definitionID, entryID: $0.entryID) },
             nasConfigs: nasConfigs.map { NASConfigBackup(id: $0.id, name: $0.name, host: $0.host, port: $0.port,
@@ -52,7 +53,10 @@ extension ConfigBackup {
     func validate() throws {
         guard schemaVersion == 1 else { throw SiteDefinitionError.invalid("不支持的备份格式") }
         guard settings.readerFontSize.isFinite, (6...72).contains(settings.readerFontSize),
-              ReaderTheme(rawValue: settings.readerTheme) != nil else { throw SiteDefinitionError.invalid("备份中的阅读设置无效") }
+              AppTheme(rawValue: settings.readerTheme) != nil else { throw SiteDefinitionError.invalid("备份中的阅读设置无效") }
+        if let mode = settings.novelReadingMode, NovelReadingMode(rawValue: mode) == nil {
+            throw SiteDefinitionError.invalid("备份中的小说翻页方式无效")
+        }
         for definition in siteDefinitions { try definition.validate() }
         guard Set(siteDefinitions.map(\.id)).count == siteDefinitions.count,
               Set(sites.map(\.id)).count == sites.count,
@@ -93,7 +97,8 @@ extension ConfigBackup {
             throw error
         }
         UserDefaults.standard.set(settings.readerFontSize, forKey: "readerFontSize")
-        UserDefaults.standard.set(settings.readerTheme, forKey: "readerTheme")
+        UserDefaults.standard.set(settings.readerTheme, forKey: AppTheme.storageKey)
+        UserDefaults.standard.set(settings.novelReadingMode ?? NovelReadingMode.paged.rawValue, forKey: NovelReadingMode.storageKey)
         UserDefaults.standard.set(settings.contentBlockerEnabled, forKey: "contentBlockerEnabled")
     }
 

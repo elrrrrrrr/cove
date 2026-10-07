@@ -47,6 +47,7 @@ struct SiteListView: View {
                     }
                 }
             }
+            .appSurface()
             .navigationTitle("网站")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -326,6 +327,7 @@ struct SiteEditSheet: View {
                 }
 
             }
+            .appSurface()
             .navigationTitle(isNew ? "添加站点" : "编辑站点")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
