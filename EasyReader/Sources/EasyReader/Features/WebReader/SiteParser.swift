@@ -10,13 +10,14 @@ struct ParsedItem: Identifiable, Hashable, Sendable, Codable {
     let thumbnail : URL?
     let duration  : String
     let extra     : String
+    let extraTags : [String]
 
     enum CodingKeys: String, CodingKey {
         case title, pageURL, thumbnail, duration, extra
     }
     init(title: String, pageURL: URL, thumbnail: URL?, duration: String, extra: String) {
         self.title = title; self.pageURL = pageURL
-        self.thumbnail = thumbnail; self.duration = duration; self.extra = extra
+        self.thumbnail = thumbnail; self.duration = duration; self.extra = extra; self.extraTags = ItemTags.parse(extra)
     }
     init(from decoder: Decoder) throws {
         let c     = try decoder.container(keyedBy: CodingKeys.self)
@@ -25,6 +26,7 @@ struct ParsedItem: Identifiable, Hashable, Sendable, Codable {
         thumbnail = try c.decodeIfPresent(URL.self, forKey: .thumbnail)
         duration  = try c.decode(String.self, forKey: .duration)
         extra     = try c.decode(String.self, forKey: .extra)
+        extraTags = ItemTags.parse(extra)
     }
 }
 

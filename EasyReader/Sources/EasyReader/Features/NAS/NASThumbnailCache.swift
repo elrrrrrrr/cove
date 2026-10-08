@@ -94,6 +94,7 @@ actor NASThumbnailCache {
     private static func videoThumbnail(entry: NASFileEntry, connection: NASConnection, pixels: Int) async -> UIImage? {
         guard let client = connection.smbClient, !Task.isCancelled else { return nil }
         let operation = VideoThumbnailOperation(asset: SMBStreamLoader.makeAsset(client: client, remotePath: entry.path))
+        defer { SMBStreamLoader.cancel(in: operation.asset) }
         let generator = operation.generator
         generator.appliesPreferredTrackTransform = true
         generator.maximumSize = CGSize(width: pixels, height: pixels)
@@ -102,12 +103,13 @@ actor NASThumbnailCache {
                 let (image, _) = try await operation.generator.image(at: CMTime(seconds: 1, preferredTimescale: 600))
                 return Task.isCancelled ? nil : UIImage(cgImage: image)
             } catch { return nil }
-        } onCancel: { operation.generator.cancelAllCGImageGeneration() }
+        } onCancel: { operation.generator.cancelAllCGImageGeneration(); SMBStreamLoader.cancel(in: operation.asset) }
     }
 }
 
 /// Immutable AVFoundation handle; cancellation may run concurrently with image generation.
 private final class VideoThumbnailOperation: @unchecked Sendable {
     let generator: AVAssetImageGenerator
-    init(asset: AVAsset) { generator = AVAssetImageGenerator(asset: asset) }
+    let asset: AVAsset
+    init(asset: AVAsset) { self.asset = asset; generator = AVAssetImageGenerator(asset: asset) }
 }

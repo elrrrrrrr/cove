@@ -63,3 +63,29 @@ private actor FakeRangeSource: SMBRangeSource {
         return Data(repeating: 42, count: length)
     }
 }
+
+@MainActor final class SMBResourceCancellationTests: XCTestCase {
+    func testPlayerTeardownCancelsPendingRangeRead() async throws {
+        let source = CancellableSMBFixture()
+        let asset = SMBStreamLoader.makeAsset(client: source, remotePath: "/fixture.mp4")
+        let load = Task { try? await asset.load(.duration) }
+        for _ in 0..<200 { if await source.reads > 0 { break }; try await Task.sleep(for: .milliseconds(10)) }
+        let started = await source.reads; XCTAssertGreaterThan(started, 0)
+        SMBStreamLoader.cancel(in: asset); load.cancel()
+        for _ in 0..<200 { if await source.cancellations > 0 { break }; try await Task.sleep(for: .milliseconds(10)) }
+        let cancellations = await source.cancellations; XCTAssertGreaterThan(cancellations, 0)
+        _ = await load.value
+    }
+}
+
+private actor CancellableSMBFixture: SMBRangeSource {
+    private(set) var reads = 0
+    private(set) var cancellations = 0
+    func fileSize(at path: String) async throws -> Int64 { 64 * 1024 * 1024 }
+    func readRange(at path: String, offset: UInt64, length: Int) async throws -> Data {
+        reads += 1
+        do { try await Task.sleep(for: .seconds(30)) }
+        catch { cancellations += 1; throw error }
+        return Data(count: length)
+    }
+}

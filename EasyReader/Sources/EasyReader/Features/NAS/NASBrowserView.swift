@@ -8,8 +8,8 @@ enum NASConnection: Sendable {
     case smb(SMBClient)
     var cacheIdentity: String { switch self { case .smb(let client): client.cacheIdentity } }
     var smbClient: SMBClient? { if case .smb(let client) = self { return client }; return nil }
-    func listDirectory(path: String) async throws -> [NASFileEntry] {
-        switch self { case .smb(let client): try await client.listDirectory(path: path) }
+    func listDirectory(path: String, refresh: Bool = false) async throws -> [NASFileEntry] {
+        switch self { case .smb(let client): try await client.listDirectory(path: path, refresh: refresh) }
     }
     func listRoot() async throws -> [NASFileEntry] { try await listDirectory(path: "/") }
     func readFile(at path: String, progress: (@Sendable (Double) -> Void)? = nil) async throws -> Data {
@@ -480,6 +480,7 @@ struct NASBrowserView: View {
 
     private func disconnect() {
         guard let c = connection else { return }
+        if let client = c.smbClient { AudioPlayerManager.shared.stopIfUsing(client: client) }
         Task { await c.disconnect() }
         connection = nil
         navPath.removeAll()
@@ -515,6 +516,8 @@ struct NASDirectoryListView: View {
     let onDisconnect: () -> Void
     @AppStorage private var savedLayout: String
     @State private var allEntries: [NASFileEntry] = []
+    @State private var loadID = UUID()
+    @State private var refreshTask: Task<Void, Never>?
     @State private var visibleEntries: [NASFileEntry] = []
     @State private var isLoading = true
     @State private var error: String?
@@ -541,7 +544,7 @@ struct NASDirectoryListView: View {
             } else if let error {
                 ContentUnavailableView {
                     Label("加载失败", systemImage: "exclamationmark.triangle")
-                } description: { Text(error) } actions: { Button("重试") { loadEntries() } }
+                } description: { Text(error) } actions: { Button("重试") { refreshTask = Task { await loadEntries(refresh: true) } } }
             } else if allEntries.isEmpty {
                 ContentUnavailableView("空文件夹", systemImage: "folder")
             } else {
@@ -556,17 +559,33 @@ struct NASDirectoryListView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarLeading) { Button("断开", action: onDisconnect) }
-            ToolbarItem(placement: .topBarTrailing) { BrowserLayoutMenu(layout: layoutSelection) }
+            ToolbarItem(placement: .topBarTrailing) {
+                HStack {
+                    Button("刷新", systemImage: "arrow.clockwise") {
+                        refreshTask?.cancel()
+                        refreshTask = Task { await loadEntries(refresh: true) }
+                    }
+                    BrowserLayoutMenu(layout: layoutSelection)
+                }
+            }
         }
-        .task { loadEntries() }
+        .task { await loadEntries() }
+        .refreshable { await loadEntries(refresh: true) }
+        .onDisappear { refreshTask?.cancel() }
     }
-    private func loadEntries() {
-        isLoading = true; error = nil
-        Task {
-            do {
-                let items = try await connection.listDirectory(path: path)
-                allEntries = items; visibleEntries = Array(items.prefix(200)); isLoading = false
-            } catch { self.error = error.localizedDescription; isLoading = false }
+    private func loadEntries(refresh: Bool = false) async {
+        let id = UUID(); loadID = id
+        if allEntries.isEmpty { isLoading = true }
+        error = nil
+        do {
+            let items = try await connection.listDirectory(path: path, refresh: refresh)
+            guard !Task.isCancelled, loadID == id else { return }
+            let sameSnapshot = allEntries.count == items.count && allEntries.first?.id == items.first?.id
+            let count = sameSnapshot ? max(visibleEntries.count, min(200, items.count)) : min(200, items.count)
+            allEntries = items; visibleEntries = Array(items.prefix(count)); isLoading = false
+        } catch {
+            guard !Task.isCancelled, loadID == id else { return }
+            self.error = error.localizedDescription; isLoading = false
         }
     }
     private func loadMoreEntries() {

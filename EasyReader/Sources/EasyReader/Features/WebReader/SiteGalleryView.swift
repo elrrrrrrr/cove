@@ -891,7 +891,7 @@ struct VideoCard: View {
     // MARK: - Extra tags
 
     private var extraTagsView: some View {
-        ItemTagLinks(text: item.extra, font: extraFont) { onExtraTap?($0) }
+        ItemTagLinks(tags: item.extraTags, font: extraFont) { onExtraTap?($0) }
     }
 
     // MARK: - Thumbnail
@@ -927,139 +927,6 @@ struct VideoCard: View {
                     .background(.black.opacity(0.45), in: Circle())
                     .padding(6)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-            }
-        }
-    }
-}
-
-// MARK: - Skeleton card
-
-struct SkeletonCard: View {
-    var isLarge: Bool = false
-    @State private var phase: CGFloat = -1
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(shimmerGradient)
-                .aspectRatio(16/9, contentMode: .fit)
-            VStack(alignment: .leading, spacing: 5) {
-                Capsule().fill(shimmerGradient).frame(height: isLarge ? 14 : 12)
-                Capsule().fill(shimmerGradient).frame(width: isLarge ? 120 : 80, height: isLarge ? 12 : 10)
-                if isLarge {
-                    Capsule().fill(shimmerGradient).frame(width: 60, height: 10)
-                }
-            }
-            .padding(.horizontal, 4).padding(.vertical, 6)
-        }
-        .clipped()
-        .onAppear { animateShimmer() }
-    }
-
-    private var shimmerGradient: LinearGradient {
-        LinearGradient(
-            stops: [
-                .init(color: Color(.systemFill), location: phase),
-                .init(color: Color(.tertiarySystemFill), location: phase + 0.4),
-                .init(color: Color(.systemFill), location: phase + 0.8),
-            ],
-            startPoint: .leading, endPoint: .trailing
-        )
-    }
-
-    private func animateShimmer() {
-        withAnimation(.linear(duration: 1.2).repeatForever(autoreverses: false)) {
-            phase = 1.2
-        }
-    }
-}
-
-// MARK: - Portrait skeleton grid (2:3 cards, uniform LazyVGrid)
-
-struct PortraitSkeletonGrid: View {
-    let columns: Int
-    @State private var phase: CGFloat = -1
-
-    private var shimmerGradient: LinearGradient {
-        LinearGradient(
-            stops: [
-                .init(color: Color(.systemFill), location: phase),
-                .init(color: Color(.tertiarySystemFill), location: phase + 0.4),
-                .init(color: Color(.systemFill), location: phase + 0.8),
-            ],
-            startPoint: .leading, endPoint: .trailing
-        )
-    }
-
-    var body: some View {
-        let cols = Array(repeating: GridItem(.flexible(), spacing: 10), count: columns)
-        ScrollView {
-            LazyVGrid(columns: cols, spacing: 12) {
-                ForEach(0..<12, id: \.self) { _ in
-                    VStack(alignment: .leading, spacing: 0) {
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .fill(shimmerGradient)
-                            .aspectRatio(2/3, contentMode: .fit)
-                        VStack(alignment: .leading, spacing: 4) {
-                            Capsule().fill(shimmerGradient).frame(height: 12)
-                            Capsule().fill(shimmerGradient).frame(width: 60, height: 10)
-                        }
-                        .padding(.horizontal, 2).padding(.vertical, 5)
-                    }
-                }
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-        }
-        .allowsHitTesting(false)
-        .onAppear {
-            withAnimation(.linear(duration: 1.2).repeatForever(autoreverses: false)) {
-                phase = 1.2
-            }
-        }
-    }
-}
-
-// MARK: - List skeleton (horizontal card placeholders)
-
-struct ListSkeletonView: View {
-    @State private var phase: CGFloat = -1
-
-    private var shimmerGradient: LinearGradient {
-        LinearGradient(
-            stops: [
-                .init(color: Color(.systemFill), location: phase),
-                .init(color: Color(.tertiarySystemFill), location: phase + 0.4),
-                .init(color: Color(.systemFill), location: phase + 0.8),
-            ],
-            startPoint: .leading, endPoint: .trailing
-        )
-    }
-
-    var body: some View {
-        ScrollView {
-            LazyVStack(spacing: 10) {
-                ForEach(0..<8, id: \.self) { _ in
-                    HStack(spacing: 12) {
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .fill(shimmerGradient)
-                            .frame(width: 48, height: 48)
-                        VStack(alignment: .leading, spacing: 6) {
-                            Capsule().fill(shimmerGradient).frame(height: 14)
-                            Capsule().fill(shimmerGradient).frame(width: 100, height: 11)
-                        }
-                        Spacer()
-                    }
-                    .padding(14)
-                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                }
-            }
-            .padding(12)
-        }
-        .allowsHitTesting(false)
-        .onAppear {
-            withAnimation(.linear(duration: 1.2).repeatForever(autoreverses: false)) {
-                phase = 1.2
             }
         }
     }

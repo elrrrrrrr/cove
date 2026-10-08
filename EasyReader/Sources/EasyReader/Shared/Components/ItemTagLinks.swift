@@ -5,11 +5,8 @@ struct ItemTagLinks: View {
     let font: Font
     let onTap: (String) -> Void
 
-    init(text: String, font: Font, onTap: @escaping (String) -> Void) {
-        var seen = Set<String>()
-        tags = text.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty && seen.insert($0).inserted }
-        self.font = font; self.onTap = onTap
+    init(tags: [String], font: Font, onTap: @escaping (String) -> Void) {
+        self.tags = tags; self.font = font; self.onTap = onTap
     }
     var body: some View {
         HStack(spacing: 4) {
@@ -20,5 +17,13 @@ struct ItemTagLinks: View {
                 .buttonStyle(.plain)
             }
         }
+    }
+}
+
+enum ItemTags {
+    static func parse(_ text: String) -> [String] {
+        var seen = Set<String>()
+        return text.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty && seen.insert($0).inserted }
     }
 }

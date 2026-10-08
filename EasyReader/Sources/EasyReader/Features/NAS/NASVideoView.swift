@@ -206,6 +206,7 @@ private struct VideoPage: View {
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
         try? AVAudioSession.sharedInstance().setActive(true)
         player?.pause()
+        SMBStreamLoader.cancel(in: player?.currentItem?.asset)
         player?.replaceCurrentItem(with: nil)
         let p = AVPlayer(playerItem: item)
         player = p
@@ -216,6 +217,7 @@ private struct VideoPage: View {
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
         try? AVAudioSession.sharedInstance().setActive(true)
         player?.pause()
+        SMBStreamLoader.cancel(in: player?.currentItem?.asset)
         player?.replaceCurrentItem(with: nil)
         let p = AVPlayer(url: url)
         player = p
@@ -255,6 +257,7 @@ private struct VideoPage: View {
         loadTask = nil
         isLoadingFile = false
         player?.pause()
+        SMBStreamLoader.cancel(in: player?.currentItem?.asset)
         player?.replaceCurrentItem(with: nil)
         player = nil
         if let temporaryURL { try? FileManager.default.removeItem(at: temporaryURL.deletingLastPathComponent()) }

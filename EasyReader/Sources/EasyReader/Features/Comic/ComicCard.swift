@@ -44,7 +44,7 @@ struct ComicCard: View {
                 }
                 if !item.extra.isEmpty {
                     if let onExtraTap {
-                        ItemTagLinks(text: item.extra, font: .system(size: 11), onTap: onExtraTap)
+                        ItemTagLinks(tags: item.extraTags, font: .system(size: 11), onTap: onExtraTap)
                     } else {
                         Text(item.extra)
                             .font(.system(size: 11))

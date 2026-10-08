@@ -20,28 +20,7 @@ final class ReadingHistory {
     }
 
     /// Human-readable title: cleans up raw URLs / file paths stored as titles.
-    var displayTitle: String {
-        let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard t.contains("://") || t.hasPrefix("/") else { return t }
-
-        // NAS / local file path → filename without extension
-        if t.hasPrefix("/") {
-            return (t as NSString).lastPathComponent.components(separatedBy: ".").dropLast().joined(separator: ".")
-                .ifEmpty((t as NSString).lastPathComponent)
-        }
-
-        // Web URL → readable name from path or host
-        if let url = URL(string: t) {
-            let last = url.pathComponents.last(where: { $0 != "/" })
-            if let last, !last.isEmpty {
-                let decoded = last.removingPercentEncoding ?? last
-                let name = (decoded as NSString).deletingPathExtension
-                if name.count > 1 { return name }
-            }
-            return url.host() ?? t
-        }
-        return t
-    }
+    var displayTitle: String { ReadingProjection.displayTitle(title) }
 
     init(
         title: String,
@@ -60,10 +39,6 @@ final class ReadingHistory {
         self.lastReadAt = Date()
         self.thumbnailURLString = thumbnailURLString
     }
-}
-
-private extension String {
-    func ifEmpty(_ fallback: String) -> String { isEmpty ? fallback : self }
 }
 
 enum FileType: String, Codable, Sendable {

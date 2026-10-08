@@ -19,6 +19,7 @@ final class AudioPlayerManager {
     private(set) var currentIndex: Int = 0
     private var smbClient: SMBClient?
 
+    private var durationTask: Task<Void, Never>?
     private var timeObserver: Any?
 
     private init() {}
@@ -51,11 +52,11 @@ final class AudioPlayerManager {
         self.currentIndex = currentIndex
         self.smbClient = client
 
-        // Duration
-        Task {
-            if let d = try? await p.currentItem?.asset.load(.duration) {
-                let secs = d.seconds
-                if secs.isFinite { await MainActor.run { duration = secs } }
+        // Ignore metadata from a previous track after skip/stop.
+        durationTask = Task { [weak self] in
+            if let d = try? await p.currentItem?.asset.load(.duration), !Task.isCancelled, let self, player === p {
+                let seconds = d.seconds
+                if seconds.isFinite { duration = seconds }
             }
         }
 
@@ -113,7 +114,6 @@ final class AudioPlayerManager {
         guard newIndex >= 0, newIndex < siblings.count else { return }
 
         let entry = siblings[newIndex]
-        currentIndex = newIndex
         let name = (entry.name as NSString).deletingPathExtension
 
         // SMB: stream
@@ -125,10 +125,16 @@ final class AudioPlayerManager {
 
     // MARK: - Cleanup
 
+    func stopIfUsing(client: SMBClient) {
+        if smbClient?.cacheIdentity == client.cacheIdentity { stop() }
+    }
+
     private func cleanup() {
+        durationTask?.cancel(); durationTask = nil
         if let obs = timeObserver { player?.removeTimeObserver(obs) }
         timeObserver = nil
         player?.pause()
+        SMBStreamLoader.cancel(in: player?.currentItem?.asset)
         player = nil
         isPlaying = false
         currentTime = 0

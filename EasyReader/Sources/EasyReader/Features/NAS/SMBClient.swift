@@ -45,11 +45,13 @@ struct NASConfigSnapshot: Sendable {
 }
 
 /// Wrapper around AMSMB2 providing async SMB2/3 file operations.
-actor SMBClient: SMBRangeSource {
+actor SMBClient: SMBRangeSource, OfflineDownloadSource {
 
     typealias FileEntry = NASFileEntry
 
     private var client: SMB2Manager?
+    private let directories = NASDirectoryCache()
+    private var connectionGeneration = UUID()
     private let config: NASConfigSnapshot
     nonisolated let cacheIdentity: String
 
@@ -87,6 +89,11 @@ actor SMBClient: SMBRangeSource {
     // MARK: - Connection
 
     func connect(password: String) async throws {
+        let previous = client; client = nil
+        connectionGeneration = UUID()
+        let generation = connectionGeneration
+        await directories.clear()
+        try? await previous?.disconnectShare()
         guard let url = URL(string: "smb://\(config.host)") else {
             throw SMBError.invalidURL
         }
@@ -99,20 +106,33 @@ actor SMBClient: SMBRangeSource {
             throw SMBError.invalidURL
         }
         try await mgr.connectShare(name: config.shareName)
+        guard generation == connectionGeneration else { try? await mgr.disconnectShare(); throw CancellationError() }
         self.client = mgr
     }
 
     func disconnect() async {
-        try? await client?.disconnectShare()
-        client = nil
+        connectionGeneration = UUID()
+        let previous = client; client = nil
+        await directories.clear()
+        try? await previous?.disconnectShare()
     }
 
     // MARK: - Directory listing
 
-    func listDirectory(path: String = "/") async throws -> [FileEntry] {
-        guard let client else { throw SMBError.notConnected }
+    func listDirectory(path: String = "/", refresh: Bool = false) async throws -> [FileEntry] {
+        guard client != nil else { throw SMBError.notConnected }
+        let generation = connectionGeneration
+        let items = try await directories.load(path: path, refresh: refresh) { try await self.fetchDirectory(path: path, generation: generation) }
+        guard generation == connectionGeneration else { throw CancellationError() }
+        return items
+    }
+
+    private func fetchDirectory(path: String, generation: UUID) async throws -> [FileEntry] {
+        guard generation == connectionGeneration, let client else { throw SMBError.notConnected }
 
         let contents = try await client.contentsOfDirectory(atPath: path)
+        try Task.checkCancellation()
+        guard generation == connectionGeneration else { throw CancellationError() }
         return contents.compactMap { item -> FileEntry? in
             guard let name = item[.nameKey] as? String,
                   !name.hasPrefix(".")  else { return nil }
@@ -297,23 +317,6 @@ final class SMBTransferControl: @unchecked Sendable {
 }
 
 // MARK: - FileManager helpers
-
-extension FileManager {
-    var offlineNASDirectory: URL {
-        let docs = urls(for: .documentDirectory, in: .userDomainMask)[0]
-        let dir = docs.appendingPathComponent("Offline/nas", isDirectory: true)
-        try? createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir
-    }
-
-    var offlineWebDirectory: URL {
-        let docs = urls(for: .documentDirectory, in: .userDomainMask)[0]
-        let dir = docs.appendingPathComponent("Offline/web", isDirectory: true)
-        try? createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir
-    }
-}
-
 
 // MARK: - Keychain helper
 

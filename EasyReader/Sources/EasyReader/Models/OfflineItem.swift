@@ -7,7 +7,7 @@ final class OfflineItem {
     var id: UUID
     var title: String
     var sourceURL: String?        // original web URL (nil for NAS files)
-    var localPath: String         // path under Documents/Offline/
+    var localPath: String         // relative to Application Support/Cove/data
     var fileType: FileType
     var savedAt: Date
     var fileSizeBytes: Int64

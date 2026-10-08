@@ -285,13 +285,10 @@ struct SettingsView: View {
         await ImagePipeline.shared.clearAll()
         await NASThumbnailCache.shared.clear()
         await GalleryCache.clearAll()
-        DownloadManager.shared.downloads.removeAll()
-        DownloadManager.shared.pendingPersist.removeAll()
+        await DownloadManager.shared.clear()
 
-        // 3. Delete offline files
-        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        let offlineDir = docs.appendingPathComponent("Offline", isDirectory: true)
-        try? FileManager.default.removeItem(at: offlineDir)
+        // 3. Delete owned offline files
+        try? OfflineFiles.shared.clear()
 
         // 4. Reset UserDefaults settings
         for key in UserDefaults.standard.dictionaryRepresentation().keys where key.hasPrefix(BrowserLayout.preferencePrefix) {

@@ -36,7 +36,7 @@ Cove 是可配置的 iOS 浏览与阅读应用，支持网页、SMB、本地文�
 
 真实规则放 sites/，可选收藏预置放 data/favorites.json；两个目录和 config/ 被 Git 忽略。存在时本地打包自动加载，不存在也能构建。预置仅在首次初始化导入一次。
 
-应用数据位于 Application Support/Cove/config 和 data。密码放 Keychain。修改架构和性能时保留现有界面与用户数据。
+应用数据位于 Application Support/Cove/config 和 data。离线文件位于 data/Offline，记录使用相对路径；旧文件迁移保留标识与内容。下载失败可在首页重试或取消。NAS 目录缓存 60 秒，可用右上角刷新主动更新。密码放 Keychain。修改架构和性能时保留现有界面与用户数据。
 
 ## 验证
 

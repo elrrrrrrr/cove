@@ -234,24 +234,27 @@ struct BentoGrid<Item: Identifiable, Content: View, Footer: View>: View {
 
 struct BentoSkeletonGrid: View {
     let columns: Int
-    private var itemCount: Int { columns == 2 ? 5 : 12 }
+    private let slots: [BentoSlot]
+    init(columns: Int) {
+        self.columns = columns
+        slots = columns == 2 ? BentoGrouper.group2Col(count: 5) : BentoGrouper.group3Col(count: 12)
+    }
 
     @State private var metrics = BentoMetrics.zero
 
     var body: some View {
-        ScrollView {
-            LazyVStack(spacing: 10) {
-                if metrics != .zero {
-                    let slots = columns == 2
-                        ? BentoGrouper.group2Col(count: itemCount)
-                        : BentoGrouper.group3Col(count: itemCount)
-                    ForEach(slots) { slot in
-                        skeletonSlot(slot)
+        SkeletonShimmer { gradient in
+            ScrollView {
+                LazyVStack(spacing: 10) {
+                    if metrics != .zero {
+                        ForEach(slots) { slot in
+                            skeletonSlot(slot, gradient: gradient)
+                        }
                     }
                 }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
         }
         .allowsHitTesting(false)
         .onGeometryChange(for: CGFloat.self) { proxy in
@@ -263,34 +266,34 @@ struct BentoSkeletonGrid: View {
     }
 
     @ViewBuilder
-    private func skeletonSlot(_ slot: BentoSlot) -> some View {
+    private func skeletonSlot(_ slot: BentoSlot, gradient: LinearGradient) -> some View {
         let m = metrics
         switch slot.kind {
         case .fullWidth:
-            SkeletonCard(isLarge: true)
+            SkeletonCard(isLarge: true, gradient: gradient)
                 .frame(width: m.largeWidth, height: m.largeHeight)
         case .smallRow(let indices):
             HStack(spacing: m.spacing) {
                 ForEach(indices, id: \.self) { _ in
-                    SkeletonCard().frame(width: m.smallWidth, height: m.smallHeight)
+                    SkeletonCard(gradient: gradient).frame(width: m.smallWidth, height: m.smallHeight)
                 }
                 if indices.count < columns { Spacer(minLength: 0) }
             }
         case .largeLeftSmallRight:
             HStack(alignment: .top, spacing: m.spacing) {
-                SkeletonCard(isLarge: true).frame(width: m.largeWidth, height: m.largeHeight)
+                SkeletonCard(isLarge: true, gradient: gradient).frame(width: m.largeWidth, height: m.largeHeight)
                 VStack(spacing: m.spacing) {
-                    SkeletonCard().frame(width: m.smallWidth, height: m.smallHeight)
-                    SkeletonCard().frame(width: m.smallWidth, height: m.smallHeight)
+                    SkeletonCard(gradient: gradient).frame(width: m.smallWidth, height: m.smallHeight)
+                    SkeletonCard(gradient: gradient).frame(width: m.smallWidth, height: m.smallHeight)
                 }
             }
         case .smallLeftLargeRight:
             HStack(alignment: .top, spacing: m.spacing) {
                 VStack(spacing: m.spacing) {
-                    SkeletonCard().frame(width: m.smallWidth, height: m.smallHeight)
-                    SkeletonCard().frame(width: m.smallWidth, height: m.smallHeight)
+                    SkeletonCard(gradient: gradient).frame(width: m.smallWidth, height: m.smallHeight)
+                    SkeletonCard(gradient: gradient).frame(width: m.smallWidth, height: m.smallHeight)
                 }
-                SkeletonCard(isLarge: true).frame(width: m.largeWidth, height: m.largeHeight)
+                SkeletonCard(isLarge: true, gradient: gradient).frame(width: m.largeWidth, height: m.largeHeight)
             }
         }
     }
