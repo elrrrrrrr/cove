@@ -245,10 +245,8 @@ struct SiteRow: View {
         HStack(spacing: 12) {
             // Favicon or category icon
             Group {
-                if let data = site.faviconData, let img = UIImage(data: data) {
-                    Image(uiImage: img)
-                        .resizable()
-                        .scaledToFill()
+                if let data = site.faviconData {
+                    DataThumbnail(data: data, placeholder: site.category.icon)
                 } else {
                     Image(systemName: site.category.icon)
                         .foregroundStyle(Color.accentColor)

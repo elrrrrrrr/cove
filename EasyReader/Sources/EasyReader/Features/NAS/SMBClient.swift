@@ -1,6 +1,7 @@
 import Foundation
 import Security
 import AMSMB2
+import CryptoKit
 
 // MARK: - Shared NAS file entry
 
@@ -28,12 +29,14 @@ struct NASFileEntry: Identifiable, Sendable {
 
 // Sendable snapshot — avoids passing SwiftData @Model across actor boundaries
 struct NASConfigSnapshot: Sendable {
+    let id: UUID
     let host      : String
     let port      : Int
     let username  : String
     let shareName : String
 
     init(config: NASConfig) {
+        id = config.id
         host      = config.host
         port      = config.port
         username  = config.username
@@ -48,13 +51,23 @@ actor SMBClient: SMBRangeSource {
 
     private var client: SMB2Manager?
     private let config: NASConfigSnapshot
+    nonisolated let cacheIdentity: String
 
     init(config: NASConfig) {
-        self.config = NASConfigSnapshot(config: config)
+        let snapshot = NASConfigSnapshot(config: config)
+        self.config = snapshot
+        cacheIdentity = Self.identity(snapshot)
     }
 
     init(snapshot: NASConfigSnapshot) {
         self.config = snapshot
+        cacheIdentity = Self.identity(snapshot)
+    }
+
+    private static func identity(_ value: NASConfigSnapshot) -> String {
+        let fields = [value.id.uuidString, value.host, String(value.port), value.username, value.shareName]
+        return SHA256.hash(data: Data(fields.map { "\($0.utf8.count):\($0)" }.joined().utf8))
+            .map { String(format: "%02x", $0) }.joined()
     }
 
     // MARK: - Share Discovery

@@ -434,6 +434,10 @@ private struct ComicPageImage: View {
     let url: URL
     let index: Int
 
+    @Environment(\.displayScale) private var scale
+    @State private var pixels = 1024
+    private let source: ThumbnailRequest
+    private var request: ThumbnailRequest { source.resized(.page(width: pixels)) }
     @State private var image: UIImage?
     @State private var failed = false
     @State private var isVisible = true
@@ -441,7 +445,8 @@ private struct ComicPageImage: View {
     init(url: URL, index: Int) {
         self.url = url
         self.index = index
-        _image = State(initialValue: ImageMemoryCache.shared.image(for: url))
+        source = ThumbnailRequest(url: url, sizing: .page(width: 1024))
+        _image = State(initialValue: ImageMemoryCache.shared.image(for: source))
     }
 
     var body: some View {
@@ -468,11 +473,12 @@ private struct ComicPageImage: View {
                     .frame(height: 400)
             }
         }
-        .task(id: url) {
-            if image != nil { return }
+        .onGeometryChange(for: Int.self) { [scale] proxy in ImageSizing.pixels(points: proxy.size.width, scale: scale) } action: { pixels = $0 }
+        .task(id: request) {
             failed = false
-            if let data = await ThumbnailCache.shared.data(for: url),
-               let img = UIImage(data: data) {
+            let loaded = await ImagePipeline.shared.image(for: request)
+            guard !Task.isCancelled else { return }
+            if let img = loaded {
                 withAnimation(.easeIn(duration: 0.15)) {
                     image = img
                 }
@@ -484,7 +490,7 @@ private struct ComicPageImage: View {
             isVisible = true
             // Re-load from L0 cache if image was released while off-screen
             if image == nil, !failed {
-                image = ImageMemoryCache.shared.image(for: url)
+                image = ImageMemoryCache.shared.image(for: request)
             }
         }
         .onDisappear {

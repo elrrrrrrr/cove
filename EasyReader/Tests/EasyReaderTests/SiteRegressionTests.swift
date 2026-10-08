@@ -194,7 +194,7 @@ import UIKit
             let server = try ImageFixtureServer { _ in payload }
             defer { server.listener.cancel() }
             let request = ThumbnailRequest(url: server.url, referer: fixture.sample.pageURL, definitionID: fixture.sample.definitionID)
-            let result = await ThumbnailCache.shared.data(for: request)
+            let result = await ImagePipeline.shared.data(for: request)
             let image = try XCTUnwrap(result.flatMap { UIImage(data: $0)?.cgImage }, "封面解码失败：\(fixture.sample.name)")
             try assertResult(["width": image.width, "height": image.height], fixture: fixture)
         }
@@ -210,7 +210,7 @@ import UIKit
             let payload = try bytes(fixture.sample.input, fixture: fixture)
             let server = try ImageFixtureServer { _ in payload }
             defer { server.listener.cancel() }
-            let result = await ThumbnailCache.shared.data(for: server.url, referer: fixture.sample.pageURL, definitionID: fixture.sample.definitionID)
+            let result = await ImagePipeline.shared.data(for: server.url, referer: fixture.sample.pageURL, definitionID: fixture.sample.definitionID)
             XCTAssertNil(result, "加密图片缺失站点解码规则时不应通过")
         }
     }

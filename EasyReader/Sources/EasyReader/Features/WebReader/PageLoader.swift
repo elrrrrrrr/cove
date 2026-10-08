@@ -21,7 +21,7 @@ final class PageLoader: NSObject {
         }
     }
 
-    var state         : State = .idle
+    var state         : State = .idle { didSet { if !state.isActive { finishRefreshes() } } }
     var isLoadingMore = false   // fetching next page
     var currentPage   : Int = 1
     var hasNextPage   : Bool = false  // AJAX mode: more pages available
@@ -96,6 +96,11 @@ final class PageLoader: NSObject {
     private var _webView: WKWebView?
     private var parser   : SiteParser?
     private var allItems : [ParsedItem] = []
+    private var jsCalls: [UUID: PageJSCompletion] = [:]
+    private var ajaxTask: Task<Void, Never>?
+    private var loadTask: Task<Void, Never>?
+    private var loadID = UUID()
+    private var refreshWaiters: [UUID: CheckedContinuation<Void, Never>] = [:]
     private var loadTimeoutTask: Task<Void, Never>?
     private var isExtracting = false
     private var _backgroundWindow: UIWindow?
@@ -127,6 +132,7 @@ final class PageLoader: NSObject {
         let truncated = msg.count > 200 ? String(msg.prefix(200)) + "…" : msg
         let line = "[\(ts)] \(truncated)"
         parseLog.append(line)
+        if parseLog.count > 200 { parseLog.removeFirst(parseLog.count - 200) }
         Self.logger.info("\(msg)")
     }
 
@@ -140,6 +146,13 @@ final class PageLoader: NSObject {
     }
 
     func load(url: URL, parser: SiteParser, forceRefresh: Bool = false) {
+        loadTask?.cancel()
+        ajaxTask?.cancel()
+        for call in jsCalls.values { call.finish(.failure(CancellationError())) }
+        jsCalls.removeAll()
+        finishRefreshes()
+        loadID = UUID()
+        _webView?.stopLoading()
         if forceRefresh || self.parser?.portal != parser.portal { resolvedHost = nil }
         self.parser     = parser
         self.currentURL = url
@@ -177,17 +190,17 @@ final class PageLoader: NSObject {
                 log("load: portal host cached → \(resolved.absoluteString)")
                 currentURL = resolved
                 if parser.needsJS { fallbackToWebView(url: resolved) }
-                else { Task { await fetchAndLoad(url: resolved) } }
+                else { loadTask = Task { await fetchAndLoad(url: resolved) } }
             } else {
                 log("load: portal resolution triggered (urlHost=\(url.host() ?? "nil"))")
-                Task { await resolvePortalAndLoad(url: url, parser: parser) }
+                loadTask = Task { await resolvePortalAndLoad(url: url, parser: parser) }
             }
         } else if parser.needsJS {
             log("load: using WebView (needsJS=true)")
             fallbackToWebView(url: url)
         } else {
             log("load: using fast-load (URLSession)")
-            Task { await fetchAndLoad(url: url) }
+            loadTask = Task { await fetchAndLoad(url: url) }
         }
     }
 
@@ -195,61 +208,67 @@ final class PageLoader: NSObject {
     private var usedFastLoad = false
 
     private func fetchAndLoad(url: URL) async {
+        let generation = loadID
+        let headers = parser?.requestHeaders ?? [:]
+        let transform = parser?.transformScript
         log("fetchAndLoad: fetching \(url.absoluteString)")
-        let warmup = Task { @MainActor in _ = self.webView }
-
         do {
             var request = URLRequest(url: url)
             request.setValue(Self.mobileUserAgent, forHTTPHeaderField: "User-Agent")
-            for (name, value) in parser?.requestHeaders ?? [:] { request.setValue(value, forHTTPHeaderField: name) }
+            for (name, value) in headers { request.setValue(value, forHTTPHeaderField: name) }
             request.timeoutInterval = 10
             let (data, response) = try await URLSession.shared.data(for: request)
-            guard let http = response as? HTTPURLResponse,
-                  (200...299).contains(http.statusCode) else {
-                let code = (response as? HTTPURLResponse)?.statusCode ?? -1
-                log("fetchAndLoad: HTTP \(code) → fallback to WebView")
-                fallbackToWebView(url: url)
-                return
+            guard generation == loadID, !Task.isCancelled else { return }
+            guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+                log("fetchAndLoad: HTTP \((response as? HTTPURLResponse)?.statusCode ?? -1) → fallback to WebView")
+                fallbackToWebView(url: url); return
             }
-            guard let html = String(data: data, encoding: .utf8)
-                          ?? String(data: data, encoding: .isoLatin1) else {
-                log("fetchAndLoad: encoding failed → fallback to WebView")
-                fallbackToWebView(url: url)
-                return
+            // Decode and scan HTML on a worker; only WebKit calls stay on MainActor.
+            let preparation = Task.detached(priority: .userInitiated) { () -> String? in
+                guard !Task.isCancelled, let html = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1) else { return nil }
+                return transform == nil ? Self.stripResourceTags(html) : html
             }
-            log("fetchAndLoad: got \(html.count) chars, stripping scripts")
-            await warmup.value
-            let transformed: String
-            if let script = parser?.transformScript {
-                transformed = try await webView.callAsyncJavaScript(script, arguments: ["html": html], in: nil, contentWorld: .page) as? String ?? html
-            } else { transformed = html }
-            let stripped = Self.stripResourceTags(transformed)
-            log("fetchAndLoad: stripped to \(stripped.count) chars, loading HTML")
+            guard var html = await withTaskCancellationHandler(operation: { await preparation.value }, onCancel: { preparation.cancel() }) else {
+                guard generation == loadID, !Task.isCancelled else { return }
+                fallbackToWebView(url: url); return
+            }
+            guard generation == loadID, !Task.isCancelled else { return }
+            if let transform {
+                let transformed = try await webView.callAsyncJavaScript(transform, arguments: ["html": html], in: nil, contentWorld: .page) as? String ?? html
+                guard generation == loadID, !Task.isCancelled else { return }
+                let stripping = Task.detached(priority: .userInitiated) { Self.stripResourceTags(transformed) }
+                html = await withTaskCancellationHandler { await stripping.value } onCancel: { stripping.cancel() }
+            }
+            guard generation == loadID, !Task.isCancelled else { return }
+            log("fetchAndLoad: prepared HTML, loading")
             usedFastLoad = true
-            await warmup.value
-            webView.loadHTMLString(stripped, baseURL: url)
+            webView.loadHTMLString(html, baseURL: url)
             startLoadTimeout()
         } catch {
+            guard generation == loadID, !Task.isCancelled else { return }
             log("fetchAndLoad: error \(error.localizedDescription) → fallback to WebView")
             fallbackToWebView(url: url)
         }
     }
 
-    static func stripResourceTags(_ html: String) -> String {
+    nonisolated static func stripResourceTags(_ html: String) -> String {
         html.replacingOccurrences(of: #"<script\b[^>]*>[\s\S]*?</script>"#, with: "", options: .regularExpression)
             .replacingOccurrences(of: #"<script\b[^/]*/>"#, with: "", options: .regularExpression)
             .replacingOccurrences(of: #"<link\b[^>]*>"#, with: "", options: .regularExpression)
     }
 
     private func resolvePortalAndLoad(url: URL, parser: SiteParser) async {
+        let generation = loadID
         log("resolvePortal: portal=\(parser.portalURL!), target=\(url.absoluteString)")
         let loadURL: URL
         if let resolved = await SitePortalResolver.fetch(config: parser.portal ?? SitePortal(url: parser.portalURL!), target: url) {
+            guard generation == loadID, !Task.isCancelled else { return }
             log("resolvePortal: resolved → \(resolved.absoluteString)")
             resolvedHost = resolved.host()
             currentURL = resolved
             loadURL = resolved
         } else {
+            guard generation == loadID, !Task.isCancelled else { return }
             log("resolvePortal: FAILED, using original URL")
             loadURL = url
         }
@@ -290,10 +309,19 @@ final class PageLoader: NSObject {
 
     /// Async reload suitable for SwiftUI .refreshable {}
     func reloadAsync() async {
+        guard !Task.isCancelled else { return }
         reload()
-        while (state.isActive) {
-            try? await Task.sleep(for: .milliseconds(120))
-        }
+        let id = UUID()
+        await withTaskCancellationHandler {
+            guard state.isActive, !Task.isCancelled else { return }
+            await withCheckedContinuation { refreshWaiters[id] = $0 }
+        } onCancel: { Task { @MainActor in self.refreshWaiters.removeValue(forKey: id)?.resume() } }
+    }
+
+    private func finishRefreshes() {
+        let pending = refreshWaiters.values
+        refreshWaiters.removeAll()
+        for waiter in pending { waiter.resume() }
     }
 
     // MARK: - Pagination
@@ -308,7 +336,8 @@ final class PageLoader: NSObject {
         case .none:
             isLoadingMore = false
         case .ajax(let js, let thumbnailJS):
-            Task { await fetchAjaxPage(nextPage, js: js, thumbnailJS: thumbnailJS) }
+            ajaxTask?.cancel()
+            ajaxTask = Task { await fetchAjaxPage(nextPage, js: js, thumbnailJS: thumbnailJS) }
         case .webNavigation:
             if let next = nextPageURL {
                 webView.load(URLRequest(url: next))
@@ -326,7 +355,8 @@ final class PageLoader: NSObject {
         isLoadingMore = true
         switch p.paginationMode {
         case .ajax(let js, let thumbnailJS):
-            Task { await fetchAjaxPage(prevPage, js: js, thumbnailJS: thumbnailJS) }
+            ajaxTask?.cancel()
+            ajaxTask = Task { await fetchAjaxPage(prevPage, js: js, thumbnailJS: thumbnailJS) }
         default:
             goToPage(prevPage, parser: p)
         }
@@ -349,7 +379,8 @@ final class PageLoader: NSObject {
             hasNextPage   = false
             isLoadingMore = true
             state         = .loading
-            Task { await fetchAjaxPage(page, js: js, thumbnailJS: thumbnailJS) }
+            ajaxTask?.cancel()
+            ajaxTask = Task { await fetchAjaxPage(page, js: js, thumbnailJS: thumbnailJS) }
         case .webNavigation:
             // Web-navigation sites: reload from scratch (URL reconstruction is site-specific)
             reload()
@@ -359,9 +390,11 @@ final class PageLoader: NSObject {
     // MARK: - AJAX page fetch
 
     private func fetchAjaxPage(_ page: Int, js: String, thumbnailJS: String? = nil) async {
+        let generation = loadID
         log("fetchAjaxPage: page=\(page), webViewURL=\(webView.url?.absoluteString ?? "nil")")
         do {
             let raw = try await runPageJS(js, page: page)
+            guard generation == loadID, !Task.isCancelled else { return }
 
             guard let data = raw.data(using: .utf8) else {
                 isLoadingMore = false; return
@@ -399,6 +432,7 @@ final class PageLoader: NSObject {
                 Task { await self.fetchThumbnails(thumbJS, for: newItems) }
             }
         } catch {
+            guard generation == loadID, !Task.isCancelled else { return }
             log("fetchAjaxPage: ERROR \(error.localizedDescription)")
             // Show error if we're in a loading state (covers goToPage + initial loads)
             if case .loading = state {
@@ -411,9 +445,11 @@ final class PageLoader: NSObject {
 
     /// Phase 2: run thumbnailJS, parse the url→dataURI map, update items in-place.
     private func fetchThumbnails(_ js: String, for items: [ParsedItem]) async {
+        let generation = loadID
         log("fetchThumbnails: starting for \(items.count) items")
         do {
             let raw = try await runPageJS(js, page: 0)
+            guard generation == loadID, !Task.isCancelled else { return }
             guard let data = raw.data(using: .utf8),
                   let map = try? JSONSerialization.jsonObject(with: data) as? [String: String],
                   !map.isEmpty else {
@@ -443,44 +479,48 @@ final class PageLoader: NSObject {
                 state = .done(allItems)
             }
         } catch {
+            guard generation == loadID, !Task.isCancelled else { return }
             log("fetchThumbnails: ERROR \(error.localizedDescription)")
         }
     }
 
     /// Shared helper: run async JS in the .page content world with a 15 s timeout.
     private func runPageJS(_ js: String, page: Int) async throws -> String {
-        nonisolated(unsafe) var resumed = false
-        return try await withCheckedThrowingContinuation { cont in
-            Task { @MainActor in
-                try? await Task.sleep(for: .seconds(15))
-                guard !resumed else { return }
-                resumed = true
-                cont.resume(throwing: URLError(.timedOut))
-            }
-            webView.callAsyncJavaScript(
-                js,
-                arguments: ["page": page],
-                in: nil,
-                in: .page
-            ) { result in
-                guard !resumed else { return }
-                resumed = true
-                switch result {
-                case .success(let val):
-                if let text = val as? String { cont.resume(returning: text) }
-                else if let bytes = try? JSONSerialization.data(withJSONObject: val, options: [.fragmentsAllowed]),
-                        let text = String(data: bytes, encoding: .utf8) { cont.resume(returning: text) }
-                else { cont.resume(throwing: SiteDefinitionError.invalid("分页脚本没有返回可解析的数据")) }
-                case .failure(let err):
-                    cont.resume(throwing: err)
+        let id = UUID()
+        return try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            return try await withCheckedThrowingContinuation { continuation in
+                let completion = PageJSCompletion(continuation)
+                jsCalls[id] = completion
+                completion.timeout = Task { @MainActor [weak self] in
+                    try? await Task.sleep(for: .seconds(15))
+                    guard !Task.isCancelled else { return }
+                    self?.finishJS(id, result: .failure(URLError(.timedOut)))
+                }
+                webView.callAsyncJavaScript(js, arguments: ["page": page], in: nil, in: .page) { [weak self] result in
+                    let value: Result<String, Error>
+                    switch result {
+                    case .success(let raw):
+                        if let string = raw as? String { value = .success(string) }
+                        else if let bytes = try? JSONSerialization.data(withJSONObject: raw, options: [.fragmentsAllowed]),
+                                let string = String(data: bytes, encoding: .utf8) { value = .success(string) }
+                        else { value = .failure(SiteDefinitionError.invalid("分页脚本没有返回可解析的数据")) }
+                    case .failure(let error): value = .failure(error)
+                    }
+                    self?.finishJS(id, result: value)
                 }
             }
-        }
+        } onCancel: { Task { @MainActor in self.finishJS(id, result: .failure(CancellationError())) } }
+    }
+
+    private func finishJS(_ id: UUID, result: Result<String, Error>) {
+        jsCalls.removeValue(forKey: id)?.finish(result)
     }
 
     // MARK: - JS extraction (page-1 / webNavigation pages)
 
     private func extract() async {
+        let generation = loadID
         guard let parser else { return }
         guard !isExtracting else { log("extract: skipped (already extracting)"); return }
         isExtracting = true
@@ -497,9 +537,12 @@ final class PageLoader: NSObject {
             try? await Task.sleep(for: .seconds(parser.waitSeconds))
         }
 
+        guard generation == loadID, !Task.isCancelled else { return }
+
         // Auto-follow: if the parser defines a redirect JS, run it first.
         if let followJS = parser.preNavigateJS {
             let href = try? await WebScript.evaluate(followJS, in: webView) as? String
+            guard generation == loadID, !Task.isCancelled else { return }
             if let href, !href.isEmpty, let followURL = URL(string: href) {
                 log("extract: preNavigateJS → following \(followURL.absoluteString)")
                 isExtracting = false
@@ -511,14 +554,16 @@ final class PageLoader: NSObject {
         }
 
         do {
-            guard let jsonString = try await WebScript.evaluate(parser.extractItemsJS, in: webView) as? String,
-                  let data = jsonString.data(using: .utf8) else {
+            let value = try await WebScript.evaluate(parser.extractItemsJS, in: webView)
+            guard generation == loadID, !Task.isCancelled else { return }
+            guard let jsonString = value as? String, let data = jsonString.data(using: .utf8) else {
                 log("extract: extractItemsJS returned nil/empty")
                 if !isMore { state = .done(allItems) }
                 isLoadingMore = false
                 isExtracting = false
                 return
             }
+            guard generation == loadID, !Task.isCancelled else { return }
             let raw      = try JSONDecoder().decode([RawItem].self, from: data)
             let base     = webView.url ?? currentURL!
             let newItems = Array(raw.compactMap { ParsedItem(from: $0, base: base) }.prefix(30))
@@ -535,6 +580,7 @@ final class PageLoader: NSObject {
 
             case .webNavigation(let npJS):
                 let nextHref = try? await WebScript.evaluate(npJS, in: webView) as? String
+                guard generation == loadID, !Task.isCancelled else { return }
                 nextPageURL  = nextHref.flatMap { URL(string: $0) }
                 hasNextPage  = false
 
@@ -572,6 +618,7 @@ final class PageLoader: NSObject {
             isExtracting  = false
             log("extract: done, total \(snapshot.count) items")
         } catch {
+            guard generation == loadID, !Task.isCancelled else { return }
             isLoadingMore = false
             isExtracting  = false
             log("extract: error \(error.localizedDescription)")
@@ -579,6 +626,17 @@ final class PageLoader: NSObject {
         }
     }
 
+}
+
+@MainActor private final class PageJSCompletion {
+    private var continuation: CheckedContinuation<String, Error>?
+    var timeout: Task<Void, Never>?
+    init(_ continuation: CheckedContinuation<String, Error>) { self.continuation = continuation }
+    func finish(_ result: Result<String, Error>) {
+        timeout?.cancel(); timeout = nil
+        let pending = continuation; continuation = nil
+        pending?.resume(with: result)
+    }
 }
 
 // MARK: - WKNavigationDelegate
@@ -589,12 +647,14 @@ extension PageLoader: WKNavigationDelegate {
     }
     nonisolated func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
         Task { @MainActor in
+            guard (error as NSError).code != NSURLErrorCancelled else { return }
             self.isLoadingMore = false
             if case .loading = self.state { self.state = .failed(error.localizedDescription) }
         }
     }
     nonisolated func webView(_ webView: WKWebView, didFailProvisionalNavigation _: WKNavigation!, withError error: Error) {
         Task { @MainActor in
+            guard (error as NSError).code != NSURLErrorCancelled else { return }
             self.isLoadingMore = false
             if case .loading = self.state { self.state = .failed(error.localizedDescription) }
         }

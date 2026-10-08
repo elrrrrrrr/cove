@@ -15,12 +15,12 @@ final class ReaderFileSafetyTests: XCTestCase {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        let valid = ThumbnailCache.legacyFile(for: URL(string: "https://media.example/covers/1.jpg")!, under: root)
+        let valid = ImagePipeline.legacyFile(for: URL(string: "https://media.example/covers/1.jpg")!, under: root)
         XCTAssertEqual(valid?.lastPathComponent, "1.jpg")
         XCTAssertTrue(valid?.path.hasPrefix(root.path + "/media.example/") == true)
-        XCTAssertNil(ThumbnailCache.legacyFile(for: URL(string: "https://evil.example/x/%2e%2e/%2e%2e/Cove.store")!, under: root))
+        XCTAssertNil(ImagePipeline.legacyFile(for: URL(string: "https://evil.example/x/%2e%2e/%2e%2e/Cove.store")!, under: root))
         try FileManager.default.createSymbolicLink(at: root.appendingPathComponent("media.example"), withDestinationURL: root.deletingLastPathComponent())
-        XCTAssertNil(ThumbnailCache.legacyFile(for: URL(string: "https://media.example/covers/1.jpg")!, under: root))
+        XCTAssertNil(ImagePipeline.legacyFile(for: URL(string: "https://media.example/covers/1.jpg")!, under: root))
     }
     func testSymlinkParentWithNonexistentLeafIsRejected() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

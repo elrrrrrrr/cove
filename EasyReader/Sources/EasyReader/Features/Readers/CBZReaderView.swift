@@ -9,8 +9,11 @@ struct CBZReaderView: View {
 
     @AppStorage(AppTheme.storageKey) private var theme: AppTheme = .system
     @Environment(\.modelContext) private var context
+    @Environment(\.displayScale) private var scale
     @Environment(\.dismiss) private var dismiss
 
+    @State private var extractedDirectory: URL?
+    @State private var pixels = 1024
     @State private var pages: [URL] = []
     @State private var currentPage  = 0
     @State private var showBars     = true
@@ -63,7 +66,13 @@ struct CBZReaderView: View {
         .navigationBarHidden(true)
         .statusBarHidden(!showBars)
         .task { await extractPages() }
-        .onDisappear { saveProgress() }
+        .onDisappear {
+            saveProgress()
+            if let directory = extractedDirectory {
+                Task.detached(priority: .utility) { try? FileManager.default.removeItem(at: directory) }
+                extractedDirectory = nil
+            }
+        }
     }
 
     // MARK: - Vertical scroll view
@@ -73,10 +82,18 @@ struct CBZReaderView: View {
             ScrollView(.vertical, showsIndicators: false) {
                 LazyVStack(spacing: 0) {
                     ForEach(Array(pages.enumerated()), id: \.offset) { idx, url in
-                        CBZPageImage(url: url)
+                        CBZPageImage(url: url, pixels: pixels)
                             .id(idx)
                             .onAppear { currentPage = idx }
                     }
+                }
+            }
+            .onGeometryChange(for: Int.self) { [scale] proxy in ImageSizing.pixels(points: proxy.size.width, scale: scale) } action: { pixels = $0 }
+            .task(id: "\(currentPage)-\(pixels)-\(pages.count)") {
+                let adjacent = [currentPage - 1, currentPage + 1].filter { pages.indices.contains($0) }.map { pages[$0] }
+                let width = pixels
+                await withTaskGroup(of: Void.self) { group in
+                    for url in adjacent { group.addTask { _ = await ImagePipeline.shared.image(at: url, sizing: .page(width: width)) } }
                 }
             }
             .onTapGesture {
@@ -151,46 +168,45 @@ struct CBZReaderView: View {
     // MARK: - Extraction
 
     private func extractPages() async {
-        do {
-            let tempDir = FileManager.default.temporaryDirectory
-                .appendingPathComponent(UUID().uuidString, isDirectory: true)
-            try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
-
-            try await Task.detached(priority: .userInitiated) {
-                guard let archive = Archive(url: self.fileURL, accessMode: .read) else {
-                    throw CBZError.invalidArchive
-                }
+        isLoading = true; error = nil
+        let file = fileURL
+        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let task = Task.detached(priority: .userInitiated) { () throws -> [URL] in
+            do {
+                try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+                let archive = try Archive(url: file, accessMode: .read)
                 var expanded: UInt64 = 0
+                var result: [URL] = []
                 for entry in archive where !entry.path.hasPrefix("__MACOSX") {
+                    try Task.checkCancellation()
                     let ext = (entry.path as NSString).pathExtension.lowercased()
                     guard ["jpg", "jpeg", "png", "webp", "gif"].contains(ext) else { continue }
                     guard entry.type != .symlink, entry.uncompressedSize <= 128 * 1024 * 1024,
                           expanded <= 1024 * 1024 * 1024 - entry.uncompressedSize else { throw ReaderSafetyError.message("压缩包超过安全解包限制") }
                     expanded += entry.uncompressedSize
                     let dest = try ReaderContainedPath.resolve(entry.path, under: tempDir)
-                    try FileManager.default.createDirectory(
-                        at: dest.deletingLastPathComponent(),
-                        withIntermediateDirectories: true
-                    )
+                    try FileManager.default.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
                     _ = try archive.extract(entry, to: dest)
+                    result.append(dest)
                 }
-            }.value
-
-            let fm = FileManager.default
-            let all = try fm.subpathsOfDirectory(atPath: tempDir.path)
-                .filter { ["jpg", "jpeg", "png", "webp", "gif"].contains(($0 as NSString).pathExtension.lowercased()) }
-                .sorted(by: { $0.localizedStandardCompare($1) == .orderedAscending })
-                .map { tempDir.appendingPathComponent($0) }
-
-            await MainActor.run {
-                pages = all
-                isLoading = false
+                try Task.checkCancellation()
+                return result.sorted { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
+            } catch {
+                try? FileManager.default.removeItem(at: tempDir)
+                throw error
             }
+        }
+        do {
+            let all = try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
+            guard !Task.isCancelled else {
+                Task.detached(priority: .utility) { try? FileManager.default.removeItem(at: tempDir) }; return
+            }
+            if let previous = extractedDirectory { Task.detached(priority: .utility) { try? FileManager.default.removeItem(at: previous) } }
+            extractedDirectory = tempDir
+            pages = all; isLoading = false
         } catch {
-            await MainActor.run {
-                self.error = error.localizedDescription
-                isLoading = false
-            }
+            guard !Task.isCancelled else { return }
+            self.error = error.localizedDescription; isLoading = false
         }
     }
 
@@ -215,33 +231,22 @@ struct CBZReaderView: View {
 
 private struct CBZPageImage: View {
     let url: URL
+    let pixels: Int
     @State private var image: UIImage?
 
     var body: some View {
         Group {
             if let image {
-                Image(uiImage: image)
-                    .resizable()
-                    .scaledToFit()
-                    .frame(maxWidth: .infinity)
+                Image(uiImage: image).resizable().scaledToFit().frame(maxWidth: .infinity)
             } else {
-                ProgressView()
-                    .frame(maxWidth: .infinity, minHeight: 300)
+                ProgressView().frame(maxWidth: .infinity, minHeight: 300)
             }
         }
-        .task(id: url) {
-            image = await loadImage()
+        .task(id: "\(url.absoluteString)-\(pixels)") {
+            let loaded = await ImagePipeline.shared.image(at: url, sizing: .page(width: pixels))
+            guard !Task.isCancelled else { return }
+            image = loaded
         }
+        .onDisappear { image = nil }
     }
-
-    private func loadImage() async -> UIImage? {
-        await Task.detached {
-            guard let data = try? Data(contentsOf: url) else { return nil }
-            return UIImage(data: data)
-        }.value
-    }
-}
-
-enum CBZError: Error {
-    case invalidArchive
 }

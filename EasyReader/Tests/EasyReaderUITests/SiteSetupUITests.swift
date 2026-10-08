@@ -370,7 +370,7 @@ final class LocalPageServer {
     let listener: NWListener
     let requestCount = RequestCounter()
     let url: String
-    init(body: String = "<html><body>Offline fixture</body></html>") throws {
+    init(body: String = "<html><body>Offline fixture</body></html>", image: Data? = nil) throws {
         let ready = DispatchSemaphore(value: 0)
         listener = try NWListener(using: .tcp, on: .any)
         let queue = DispatchQueue(label: "CoveUITestHTTP")
@@ -378,10 +378,13 @@ final class LocalPageServer {
         let counter = requestCount
         listener.newConnectionHandler = { connection in
             connection.start(queue: queue)
-            connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { _, _, _, _ in
+            connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { request, _, _, _ in
                 counter.increment()
-                let response = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: \(body.utf8.count)\r\nConnection: close\r\n\r\n" + body
-                connection.send(content: Data(response.utf8), completion: .contentProcessed { _ in connection.cancel() })
+                let isImage = String(data: request ?? Data(), encoding: .utf8)?.contains("GET /cover.png ") == true && image != nil
+                let bytes = isImage ? image! : Data(body.utf8)
+                let type = isImage ? "image/png" : "text/html; charset=utf-8"
+                let headers = "HTTP/1.1 200 OK\r\nContent-Type: \(type)\r\nContent-Length: \(bytes.count)\r\nConnection: close\r\n\r\n"
+                connection.send(content: Data(headers.utf8) + bytes, completion: .contentProcessed { _ in connection.cancel() })
             }
         }
         listener.start(queue: queue)

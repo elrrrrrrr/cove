@@ -29,6 +29,7 @@ Cove 是可配置的 iOS 浏览与阅读应用，支持网页、SMB、本地文�
 - [站点、收藏与备份格式](docs/site-format.md)
 - [代码结构](docs/architecture.md)
 - [审计修复与剩余工作](docs/review-status.md)
+- [性能整改与缓存预算](docs/performance.md)
 - [虚构站点示例](examples/sites/demo.site)
 - [本地站点规则回归测试](docs/site-tests.md)
 - [预置收藏示例](examples/data/favorites.json)

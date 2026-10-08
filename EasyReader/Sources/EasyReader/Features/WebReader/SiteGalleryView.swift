@@ -1069,7 +1069,10 @@ struct ListSkeletonView: View {
 
 private struct ThreadImageCard: View {
     let url: URL?
-    private let request: ThumbnailRequest?
+    private let source: ThumbnailRequest?
+    @Environment(\.displayScale) private var scale
+    @State private var pixels = 1024
+    private var request: ThumbnailRequest? { source?.resized(.page(width: pixels)) }
     let index: Int
 
     @State private var image: UIImage?
@@ -1078,8 +1081,8 @@ private struct ThreadImageCard: View {
     init(url: URL?, index: Int, referer: URL?, definitionID: String?) {
         self.url = url
         self.index = index
-        request = url.map { ThumbnailRequest(url: $0, referer: referer, definitionID: definitionID) }
-        _image = State(initialValue: request.flatMap { ImageMemoryCache.shared.image(for: $0) })
+        source = url.map { ThumbnailRequest(url: $0, referer: referer, definitionID: definitionID, sizing: .page(width: 1024)) }
+        _image = State(initialValue: source.flatMap { ImageMemoryCache.shared.image(for: $0) })
     }
 
     var body: some View {
@@ -1107,11 +1110,13 @@ private struct ThreadImageCard: View {
                     .background(Color(.secondarySystemBackground))
             }
         }
+        .onGeometryChange(for: Int.self) { [scale] proxy in ImageSizing.pixels(points: proxy.size.width, scale: scale) } action: { pixels = $0 }
         .task(id: request) {
-            guard let request, image == nil else { return }
+            guard let request else { return }
             failed = false
-            if let data = await ThumbnailCache.shared.data(for: request),
-               let img = UIImage(data: data) {
+            let loaded = await ImagePipeline.shared.image(for: request)
+            guard !Task.isCancelled else { return }
+            if let img = loaded {
                 withAnimation(.easeIn(duration: 0.15)) {
                     image = img
                 }

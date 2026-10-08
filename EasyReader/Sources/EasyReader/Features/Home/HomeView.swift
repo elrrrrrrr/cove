@@ -532,18 +532,27 @@ struct DataThumbnail: View {
     init(data: Data, placeholder: String = "photo") {
         self.data = data
         self.placeholder = placeholder
-        _image = State(initialValue: UIImage(data: data))
+        _image = State(initialValue: nil)
     }
 
     var body: some View {
-        if let img = image {
-            Image(uiImage: img).resizable().scaledToFill()
-        } else {
-            Color(.secondarySystemBackground)
-                .overlay {
-                    Image(systemName: placeholder)
-                        .foregroundStyle(.secondary)
-                }
+        Group {
+            if let img = image {
+                Image(uiImage: img).resizable().scaledToFill()
+            } else {
+                Color(.secondarySystemBackground)
+                    .overlay {
+                        Image(systemName: placeholder)
+                            .foregroundStyle(.secondary)
+                    }
+            }
+        }
+        .task(id: data) {
+            let bytes = data
+            let work = Task.detached(priority: .utility) { ImageDecoder.decode(bytes, sizing: .thumbnail(512)) }
+            let loaded = await withTaskCancellationHandler { await work.value } onCancel: { work.cancel() }
+            guard !Task.isCancelled else { return }
+            image = loaded
         }
     }
 }

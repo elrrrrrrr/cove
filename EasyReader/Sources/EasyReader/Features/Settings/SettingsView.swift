@@ -33,9 +33,8 @@ struct SettingsView: View {
                 Section {
                     ForEach(sites) { site in
                         HStack {
-                            if let data = site.faviconData, let img = UIImage(data: data) {
-                                Image(uiImage: img)
-                                    .resizable()
+                            if let data = site.faviconData {
+                                DataThumbnail(data: data, placeholder: site.category.icon)
                                     .frame(width: 24, height: 24)
                                     .clipShape(RoundedRectangle(cornerRadius: 6))
                             } else {
@@ -283,7 +282,7 @@ struct SettingsView: View {
         try? SiteDefinitionStore.shared.replace([])
 
         // 2. Clear caches & downloads
-        await ThumbnailCache.shared.clearAll()
+        await ImagePipeline.shared.clearAll()
         await NASThumbnailCache.shared.clear()
         await GalleryCache.clearAll()
         DownloadManager.shared.downloads.removeAll()

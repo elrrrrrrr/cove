@@ -4,8 +4,9 @@ import AVFoundation
 
 // MARK: - SMB connection
 
-enum NASConnection {
+enum NASConnection: Sendable {
     case smb(SMBClient)
+    var cacheIdentity: String { switch self { case .smb(let client): client.cacheIdentity } }
     var smbClient: SMBClient? { if case .smb(let client) = self { return client }; return nil }
     func listDirectory(path: String) async throws -> [NASFileEntry] {
         switch self { case .smb(let client): try await client.listDirectory(path: path) }

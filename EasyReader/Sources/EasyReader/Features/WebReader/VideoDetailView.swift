@@ -128,9 +128,9 @@ struct VideoDetailView: View {
         .task(id: item.thumbnail) {
             guard let url = item.thumbnail else { return }
             if thumbImage != nil { return }   // already got it from L0
-            if let data = await ThumbnailCache.shared.data(for: url, referer: item.pageURL, definitionID: definitionID) {
-                thumbImage = UIImage(data: data)
-            }
+            let image = await ImagePipeline.shared.image(for: ThumbnailRequest(url: url, referer: item.pageURL, definitionID: definitionID))
+            guard !Task.isCancelled else { return }
+            thumbImage = image
         }
         .onChange(of: extractor.state) { _, state in
             if case .found(let result) = state {
