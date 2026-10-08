@@ -229,10 +229,13 @@ struct SiteListView: View {
         visible.move(fromOffsets: indices, toOffset: offset)
         var iterator = visible.makeIterator()
         let reordered = sites.map { category == nil || $0.category == category ? iterator.next()! : $0 }
-        try context.save()
+        let previousOrders = reordered.map(\.sortOrder)
         for (index, site) in reordered.enumerated() { site.sortOrder = index }
         do { try context.save() }
-        catch { context.rollback(); throw error }
+        catch {
+            for (site, order) in zip(reordered, previousOrders) { site.sortOrder = order }
+            throw error
+        }
     }
 }
 

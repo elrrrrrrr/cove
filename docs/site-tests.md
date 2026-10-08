@@ -51,7 +51,7 @@ config/site-tests/          # 私有；Git 忽略，公开导出排除
 | search | 从入口规则生成搜索 URL，再选择结果页规则并提取 | `{"url": "…", "pagination": "none", "items": […]}` |
 | pagination | 下一页链接，或指定 `page` 的 AJAX 输出 | URL 字符串或条目数组 |
 | portal | 门户快照解析，保留目标页面路径和参数 | 解析后的 URL 字符串 |
-| image | localhost 返回原始加密字节，由实际 ThumbnailCache 解码 | `{"width": 120, "height": 80}` |
+| image | localhost 返回原始加密字节，由实际 ImagePipeline 解码 | `{"width": 120, "height": 80}` |
 
 预期对象只断言写出的字段，数组同时断言数量与顺序。至少固定标题、页面 URL 和封面 URL，避免只有“结果非空”却提取错资源。图片测试还会移除站点转换配置，确认同一加密样本被拒绝，防止遗漏 `images` 配置。
 
