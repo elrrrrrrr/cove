@@ -1,45 +1,48 @@
 # Cove
 
-Cove 是使用 SwiftUI 和 SwiftData 构建的 iOS 阅读与媒体客户端，支持网页内容、视频、漫画、PDF、EPUB、TXT、压缩漫画、图片、音乐及 SMB 文件访问。
+Cove 是可配置的 iOS 浏览与阅读应用，支持网页、SMB、本地文件、视频、音乐、漫画和电子书。
 
-App 不包含真实站点预设。站点使用可导入的 `.site` YAML 配置，普通页面通过 CSS 选择器解析，复杂页面通过可选 JavaScript 扩展。App 提供页面点选、手动编辑、结果预览和配置导入导出。
+音频包含 `.opus`（Ogg Opus），支持 NAS 流式播放及本地/离线播放，沿用暂停、跳转和切曲控件。
+
+在「设置 → 外观」选择全局主题（跟随系统、浅色、深色、护眼黄），界面与阅读器共享同一设置。TXT 小说可在「设置 → 阅读设置」或阅读器工具栏切换左右翻页和上下滚动，恢复并保存阅读进度。
+
+首页提供快速访问、继续阅读、最近阅读、下载和稍后再看。站点保留图标、封面、分类、搜索、分页与选集；NAS 与网站浏览页均可在右上角切换列表、Bento、竖版，分别记住站点入口或 NAS 目录的选择；站点配置仍提供初始布局。
 
 ## 构建
 
-需要 Xcode（iOS 26+ SDK）、Swift 6 和 XcodeGen。
+    cd EasyReader
+    xcodegen generate
+    open EasyReader.xcodeproj
 
-```sh
-cd EasyReader
-xcodegen generate
-open EasyReader.xcodeproj
-```
+需要 Xcode、XcodeGen，目标 iOS 26+，Swift 6 严格并发。依赖 AMSMB2、ZIPFoundation、Yams。
 
-SPM 依赖为 AMSMB2、ZIPFoundation、Yams。项目配置以 `EasyReader/project.yml` 为准。真机运行时在 Xcode 配置自己的签名团队。
+## 配置与数据
 
-## 私有配置与数据
+项目只维护当前一套配置格式：schemaVersion: 1。站点规则用 .site YAML，普通规则用 CSS，复杂规则用 JavaScript。
 
-在仓库根目录的 `sites/` 放置真实 `.site`；本地构建自动打包。可在 `data/favorites.json` 放置预置收藏。两个目录均被 Git 忽略，不存在时也能构建。
+在“设置 → 管理网站”点击站点右侧的文档按钮，默认直接显示交互式表单；右上角菜单可切换完整 YAML 源码，并进入网页点选、解析预览，共用一份配置草稿，支持校验、导出、保存和取消。
 
-仅全新安装首次导入。后续更新通过 App 手动导入，用户删除的站点不会重新出现。App 数据优先存放在本地 `Application Support/Cove/config/` 和 `data/`，NAS 接入统一使用 SMB。
+网页解析卡住时，可从加载页或站点工具菜单打开“查看原始网页”。默认查看同一个解析 WebView，保留当前跳转、登录和页面状态；查看选项可重新加载完整原网页。列表、视频、漫画详情与章节加载都支持。
 
-详细规范：[.site 配置与本地数据](docs/site-format.md)。虚构示例：[demo.site](examples/sites/demo.site)、[favorites.json](examples/data/favorites.json)。示例域名不提供真实服务。
+收藏页支持长按置顶/取消置顶，右上角“管理置顶”可拖动排序。视频与漫画共用置顶区，顺序保存在本地并随收藏导出。
+
+- [站点、收藏与备份格式](docs/site-format.md)
+- [代码结构](docs/architecture.md)
+- [审计修复与剩余工作](docs/review-status.md)
+- [性能整改与缓存预算](docs/performance.md)
+- [虚构站点示例](examples/sites/demo.site)
+- [本地站点规则回归测试](docs/site-tests.md)
+- [预置收藏示例](examples/data/favorites.json)
+
+真实规则放 sites/，可选收藏预置放 data/favorites.json；两个目录和 config/ 被 Git 忽略。存在时本地打包自动加载，不存在也能构建。预置仅在首次初始化导入一次。
+
+应用数据位于 Application Support/Cove/config 和 data。离线文件位于 data/Offline，记录使用相对路径；旧文件迁移保留标识与内容。下载失败可在首页重试或取消。NAS 目录缓存 60 秒，可用右上角刷新主动更新。密码放 Keychain。修改架构和性能时保留现有界面与用户数据。
 
 ## 验证
 
-```sh
-cd EasyReader
-xcodegen generate
-xcodebuild -project EasyReader.xcodeproj -scheme EasyReader \
-  -destination 'platform=iOS Simulator,name=iPhone 17 Pro' \
-  CODE_SIGNING_ALLOWED=NO test
-```
+    python3 scripts/test_export.py
+    cd EasyReader
+    xcodebuild -project EasyReader.xcodeproj -scheme EasyReader \
+      -destination 'platform=iOS Simulator,name=iPhone 17 Pro' test
 
-测试使用虚构站点与本地 HTML，覆盖选择器、异步脚本、匹配、分页、章节、配置校验、首次导入、迁移、收藏合并及备份身份。
-
-## 准备公开仓库
-
-```sh
-python3 scripts/export-public-repo.py /path/to/cove-public
-```
-
-导出当前工作区可公开的文件到新目录，并初始化一个没有旧提交历史的新 Git 仓库。原仓库、原历史和未提交工作保留。私有配置、数据、生成项目及构建输出不导出；脚本不创建远程仓库，也不上传。
+测试使用虚构配置和本地页面，可从 Git 忽略的 `config/site-tests/` 加载真实规则的离线快照，检查列表、搜索、分页、漫画详情/章节、门户及封面解码。搜索测试检查 URL 转义、目标规则与分页切换、取消返回分类，以及结果进入漫画详情的 UI 链路。缺少样本的规则会在覆盖清单中列出。真实站点、NAS 和真机性能需要实际环境验证。RAR/CBR 尚未包含实际解码器。仓库保持 Private。

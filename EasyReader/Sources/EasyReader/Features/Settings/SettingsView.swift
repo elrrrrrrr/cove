@@ -8,7 +8,8 @@ struct SettingsView: View {
     @Environment(\.modelContext) private var context
 
     @AppStorage("readerFontSize") private var fontSize: Double = 17
-    @AppStorage("readerTheme") private var theme: ReaderTheme = .system
+    @AppStorage(AppTheme.storageKey) private var theme: AppTheme = .system
+    @AppStorage(NovelReadingMode.storageKey) private var readingMode: NovelReadingMode = .paged
     @AppStorage("contentBlockerEnabled") private var blockerEnabled: Bool = true
 
     @State private var showAddNAS = false
@@ -32,9 +33,8 @@ struct SettingsView: View {
                 Section {
                     ForEach(sites) { site in
                         HStack {
-                            if let data = site.faviconData, let img = UIImage(data: data) {
-                                Image(uiImage: img)
-                                    .resizable()
+                            if let data = site.faviconData {
+                                DataThumbnail(data: data, placeholder: site.category.icon)
                                     .frame(width: 24, height: 24)
                                     .clipShape(RoundedRectangle(cornerRadius: 6))
                             } else {
@@ -70,6 +70,13 @@ struct SettingsView: View {
                     }
                 }
 
+                Section("外观") {
+                    Picker("全局主题", selection: $theme) {
+                        ForEach(AppTheme.allCases) { t in Text(t.label).tag(t) }
+                    }
+                    .accessibilityIdentifier("app-theme-picker")
+                }
+
                 // Reader settings
                 Section("阅读设置") {
                     HStack {
@@ -77,10 +84,8 @@ struct SettingsView: View {
                         Spacer()
                         Stepper("\(Int(fontSize)) pt", value: $fontSize, in: 12...28, step: 1)
                     }
-                    Picker("主题", selection: $theme) {
-                        ForEach(ReaderTheme.allCases) { t in
-                            Text(t.label).tag(t)
-                        }
+                    Picker("小说翻页", selection: $readingMode) {
+                        ForEach(NovelReadingMode.allCases) { mode in Text(mode.label).tag(mode) }
                     }
                 }
 
@@ -90,6 +95,12 @@ struct SettingsView: View {
                     NavigationLink("管理拦截规则") {
                         BlockerRulesView()
                     }
+                }
+
+                Section("云端同步") {
+                    NavigationLink { FolderSyncView() } label: {
+                        Label("iCloud Drive 文件夹", systemImage: "icloud")
+                    }.accessibilityIdentifier("folder-sync-settings")
                 }
 
                 // Data management
@@ -128,7 +139,7 @@ struct SettingsView: View {
                             }
                         }
                     }
-                    .disabled(isClearing)
+                    .disabled(isClearing || FolderSyncManager.shared.isSyncing)
                 } header: {
                     Text("数据管理")
                 } footer: {
@@ -163,6 +174,7 @@ struct SettingsView: View {
                     Link("问题反馈", destination: URL(string: "https://github.com")!)
                 }
             }
+            .appSurface()
             .navigationTitle("设置")
             .sheet(isPresented: $showSiteList) {
                 SiteListView()
@@ -213,7 +225,7 @@ struct SettingsView: View {
             nasConfigs: nasConfigs,
             fontSize: fontSize,
             theme: theme,
-            blockerEnabled: blockerEnabled
+            blockerEnabled: blockerEnabled, readingMode: readingMode
         )
         do {
             exportFileURL = try backup.writeToTempFile()
@@ -247,9 +259,10 @@ struct SettingsView: View {
             // Refresh AppStorage bindings from UserDefaults
             fontSize = UserDefaults.standard.double(forKey: "readerFontSize")
             if let raw = UserDefaults.standard.string(forKey: "readerTheme"),
-               let t = ReaderTheme(rawValue: raw) {
+               let t = AppTheme(rawValue: raw) {
                 theme = t
             }
+            readingMode = NovelReadingMode(rawValue: UserDefaults.standard.string(forKey: NovelReadingMode.storageKey) ?? "") ?? .paged
             blockerEnabled = UserDefaults.standard.bool(forKey: "contentBlockerEnabled")
             pendingBackup = nil
             showImportSuccess = true
@@ -262,8 +275,11 @@ struct SettingsView: View {
     // MARK: - Clear all data
 
     private func clearAllData() async {
+        guard !FolderSyncManager.shared.isSyncing else { return }
         isClearing = true
         defer { isClearing = false }
+
+        FolderSyncManager.shared.disconnect()
 
         // 1. Delete all SwiftData models
         try? context.delete(model: ReadingHistory.self)
@@ -275,20 +291,21 @@ struct SettingsView: View {
         try? SiteDefinitionStore.shared.replace([])
 
         // 2. Clear caches & downloads
-        await ThumbnailCache.shared.clearAll()
+        await ImagePipeline.shared.clearAll()
         await NASThumbnailCache.shared.clear()
         await GalleryCache.clearAll()
-        DownloadManager.shared.downloads.removeAll()
-        DownloadManager.shared.pendingPersist.removeAll()
+        await DownloadManager.shared.clear()
 
-        // 3. Delete offline files
-        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-        let offlineDir = docs.appendingPathComponent("Offline", isDirectory: true)
-        try? FileManager.default.removeItem(at: offlineDir)
+        // 3. Delete owned offline files
+        try? OfflineFiles.shared.clear()
 
         // 4. Reset UserDefaults settings
+        for key in UserDefaults.standard.dictionaryRepresentation().keys where key.hasPrefix(BrowserLayout.preferencePrefix) {
+            UserDefaults.standard.removeObject(forKey: key)
+        }
         fontSize = 17
         theme = .system
+        readingMode = .paged
         blockerEnabled = true
     }
 }
@@ -311,6 +328,7 @@ struct BlockerRulesView: View {
             Text("内置 EasyList 精简规则（已加载）")
                 .foregroundStyle(.secondary)
         }
+        .appSurface()
         .navigationTitle("拦截规则")
     }
 }

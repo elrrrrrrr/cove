@@ -184,13 +184,14 @@ struct ComicReaderView: View {
 
     private var hasPrev: Bool { currentChapterIndex > 0 }
     private var hasNext: Bool { currentChapterIndex < allChapters.count - 1 }
+    @State private var showParsingWeb = false
 
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
 
             // Hidden WebView
-            ChapterWebViewBridge(webView: extractor.webView)
+            HiddenWebView(webView: extractor.webView)
                 .frame(width: 1, height: 1)
                 .opacity(0)
                 .allowsHitTesting(false)
@@ -203,12 +204,23 @@ struct ComicReaderView: View {
             }
         }
         .statusBarHidden(!showBars)
+        .sheet(isPresented: $showParsingWeb) {
+            ParsingWebViewSheet(webView: extractor.webView, request: URLRequest(url: currentChapter.chapterURL), status: inspectionStatus)
+        }
         .task {
             extractor.load(url: currentChapter.chapterURL, definitionID: definitionID)
         }
         .onDisappear {
             extractor.cancel()
             saveProgress()
+        }
+    }
+
+    private var inspectionStatus: String {
+        switch extractor.state {
+        case .loading: "加载章节中…"
+        case .loaded: "章节解析已完成"
+        case .failed(let message): "解析失败：\(message)"
         }
     }
 
@@ -224,6 +236,7 @@ struct ComicReaderView: View {
                 Text("加载中…")
                     .foregroundStyle(.white.opacity(0.7))
                     .font(.subheadline)
+                Button("查看原始网页", systemImage: "safari") { showParsingWeb = true }.buttonStyle(.bordered).tint(.white)
             }
 
         case .loaded(let data):
@@ -240,6 +253,7 @@ struct ComicReaderView: View {
                     extractor.load(url: currentChapter.chapterURL, definitionID: definitionID)
                 }
                 .buttonStyle(.borderedProminent)
+                Button("查看原始网页", systemImage: "safari") { showParsingWeb = true }.buttonStyle(.bordered).tint(.white)
             }
         }
     }
@@ -420,6 +434,10 @@ private struct ComicPageImage: View {
     let url: URL
     let index: Int
 
+    @Environment(\.displayScale) private var scale
+    @State private var pixels = 1024
+    private let source: ThumbnailRequest
+    private var request: ThumbnailRequest { source.resized(.page(width: pixels)) }
     @State private var image: UIImage?
     @State private var failed = false
     @State private var isVisible = true
@@ -427,7 +445,8 @@ private struct ComicPageImage: View {
     init(url: URL, index: Int) {
         self.url = url
         self.index = index
-        _image = State(initialValue: ImageMemoryCache.shared.image(for: url))
+        source = ThumbnailRequest(url: url, sizing: .page(width: 1024))
+        _image = State(initialValue: ImageMemoryCache.shared.image(for: source))
     }
 
     var body: some View {
@@ -454,11 +473,12 @@ private struct ComicPageImage: View {
                     .frame(height: 400)
             }
         }
-        .task(id: url) {
-            if image != nil { return }
+        .onGeometryChange(for: Int.self) { [scale] proxy in ImageSizing.pixels(points: proxy.size.width, scale: scale) } action: { pixels = $0 }
+        .task(id: request) {
             failed = false
-            if let data = await ThumbnailCache.shared.data(for: url),
-               let img = UIImage(data: data) {
+            let loaded = await ImagePipeline.shared.image(for: request)
+            guard !Task.isCancelled else { return }
+            if let img = loaded {
                 withAnimation(.easeIn(duration: 0.15)) {
                     image = img
                 }
@@ -470,7 +490,7 @@ private struct ComicPageImage: View {
             isVisible = true
             // Re-load from L0 cache if image was released while off-screen
             if image == nil, !failed {
-                image = ImageMemoryCache.shared.image(for: url)
+                image = ImageMemoryCache.shared.image(for: request)
             }
         }
         .onDisappear {
@@ -484,12 +504,4 @@ private struct ComicPageImage: View {
             }
         }
     }
-}
-
-// MARK: - WebViewBridge
-
-private struct ChapterWebViewBridge: UIViewRepresentable {
-    let webView: WKWebView
-    func makeUIView(context: Context) -> WKWebView { webView }
-    func updateUIView(_ uiView: WKWebView, context: Context) {}
 }

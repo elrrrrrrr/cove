@@ -38,6 +38,7 @@ struct DiagnosticLogView: View {
             }
         }
         .searchable(text: $filter, prompt: "过滤日志…")
+        .appSurface()
         .navigationTitle("诊断日志")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {

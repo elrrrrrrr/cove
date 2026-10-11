@@ -103,7 +103,8 @@ enum SitePortalResolver {
 }
 
 extension SiteParserRegistry {
-    static func imageTransform(for url: URL, referer: URL?) -> SiteImageTransform? {
+    static func imageTransform(for url: URL, referer: URL?, definitionID: String? = nil) -> SiteImageTransform? {
+        if let definitionID { return definitions.first { $0.id == definitionID }?.images }
         if let referer, let transform = definition(for: referer)?.images { return transform }
         return definitions.compactMap(\.images).first {
             ($0.hosts ?? []).contains { host in url.host()?.lowercased() == host.lowercased() }

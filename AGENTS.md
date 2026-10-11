@@ -1,47 +1,26 @@
-# Cove — iOS App
+# Cove — iOS resource browser
 
 ## Build
-
-```sh
-cd EasyReader
-xcodegen generate
-open EasyReader.xcodeproj
-```
-
-Always run `xcodegen generate` after adding/removing/moving Swift files. `project.yml` is the single source of truth for targets, dependencies, resources, scripts and settings.
-
-## Stack and conventions
-
-- SwiftUI + SwiftData, iOS 26+, Swift 6 strict concurrency.
-- SPM: AMSMB2 (SMB), ZIPFoundation (CBZ/EPUB), Yams (`.site` YAML).
-- UI labels and descriptions are Chinese.
-- Use `@Observable @MainActor` for view-model-like objects; use actors for SMB and cache internals.
-- Use `.foregroundColor(.accentColor)`, not `.foregroundStyle(.accentColor)`.
-- AMSMB2 downloads use `downloadItem(atPath:to:progress:)`; URLs are `smb://host`, with share passed to `connectShare(name:)`.
-- NAS uses SMB only. Passwords stay in Keychain. Legacy remote-config fields exist solely for stored-data compatibility.
-- Thumbnail cache has synchronous NSCache, actor LRU, and disk layers. Preserve eviction and range-reading behavior.
+SwiftUI + SwiftData, iOS 26+, Swift 6 strict concurrency. Dependencies: AMSMB2, ZIPFoundation, Yams. project.yml is the source of truth. Run xcodegen generate after adding, removing or moving Swift files.
 
 ## Structure
+- App/: application and root navigation.
+- Models/: bookmarks, favorites, history, offline files and SMB configuration.
+- Features/: Home, Favorites, History, Settings, NAS, WebReader, Comic and native Readers.
+- Shared/: reusable components, caches, file access and downloads.
 
-`EasyReader/Sources/EasyReader/` contains `App/`, `Models/`, `Features/` and `Shared/`.
+## Contracts
+Only one current configuration format: schemaVersion 1 for .site, favorites JSON and configuration backups. Do not introduce parallel schemas, stores, version switches or unused compatibility wrappers. Site definitions have stable id, matching, entries and parsing rules; CSS and JavaScript use the same output contract.
 
-- `Features/WebReader/`: site schema, registry, persistence, selector/JS engine, setup wizard, gallery, video extraction, content blocker.
-- `Features/Comic/`: configuration-driven metadata and chapter image readers.
-- `Features/Readers/`: PDF, CBZ, EPUB, TXT and video readers.
-- `Features/NAS/`: SMB browsing, streaming, images, audio and thumbnails.
-- Other feature directories cover Home, Favorites, History and Settings.
-- SwiftData models: ReadingHistory, BookmarkSite, FavoriteVideo, OfflineItem, NASConfig; register new models in EasyReaderApp.
+Application data uses Application Support/Cove/config and data. Preserve existing user records and identifiers. Keep SwiftData on MainActor; background tasks receive immutable values. SMB passwords stay in Keychain; backups preserve NAS UUIDs and never include passwords.
 
-## Site independence
+Keep the current home, thumbnails, Bento/portrait/list layouts, category/search/pagination tools, favorites, readers and SMB capabilities when changing architecture or performance. Establish feature parity with the same configuration and data. UI labels are Chinese. Use @Observable @MainActor and foregroundColor(.accentColor).
 
-Real site names, domains, selectors, endpoints and transformation parameters belong in complete `.site` YAML files, never in Swift branches. Add a site by importing a definition or placing it in ignored root `sites/`. Extend generic capabilities only as required. See `docs/site-format.md`.
+Real domains, selectors and transformation parameters belong in private .site files. Root sites/, data/, config/ and non-example .site files are ignored. Bundled definitions and optional favorites import once; deletion never triggers reseeding. Examples use reserved fictional domains.
 
-A definition has stable `id`, entries and role-specific rules. Common extraction uses CSS; optional JavaScript produces the same result structure. Carry `definitionID` through sub-navigation, favorites, history and media/chapter loading.
+Use default TLS verification. Cache writes use URL hashes; contained legacy cache reads must reject traversal and symlinks. Archives and EPUB references remain within owned directories and enforce expansion limits. Disable EPUB content JavaScript. ReaderFileSafety contains shared path checks.
 
-Root `sites/`, `data/`, `config/` are private and ignored. Optional `data/favorites.json` and site files import only on a fresh installation, once; an empty collection must never trigger reseeding. App persistent data lives under Application Support/Cove/config and data. Preserve existing data and stable identities during migration and backup import.
-
-Public export uses `scripts/export-public-repo.py` to create a separate new Git repository. Keep the original development repository/history intact.
+SMB uses smb://host and connectShare(name:). Stream media with bounded range requests. Download files to disk with downloadItem(atPath:to:progress:) rather than loading whole videos into Data. Credentials and local authorization never appear in portable configuration.
 
 ## Validation
-
-Tests use reserved example domains and offline HTML fixtures. Cover schema errors, domain boundaries, CSS and asynchronous JS output, pagination, chapters, once-only bootstrap, migration, data merging and backup identity. Build both with and without private folders after resource-script changes.
+Use offline fixtures and localhost. Cover schema round trips and rejection, entry identity, once-only initialization, backup consistency, CSS/JS extraction and resource boundaries. Validate changes with and without private seed folders. Check meaningful UI changes against existing layouts and data; passed parser tests do not establish UI parity. Separate own-source warnings from dependency/SDK warnings. GitHub stays Private until the user explicitly asks otherwise.

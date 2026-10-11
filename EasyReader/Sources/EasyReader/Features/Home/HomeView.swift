@@ -2,8 +2,8 @@ import SwiftUI
 import SwiftData
 
 struct HomeView: View {
-    @Query(sort: \ReadingHistory.lastReadAt, order: .reverse, animation: .default)
-    private var history: [ReadingHistory]
+    var downloadManager: DownloadManager = .shared
+    @State private var historyIndex = ReadingIndex()
 
     @Query(sort: \BookmarkSite.sortOrder)
     private var sites: [BookmarkSite]
@@ -20,22 +20,7 @@ struct HomeView: View {
 
     private var columns: Int { hSizeClass == .regular ? 3 : 2 }
 
-    /// Deduplicated by URL/filePath AND title (content-based), newest first.
-    /// Title dedup merges e.g. multiple comic chapters into a single entry.
-    private var recentHistory: [ReadingHistory] {
-        let maxItems = hSizeClass == .regular ? 12 : 5
-        var seenKeys   = Set<String>()
-        var seenTitles = Set<String>()
-        var result: [ReadingHistory] = []
-        for item in history {
-            let key = item.url ?? item.filePath ?? item.id.uuidString
-            guard seenKeys.insert(key).inserted else { continue }
-            guard seenTitles.insert(item.displayTitle).inserted else { continue }
-            result.append(item)
-            if result.count == maxItems { break }
-        }
-        return result
-    }
+    private var recentHistory: [ReadingHistory] { Array(historyIndex.recent.prefix(hSizeClass == .regular ? 12 : 5)) }
 
     var body: some View {
         NavigationStack {
@@ -49,7 +34,7 @@ struct HomeView: View {
                     }
 
                     // ── 继续阅读 ──────────────────────────────────────
-                    if let latest = history.first {
+                    if let latest = historyIndex.latest {
                         sectionHeader("继续阅读")
                         continueReadingCard(latest)
                     }
@@ -61,7 +46,7 @@ struct HomeView: View {
                     }
 
                     // ── 下载中 ──────────────────────────────────────
-                    ActiveDownloadsSection()
+                    ActiveDownloadsSection(manager: downloadManager)
 
                     // ── 稍后再看 ──────────────────────────────────────
                     if !offlineItems.isEmpty {
@@ -70,12 +55,14 @@ struct HomeView: View {
                     }
 
                     // ── 空状态 ────────────────────────────────────────
-                    if sites.isEmpty && history.isEmpty {
+                    if sites.isEmpty && historyIndex.latest == nil {
                         emptyState
                     }
                 }
                 .padding(.vertical)
             }
+            .background(ReadingIndexObserver(index: historyIndex).equatable())
+            .appSurface()
             .navigationTitle("主页")
         }
     }
@@ -128,7 +115,7 @@ struct HomeView: View {
     // MARK: - Recent horizontal scroll
 
     private var recentRow: some View {
-        BentoVideoGrid(items: recentHistory, columns: columns) { item, cardSize in
+        BentoGrid(items: recentHistory, columns: columns) { item, cardSize in
             NavigationLink(destination: destinationView(for: item)) {
                 RecentCard(item: item, cardSize: cardSize)
             }
@@ -185,21 +172,23 @@ struct HomeView: View {
 
     @ViewBuilder
     private func offlineDestination(for item: OfflineItem) -> some View {
-        let fileURL = URL(fileURLWithPath: item.localPath)
-        switch item.fileType {
-        case .pdf:       PDFReaderView(fileURL: fileURL)
-        case .cbz, .cbr: CBZReaderView(fileURL: fileURL)
-        case .epub:      EPUBReaderView(fileURL: fileURL)
-        case .txt:       TXTReaderView(fileURL: fileURL)
-        case .video:     VideoPlayerView(fileURL: fileURL)
-        default:         Text("不支持的格式")
-        }
+        if let fileURL = OfflineFiles.shared.url(for: item.localPath) {
+            switch item.fileType {
+            case .pdf:       PDFReaderView(fileURL: fileURL)
+            case .cbz, .cbr: CBZReaderView(fileURL: fileURL)
+            case .epub:      EPUBReaderView(fileURL: fileURL)
+            case .txt:       TXTReaderView(fileURL: fileURL)
+            case .video:     VideoPlayerView(fileURL: fileURL)
+            case .audio:     NASAudioView(trackName: item.title, trackPath: fileURL.path, fileURL: fileURL)
+            default:         Text("不支持的格式")
+            }
+        } else { ContentUnavailableView("离线文件路径无效", systemImage: "doc.badge.ellipsis") }
     }
 
     private func deleteOfflineItem(_ item: OfflineItem) {
         // Delete local file if it exists
         if !item.localPath.isEmpty {
-            try? FileManager.default.removeItem(atPath: item.localPath)
+            OfflineFiles.shared.deleteFile(path: item.localPath)
         }
         modelContext.delete(item)
     }
@@ -263,7 +252,7 @@ struct HomeView: View {
     @ViewBuilder
     private func destinationView(for item: ReadingHistory) -> some View {
         // NAS file: auto-reconnect and open
-        if item.nasConfigID != nil, let filePath = item.filePath {
+        if item.nasConfigID != nil, item.filePath != nil {
             NASAutoConnectView(historyItem: item)
         } else {
             localDestinationView(for: item)
@@ -273,30 +262,36 @@ struct HomeView: View {
     @ViewBuilder
     private func localDestinationView(for item: ReadingHistory) -> some View {
         switch item.fileType {
+        case .audio:
+            if let path = item.filePath, let fileURL = OfflineFiles.shared.historyURL(for: path) {
+                NASAudioView(trackName: item.title, trackPath: fileURL.path, fileURL: fileURL)
+            } else if let address = item.url, let url = URL(string: address) {
+                NASAudioView(trackName: item.title, trackPath: address, fileURL: url)
+            }
         case .web:
             if let s = item.url, let url = URL(string: s) {
                 WebReaderView(url: url)
             }
         case .pdf:
-            if let p = item.filePath {
-                PDFReaderView(fileURL: URL(fileURLWithPath: p))
+            if let p = item.filePath, let fileURL = OfflineFiles.shared.historyURL(for: p) {
+                PDFReaderView(fileURL: fileURL, historyItem: item)
             }
         case .cbz, .cbr:
-            if let p = item.filePath {
-                CBZReaderView(fileURL: URL(fileURLWithPath: p))
+            if let p = item.filePath, let fileURL = OfflineFiles.shared.historyURL(for: p) {
+                CBZReaderView(fileURL: fileURL, historyItem: item)
             }
         case .epub:
-            if let p = item.filePath {
-                EPUBReaderView(fileURL: URL(fileURLWithPath: p))
+            if let p = item.filePath, let fileURL = OfflineFiles.shared.historyURL(for: p) {
+                EPUBReaderView(fileURL: fileURL, historyItem: item)
             }
         case .txt:
-            if let p = item.filePath {
-                TXTReaderView(fileURL: URL(fileURLWithPath: p))
+            if let p = item.filePath, let fileURL = OfflineFiles.shared.historyURL(for: p) {
+                TXTReaderView(fileURL: fileURL, historyItem: item)
             }
         case .video:
-            if let p = item.filePath {
+            if let p = item.filePath, let fileURL = OfflineFiles.shared.historyURL(for: p) {
                 // Local file → direct player
-                VideoPlayerView(fileURL: URL(fileURLWithPath: p))
+                VideoPlayerView(fileURL: fileURL, historyItem: item)
             } else if let s = item.url, let url = URL(string: s) {
                 // Web video → extract stream and play natively
                 VideoDetailView(item: ParsedItem(
@@ -445,15 +440,16 @@ struct SectionHeader: View {
 
 /// Only this view re-evaluates when download progress changes — not the entire HomeView.
 private struct ActiveDownloadsSection: View {
+    let manager: DownloadManager
     var body: some View {
-        let activeDownloads = DownloadManager.shared.downloads.filter { !$0.state.isTerminal }
+        let activeDownloads = manager.downloads.filter { $0.state != .completed }
         if !activeDownloads.isEmpty {
-            Text("下载中")
+            Text("下载")
                 .font(.title3.bold())
                 .padding(.horizontal)
             LazyVStack(spacing: 0) {
                 ForEach(activeDownloads) { dl in
-                    DownloadProgressRow(download: dl)
+                    DownloadProgressRow(download: dl, manager: manager)
                         .padding(.horizontal)
                     Divider().padding(.leading, 56 + 12 + 12)
                 }
@@ -466,6 +462,7 @@ private struct ActiveDownloadsSection: View {
 
 struct DownloadProgressRow: View {
     let download: DownloadManager.Download
+    var manager: DownloadManager = .shared
 
     var body: some View {
         HStack(spacing: 12) {
@@ -493,20 +490,16 @@ struct DownloadProgressRow: View {
             Spacer()
 
             if case .failed = download.state {
-                Button {
-                    DownloadManager.shared.retry(id: download.id)
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                        .foregroundStyle(.secondary)
+                Button { manager.retry(id: download.id) } label: {
+                    Image(systemName: "arrow.clockwise").foregroundStyle(.secondary)
                 }
-            } else {
-                Button {
-                    DownloadManager.shared.cancel(id: download.id)
-                } label: {
-                    Image(systemName: "xmark.circle")
-                        .foregroundStyle(.secondary)
-                }
+                .accessibilityLabel("重试下载")
             }
+            Button { manager.cancel(id: download.id) } label: {
+                Image(systemName: "xmark.circle").foregroundStyle(.secondary)
+            }
+            .accessibilityLabel("取消下载")
+
         }
         .padding(.vertical, 10)
     }
@@ -524,18 +517,27 @@ struct DataThumbnail: View {
     init(data: Data, placeholder: String = "photo") {
         self.data = data
         self.placeholder = placeholder
-        _image = State(initialValue: UIImage(data: data))
+        _image = State(initialValue: nil)
     }
 
     var body: some View {
-        if let img = image {
-            Image(uiImage: img).resizable().scaledToFill()
-        } else {
-            Color(.secondarySystemBackground)
-                .overlay {
-                    Image(systemName: placeholder)
-                        .foregroundStyle(.secondary)
-                }
+        Group {
+            if let img = image {
+                Image(uiImage: img).resizable().scaledToFill()
+            } else {
+                Color(.secondarySystemBackground)
+                    .overlay {
+                        Image(systemName: placeholder)
+                            .foregroundStyle(.secondary)
+                    }
+            }
+        }
+        .task(id: data) {
+            let bytes = data
+            let work = Task.detached(priority: .utility) { ImageDecoder.decode(bytes, sizing: .thumbnail(512)) }
+            let loaded = await withTaskCancellationHandler { await work.value } onCancel: { work.cancel() }
+            guard !Task.isCancelled else { return }
+            image = loaded
         }
     }
 }

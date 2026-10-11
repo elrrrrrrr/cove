@@ -5,7 +5,6 @@ import Yams
 struct SiteDefinition: Codable, Sendable, Equatable, Identifiable {
     var schemaVersion: Int = 1
     var id: String
-    var version: Int = 1
     var name: String
     var match: SiteMatch
     var entries: [SiteEntry]
@@ -18,7 +17,6 @@ struct SiteDefinition: Codable, Sendable, Equatable, Identifiable {
             if !condition { throw SiteDefinitionError.invalid(message) }
         }
         try require(schemaVersion == 1, "不支持的格式版本：\(schemaVersion)")
-        try require(version > 0, "配置版本必须大于零")
         try require(id.range(of: #"^[A-Za-z0-9][A-Za-z0-9._-]*$"#, options: .regularExpression) != nil, "站点 id 只能包含字母、数字、点、下划线和连字符")
         try require(!name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, "站点名称不能为空")
         try match.validate()
@@ -35,7 +33,7 @@ struct SiteDefinition: Codable, Sendable, Equatable, Identifiable {
             try require(["catalog", "video", "comic", "chapter", "tags"].contains(rule.role), "未知页面角色：\(rule.role)")
             if let match = rule.match { try match.validate(requireHost: false) }
             if let kind = rule.contentType { try require(ItemKind(string: kind) != nil, "未知内容类型：\(kind)") }
-            if let layout = rule.presentation?.layout { try require(GalleryLayout(rawValue: layout) != nil, "未知布局：\(layout)") }
+            if let layout = rule.presentation?.layout { try require(BrowserLayout(rawValue: layout) != nil, "未知布局：\(layout)") }
             if let seconds = rule.load?.waitSeconds { try require(seconds.isFinite && (0...30).contains(seconds), "等待时间必须在 0–30 秒之间") }
             if let mode = rule.load?.mode { try require(["auto", "webView"].contains(mode), "未知加载方式：\(mode)") }
             try require((rule.extract != nil) != (rule.request != nil), "规则 \(rule.id) 需要且只能选择 extract 或 request")
@@ -224,7 +222,7 @@ struct SiteExtraction: Codable, Sendable, Equatable {
     var fields: [String: SiteField]?
     /// Function body; `return` native objects/arrays. Async JavaScript is supported.
     var script: String?
-    /// Migration compatibility for complete JavaScript expressions.
+    /// A complete JavaScript expression.
     var expression: String?
 
     func validate() throws {
@@ -305,7 +303,7 @@ struct SiteField: Codable, Sendable, Equatable {
 /// Catch misspelled keys and duplicate YAML keys before Codable can silently discard them.
 enum SiteSchema {
     private static let keys: [String: Set<String>] = [
-        "site": ["schemaVersion", "id", "version", "name", "match", "entries", "rules", "portal", "images"],
+        "site": ["schemaVersion", "id", "name", "match", "entries", "rules", "portal", "images"],
         "match": ["hosts", "includeSubdomains", "hostPattern", "pathPrefix", "pathPattern", "query"],
         "entry": ["id", "name", "path", "category"],
         "rule": ["id", "role", "contentType", "priority", "match", "load", "presentation", "extract", "pagination", "categories", "searchURLTemplate", "request"],
@@ -319,6 +317,8 @@ enum SiteSchema {
         "portal": ["url", "base64Pattern", "dataPattern", "keyPattern", "urlPaths", "identityPaths", "identityPattern", "excludedHosts", "headers"],
         "images": ["hosts", "key", "iv"]
     ]
+
+    static func fieldNames(for type: String) -> Set<String> { keys[type] ?? [] }
 
     static func check(_ yaml: String) throws {
         guard let root = try Yams.compose(yaml: yaml), root.mapping != nil else { throw SiteDefinitionError.invalid(".site 顶层必须是 YAML 配置对象") }
@@ -383,7 +383,7 @@ struct SitePortal: Codable, Sendable, Equatable {
     }
 }
 
-struct SiteImageTransform: Codable, Sendable, Equatable {
+struct SiteImageTransform: Codable, Sendable, Hashable {
     var hosts: [String]?
     var key: String
     var iv: String

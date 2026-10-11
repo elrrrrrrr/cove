@@ -10,9 +10,13 @@ struct NASImageView: View {
     // Pre-loaded data (for the initial image opened from NASBrowserView)
     var initialData: Data?
 
+    @Environment(\.displayScale) private var displayScale
     @Environment(\.dismiss) private var dismiss
     @State private var currentIndex: Int = 0
-    @State private var imageData: Data?
+    @State private var image: UIImage?
+    @State private var pixels = 2048
+    @State private var loadTask: Task<Void, Never>?
+    @State private var loadID = UUID()
     @State private var isLoadingImage = false
     @State private var scale: CGFloat = 1
     @State private var offset: CGSize = .zero
@@ -22,7 +26,7 @@ struct NASImageView: View {
             Color.black.ignoresSafeArea()
 
             // Image content
-            if let data = imageData, let uiImage = UIImage(data: data) {
+            if let uiImage = image {
                 Image(uiImage: uiImage)
                     .resizable()
                     .scaledToFit()
@@ -81,14 +85,12 @@ struct NASImageView: View {
                 else { scale = 2.5 }
             }
         }
-        .onAppear {
-            currentIndex = initialIndex
-            if let data = initialData {
-                imageData = data
-            } else {
-                loadImage(at: initialIndex)
-            }
-        }
+        .onGeometryChange(for: Int.self) { [displayScale] proxy in
+            ImageSizing.pixels(points: proxy.size.width * 2, scale: displayScale)
+        } action: { pixels = $0 }
+        .onAppear { currentIndex = initialIndex; loadImage(at: initialIndex) }
+        .onChange(of: pixels) { loadImage(at: currentIndex) }
+        .onDisappear { loadTask?.cancel() }
     }
 
     // MARK: - Navigation
@@ -105,21 +107,23 @@ struct NASImageView: View {
     }
 
     private func loadImage(at index: Int) {
-        guard index >= 0, index < files.count else { return }
-        let entry = files[index]
-        isLoadingImage = true
-        imageData = nil
-
-        // SMB: read file
-        guard let client else { isLoadingImage = false; return }
-        Task {
-            let data = try? await client.readFile(at: entry.path)
-            await MainActor.run {
-                withAnimation(.easeIn(duration: 0.15)) {
-                    imageData = data
-                }
-                isLoadingImage = false
-            }
+        loadTask?.cancel()
+        let id = UUID(); loadID = id
+        let width = pixels
+        let preloaded = index == initialIndex ? initialData : nil
+        let entry = files.indices.contains(index) ? files[index] : nil
+        isLoadingImage = true; image = nil
+        loadTask = Task {
+            let data: Data?
+            if let preloaded { data = preloaded }
+            else if let entry, let client { data = try? await client.readFile(at: entry.path) }
+            else { data = nil }
+            guard !Task.isCancelled else { return }
+            let work = Task.detached(priority: .userInitiated) { data.flatMap { ImageDecoder.decode($0, sizing: .page(width: width)) } }
+            let decoded = await withTaskCancellationHandler { await work.value } onCancel: { work.cancel() }
+            guard !Task.isCancelled, loadID == id else { return }
+            withAnimation(.easeIn(duration: 0.15)) { image = decoded }
+            isLoadingImage = false; loadTask = nil
         }
     }
 
@@ -144,7 +148,7 @@ struct NASImageView: View {
     }
 }
 
-/// Legacy single-data image viewer (still used by NASBrowserView for in-memory data).
+/// Image presentation for an already downloaded, bounded resource.
 struct NASImageDataView: View {
     let data: Data
 

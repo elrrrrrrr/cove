@@ -1,16 +1,18 @@
 import SwiftUI
 import SwiftData
+import os
 
 /// Root container — iPhone uses TabView, iPad uses NavigationSplitView.
 struct ContentView: View {
+    var downloadManager: DownloadManager = .shared
     @Environment(\.horizontalSizeClass) private var hSizeClass
     @State private var openedSite: SiteDefinition?
     @State private var importError: String?
 
     var body: some View {
         Group {
-            if hSizeClass == .regular { iPadRootView() }
-            else { iPhoneRootView() }
+            if hSizeClass == .regular { iPadRootView(downloadManager: downloadManager) }
+            else { iPhoneRootView(downloadManager: downloadManager) }
         }
         .onOpenURL { url in
             guard url.pathExtension.lowercased() == "site" else { return }
@@ -29,12 +31,13 @@ struct ContentView: View {
 // MARK: - iPhone: TabView
 
 private struct iPhoneRootView: View {
+    let downloadManager: DownloadManager
     @State private var selectedTab: AppTab = .home
 
     var body: some View {
         TabView(selection: $selectedTab) {
             Tab("主页", systemImage: "house.fill", value: AppTab.home) {
-                HomeView()
+                HomeView(downloadManager: downloadManager)
             }
             Tab("收藏", systemImage: "heart.fill", value: AppTab.favorites) {
                 FavoritesView()
@@ -46,13 +49,14 @@ private struct iPhoneRootView: View {
                 SettingsView()
             }
         }
-        .overlay { PersistenceObserver() }
+        .overlay { PersistenceObserver(manager: downloadManager) }
     }
 }
 
 // MARK: - iPad: NavigationSplitView (3-column)
 
 private struct iPadRootView: View {
+    let downloadManager: DownloadManager
     @State private var selectedTab: AppTab? = .home
 
     var body: some View {
@@ -61,17 +65,18 @@ private struct iPadRootView: View {
                 Label(tab.label, systemImage: tab.icon)
                     .tag(tab)
             }
+            .appSurface()
             .navigationTitle("EasyReader")
         } detail: {
             switch selectedTab {
-            case .home:      HomeView()
+            case .home:      HomeView(downloadManager: downloadManager)
             case .favorites: FavoritesView()
             case .nas:       NASBrowserView()
             case .settings:  SettingsView()
-            case nil:        HomeView()
+            case nil:        HomeView(downloadManager: downloadManager)
             }
         }
-        .overlay { PersistenceObserver() }
+        .overlay { PersistenceObserver(manager: downloadManager) }
     }
 }
 
@@ -109,15 +114,16 @@ struct ContentPlaceholderView: View {
 /// Observes pendingSave / pendingPersist and persists to SwiftData.
 /// Isolated from the root view so download progress doesn't trigger full tab re-evaluation.
 private struct PersistenceObserver: View {
+    let manager: DownloadManager
     @Environment(\.modelContext) private var modelContext
 
     var body: some View {
         Color.clear
             .frame(width: 0, height: 0)
             .allowsHitTesting(false)
-            .onChange(of: DownloadManager.shared.pendingPersist.count) { _, count in
-                guard count > 0 else { return }
-                let batch = DownloadManager.shared.drainPendingPersist()
+            .onChange(of: manager.pendingPersist.map(\.id), initial: true) { _, ids in
+                guard !ids.isEmpty else { return }
+                let batch = manager.drainPendingPersist()
                 for dl in batch {
                     let item = OfflineItem(
                         title: dl.title,
@@ -129,6 +135,8 @@ private struct PersistenceObserver: View {
                     item.thumbnailData = dl.thumbnailData
                     modelContext.insert(item)
                 }
+                do { try modelContext.save() }
+                catch { Logger(subsystem: "Cove", category: "Storage").error("保存离线记录失败：\(error.localizedDescription, privacy: .private)") }
             }
     }
 }

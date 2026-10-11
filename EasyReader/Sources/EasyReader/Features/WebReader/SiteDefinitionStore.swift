@@ -33,6 +33,52 @@ final class SiteDefinitionStore {
         try replace(values)
     }
 
+    /// Apply an explicit configuration edit without reseeding deleted bookmarks.
+    func saveConfiguration(_ value: SiteDefinition, for existing: BookmarkSite, context: ModelContext) throws {
+        try value.validate()
+        let previous = definition(id: existing.definitionID) ?? existing.url.flatMap { SiteParserRegistry.definition(for: $0) }
+        if let previous, previous.id != value.id {
+            throw SiteDefinitionError.invalid("已有配置的标识不能修改；可导出后另存为新站点")
+        }
+        let saved = definitions
+        do {
+            try context.save()
+            try save(value)
+            let bookmarks = try context.fetch(FetchDescriptor<BookmarkSite>())
+            for bookmark in bookmarks where bookmark.id == existing.id || (previous != nil && bookmark.definitionID == previous?.id) {
+                let oldEntry = previous.flatMap { old in
+                    old.entries.first { $0.id == bookmark.entryID }
+                        ?? old.entries.first { $0.url(in: old)?.absoluteString == bookmark.urlString }
+                        ?? (bookmark.id == existing.id && old.entries.count == 1 ? old.entries.first : nil)
+                }
+                let next = value.entries.first { $0.id == oldEntry?.id }
+                    ?? (previous == nil && bookmark.id == existing.id ? value.entries.first { $0.url(in: value)?.absoluteString == bookmark.urlString } ?? value.entries.first : nil)
+                guard let next else { continue }
+                bookmark.definitionID = value.id; bookmark.entryID = next.id
+                if let oldEntry, oldEntry.name != next.name { bookmark.name = next.name }
+                if let oldEntry, let previous, oldEntry.url(in: previous) != next.url(in: value), let url = next.url(in: value) { bookmark.urlString = url.absoluteString }
+                if let oldEntry, oldEntry.category != next.category { bookmark.category = SiteCategory(configurationValue: next.category) ?? bookmark.category }
+                if previous == nil {
+                    bookmark.name = next.name
+                    bookmark.urlString = next.url(in: value)?.absoluteString ?? bookmark.urlString
+                    bookmark.category = SiteCategory(configurationValue: next.category) ?? bookmark.category
+                }
+            }
+            existing.definitionID = value.id; existing.parserOverrides = nil
+            var additions = value
+            additions.entries = value.entries.filter { entry in
+                if let previous { return !previous.entries.contains { $0.id == entry.id } }
+                return entry.id != existing.entryID
+            }
+            addEntries(additions, context: context)
+            try context.save()
+        } catch {
+            context.rollback()
+            try? replace(saved)
+            throw error
+        }
+    }
+
     func replace(_ values: [SiteDefinition]) throws {
         for value in values { try value.validate() }
         guard Set(values.map(\.id)).count == values.count else { throw SiteDefinitionError.invalid("站点 id 重复") }
@@ -63,7 +109,7 @@ final class SiteDefinitionStore {
     }
 
     /// A fresh installation imports once, including when the bundle contains no definitions.
-    /// Upgrades only migrate existing bookmarks/referenced pages, never add new bundled entries.
+    /// Existing libraries associate referenced rules without adding bundled entries.
     func initialize(context: ModelContext, freshInstall: Bool, defaults: UserDefaults = .standard, bundle: Bundle = .main) {
         guard !initialized else { return }
         initialized = true
@@ -86,11 +132,11 @@ final class SiteDefinitionStore {
                 let favorites = try context.fetch(FetchDescriptor<FavoriteVideo>())
                 let histories = try context.fetch(FetchDescriptor<ReadingHistory>())
                 let references = bookmarks.map(\.urlString) + favorites.map(\.pageURLString) + histories.compactMap(\.url)
-                var migrated = definitions
-                for definition in bundled.definitions where !migrated.contains(where: { $0.id == definition.id }) {
-                    if references.compactMap(URL.init(string:)).contains(where: { definition.match.matches($0) }) { migrated.append(definition) }
+                var referencedDefinitions = definitions
+                for definition in bundled.definitions where !referencedDefinitions.contains(where: { $0.id == definition.id }) {
+                    if references.compactMap(URL.init(string:)).contains(where: { definition.match.matches($0) }) { referencedDefinitions.append(definition) }
                 }
-                try replace(migrated)
+                try replace(referencedDefinitions)
                 for favorite in favorites {
                     if let url = favorite.pageURL { favorite.definitionID = SiteParserRegistry.definition(for: url)?.id }
                 }
@@ -100,7 +146,6 @@ final class SiteDefinitionStore {
                 for bookmark in bookmarks {
                     guard let url = bookmark.url, let definition = SiteParserRegistry.definition(for: url) else { continue }
                     bookmark.definitionID = definition.id
-                    // Keep legacy user overrides until they are materialized by the editor.
                 }
             }
             try context.save()

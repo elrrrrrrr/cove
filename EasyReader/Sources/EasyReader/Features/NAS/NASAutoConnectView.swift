@@ -13,7 +13,9 @@ struct NASAutoConnectView: View {
     @State private var state: LoadState = .connecting
     @State private var connection: NASConnection?
     @State private var fileURL: URL?
-    @State private var error: String?
+    @State private var streamItem: AVPlayerItem?
+    @State private var imageData: Data?
+    @State private var loadTask: Task<Void, Never>?
 
     enum LoadState {
         case connecting
@@ -61,25 +63,32 @@ struct NASAutoConnectView: View {
                 }
             }
         }
+        .appSurface()
         .navigationTitle(historyItem.title)
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { connectAndLoad() }
+        .onDisappear {
+            loadTask?.cancel()
+            if let fileURL { try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent()) }
+        }
     }
 
     @ViewBuilder
     private var readyView: some View {
         let ft = historyItem.fileType
-        if let url = fileURL {
+        if let streamItem {
+            NASVideoView(streamItem: streamItem)
+        } else if ft == .audio {
+            NASAudioView(trackName: historyItem.title, trackPath: historyItem.filePath ?? "")
+        } else if let imageData {
+            NASImageView(initialData: imageData)
+        } else if let url = fileURL {
             switch ft {
-            case .txt: TXTReaderView(fileURL: url)
+            case .txt: TXTReaderView(fileURL: url, historyItem: historyItem)
             case .pdf: PDFReaderView(fileURL: url)
             case .cbz, .cbr: CBZReaderView(fileURL: url)
             case .epub: EPUBReaderView(fileURL: url)
             case .video: NASVideoView(fileURL: url)
-            case .audio:
-                NASAudioView(trackName: historyItem.title, trackPath: historyItem.filePath ?? "")
-                    .onAppear { AudioPlayerManager.shared.play(url: url, name: historyItem.title, path: historyItem.filePath ?? "") }
-            case .image: NASImageView(initialData: try? Data(contentsOf: url))
             default: Text("不支持的格式")
             }
         }
@@ -99,6 +108,9 @@ struct NASAutoConnectView: View {
             return
         }
 
+        loadTask?.cancel()
+        streamItem = nil
+        imageData = nil
         state = .connecting
 
         guard !config.requiresSMBSetup else {
@@ -111,41 +123,51 @@ struct NASAutoConnectView: View {
     private func connectSMBAndLoad(config: NASConfig, password: String, filePath: String) {
         let snap = NASConfigSnapshot(config: config)
         let client = SMBClient(snapshot: snap)
-        Task {
+        loadTask = Task {
             do {
                 try await client.connect(password: password)
+                try Task.checkCancellation()
                 let conn = NASConnection.smb(client)
-                await MainActor.run { connection = conn }
+                connection = conn
                 await loadFile(connection: conn, filePath: filePath)
             } catch {
-                await MainActor.run { state = .failed(error.localizedDescription) }
+                guard !Task.isCancelled else { return }
+                state = .failed(error.localizedDescription)
             }
         }
     }
 
 
-
-
-
     private func loadFile(connection: NASConnection, filePath: String) async {
-        // Read through SMB into a local file: download to temp file
         do {
-            await MainActor.run { state = .downloading(0) }
-            let data = try await connection.readFile(at: filePath) { pct in
-                Task { @MainActor in state = .downloading(pct) }
+            guard let client = connection.smbClient else { throw SMBError.notConnected }
+            switch historyItem.fileType {
+            case .video where SMBStreamLoader.supportsVideo(path: filePath):
+                streamItem = SMBStreamLoader.makePlayerItem(client: client, remotePath: filePath)
+            case .audio:
+                let item = SMBStreamLoader.makePlayerItem(client: client, remotePath: filePath)
+                AudioPlayerManager.shared.play(item: item, name: historyItem.title, path: filePath, client: client)
+            case .image:
+                imageData = try await client.readFile(at: filePath)
+            default:
+                state = .downloading(0)
+                let url = try await client.temporaryFile(for: filePath) { pct in
+                    Task { @MainActor in
+                        guard case .downloading = state else { return }
+                        state = .downloading(pct)
+                    }
+                }
+                guard !Task.isCancelled else {
+                    try? FileManager.default.removeItem(at: url.deletingLastPathComponent())
+                    return
+                }
+                fileURL = url
             }
-            let tempDir = FileManager.default.temporaryDirectory
-                .appendingPathComponent("NASOpen", isDirectory: true)
-            try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
-            let filename = (filePath as NSString).lastPathComponent
-            let dest = tempDir.appendingPathComponent(filename)
-            try data.write(to: dest)
-            await MainActor.run {
-                fileURL = dest
-                state = .ready
-            }
+            try Task.checkCancellation()
+            state = .ready
         } catch {
-            await MainActor.run { state = .failed("加载失败: \(error.localizedDescription)") }
+            guard !Task.isCancelled else { return }
+            state = .failed("加载失败: \(error.localizedDescription)")
         }
     }
 }

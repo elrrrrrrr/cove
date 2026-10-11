@@ -1,0 +1,12 @@
+[
+  {
+    "title": "案例一",
+    "url": "https://media.example/watch/1",
+    "thumbnail": "https://images.example/1.png"
+  },
+  {
+    "title": "案例二",
+    "url": "https://media.example/watch/2?part=1&token=fixture",
+    "thumbnail": "https://media.example/covers/2.png"
+  }
+]

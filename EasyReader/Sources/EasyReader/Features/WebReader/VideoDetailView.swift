@@ -15,6 +15,8 @@ struct VideoDetailView: View {
     @State private var showDiagnostic  = false
     @State private var dragOffset      : CGFloat = 0
     @State private var isAdvancingEpisode = false
+    @State private var loadingScrollable = false
+    @State private var showParsingWeb = false
     // Pre-populate from L0 synchronous cache — no blank frame when re-entering
     @State private var thumbImage      : UIImage?
     @Environment(\.dismiss) private var dismiss
@@ -45,25 +47,28 @@ struct VideoDetailView: View {
                     loadingOverlay.transition(.opacity)
 
                 case .found(let result):
-                    NativeVideoPlayer(
-                        url: result.streamURL,
-                        headers: result.headers,
-                        startTime: savedProgress,
-                        player: $player,
-                        onPlaybackEnded: { playNextEpisode(from: result) }
-                    )
-                        .id(currentPageURL)
-                        .ignoresSafeArea()
-                        .overlay(alignment: .topTrailing) {
-                            if let player {
-                                VideoNetworkSpeedBadge(player: player)
-                                    .padding(.top, 54)
-                                    .padding(.trailing, 16)
+                    if !showParsingWeb {
+                        NativeVideoPlayer(
+                            url: result.streamURL,
+                            headers: result.headers,
+                            startTime: savedProgress,
+                            player: $player,
+                            onPlaybackEnded: { playNextEpisode(from: result) }
+                        )
+                            .id(currentPageURL)
+                            .ignoresSafeArea()
+                            .overlay(alignment: .topTrailing) {
+                                if let player {
+                                    VideoNetworkSpeedBadge(player: player)
+                                        .padding(.top, 54)
+                                        .padding(.trailing, 16)
+                                }
                             }
-                        }
-                        .transition(.opacity)
+                            .transition(.opacity)
+                    }
 
                 case .notFound:
+                    if !showParsingWeb {
                     WebReaderView(url: currentPageURL)
                         .transition(.opacity)
                         .overlay(alignment: .topTrailing) {
@@ -79,6 +84,7 @@ struct VideoDetailView: View {
                             .padding(.trailing, 16)
                             .padding(.top, 52)
                         }
+                    }
                 }
 
                 // Diagnostic overlay (notFound only) — bottom-right floating button
@@ -95,6 +101,11 @@ struct VideoDetailView: View {
         .navigationBarHidden(true)
         .toolbar(.hidden, for: .tabBar)
         .background(SwipeBackEnabler())
+        .sheet(isPresented: $showParsingWeb) {
+            ParsingWebViewSheet(webView: extractor.webView,
+                request: extractor.originalPageRequest ?? URLRequest(url: currentPageURL),
+                status: extractor.state == .loading ? "解析视频地址中…" : "视频解析已结束")
+        }
         .onAppear {
             guard player == nil else { return }
             // Restore saved progress before starting extraction (must run first for cache hits)
@@ -111,15 +122,15 @@ struct VideoDetailView: View {
         .onAppear {
             // L0 synchronous read — instant if thumbnail was already cached this session
             if let url = item.thumbnail {
-                thumbImage = ImageMemoryCache.shared.image(for: url)
+                thumbImage = ImageMemoryCache.shared.image(for: ThumbnailRequest(url: url, referer: item.pageURL, definitionID: definitionID))
             }
         }
         .task(id: item.thumbnail) {
             guard let url = item.thumbnail else { return }
             if thumbImage != nil { return }   // already got it from L0
-            if let data = await ThumbnailCache.shared.data(for: url) {
-                thumbImage = UIImage(data: data)
-            }
+            let image = await ImagePipeline.shared.image(for: ThumbnailRequest(url: url, referer: item.pageURL, definitionID: definitionID))
+            guard !Task.isCancelled else { return }
+            thumbImage = image
         }
         .onChange(of: extractor.state) { _, state in
             if case .found(let result) = state {
@@ -210,57 +221,11 @@ struct VideoDetailView: View {
     // MARK: - Loading overlay
 
     private var loadingOverlay: some View {
-        ZStack {
-            if let img = thumbImage {
-                Image(uiImage: img)
-                    .resizable()
-                    .scaledToFill()
-                    .ignoresSafeArea()
-                    .blur(radius: 24)
-                    .overlay(Color.black.opacity(0.6))
-            } else {
-                Color.black
-            }
-
-            VStack(spacing: 24) {
-                ZStack(alignment: .bottomTrailing) {
-                    if let img = thumbImage {
-                        Image(uiImage: img)
-                            .resizable()
-                            .scaledToFit()
-                            .frame(maxWidth: 320)
-                            .clipShape(RoundedRectangle(cornerRadius: 14))
-                            .shadow(color: .black.opacity(0.6), radius: 24, y: 8)
-                    }
-                    if !item.duration.isEmpty {
-                        Text(item.duration)
-                            .font(.caption.monospacedDigit())
-                            .padding(.horizontal, 7).padding(.vertical, 3)
-                            .background(.black.opacity(0.75), in: RoundedRectangle(cornerRadius: 5))
-                            .foregroundStyle(.white)
-                            .padding(10)
-                    }
-                }
-                HStack(spacing: 10) {
-                    ProgressView().tint(.white)
-                    Text(isAdvancingEpisode ? "正在切换剧集…" : "解析视频地址中…")
-                        .foregroundStyle(.white.opacity(0.85))
-                        .font(.subheadline)
-                }
-                Text(item.title)
-                    .foregroundStyle(.white)
-                    .font(.body.weight(.medium))
-                    .multilineTextAlignment(.center)
-                    .lineLimit(3)
-                    .padding(.horizontal, 32)
-                Button("取消") {
-                    extractor.cancel()
-                    dismiss()
-                }
-                .buttonStyle(.bordered)
-                .tint(.white)
-                .padding(.top, 4)
-            }
+        VideoLoadingView(title: item.title, duration: item.duration, image: thumbImage,
+            advancing: isAdvancingEpisode, onOverflow: { loadingScrollable = $0 },
+            onViewPage: { showParsingWeb = true }) {
+            extractor.cancel()
+            dismiss()
         }
     }
 
@@ -271,12 +236,14 @@ struct VideoDetailView: View {
         DragGesture(minimumDistance: 30)
             .onChanged { value in
                 guard extractor.state != .notFound else { return }
+                if extractor.state == .loading && loadingScrollable { return }
                 if value.translation.height > 0 {
                     dragOffset = value.translation.height
                 }
             }
             .onEnded { value in
                 guard extractor.state != .notFound else { return }
+                if extractor.state == .loading && loadingScrollable { return }
                 if value.translation.height > 150 || value.predictedEndTranslation.height > 400 {
                     saveProgress()
                     withAnimation(.easeOut(duration: 0.2)) {
@@ -304,6 +271,70 @@ struct VideoDetailView: View {
         )
         if let existing = try? modelContext.fetch(descriptor).first {
             existing.progress = seconds
+        }
+    }
+}
+
+/// The cover cannot expand the loading layout beyond its viewport.
+struct VideoLoadingView: View {
+    let title: String
+    let duration: String
+    let image: UIImage?
+    var advancing = false
+    var onOverflow: (Bool) -> Void = { _ in }
+    var onViewPage: (() -> Void)? = nil
+    var onCancel: () -> Void
+
+    var body: some View {
+        GeometryReader { geometry in
+            ZStack {
+                if let image {
+                    Image(uiImage: image).resizable().scaledToFill()
+                        .frame(width: geometry.size.width, height: geometry.size.height)
+                        .clipped().blur(radius: 24).overlay(.black.opacity(0.6))
+                } else { Color.black }
+                VStack(spacing: 0) {
+                    ScrollView {
+                        VStack(spacing: 24) {
+                            if let image {
+                                Image(uiImage: image).resizable().scaledToFit()
+                                    .frame(maxWidth: 320, maxHeight: min(240, geometry.size.height * 0.35))
+                                    .clipShape(RoundedRectangle(cornerRadius: 14))
+                                    .overlay(alignment: .bottomTrailing) {
+                                        if !duration.isEmpty {
+                                            Text(duration).font(.caption.monospacedDigit())
+                                                .padding(6).background(.black.opacity(0.75), in: RoundedRectangle(cornerRadius: 5))
+                                                .foregroundStyle(.white).padding(8)
+                                        }
+                                    }
+                            }
+                            HStack(spacing: 10) {
+                                ProgressView().tint(.white)
+                                Text(advancing ? "正在切换剧集…" : "解析视频地址中…")
+                                    .foregroundStyle(.white.opacity(0.85)).font(.subheadline)
+                            }
+                            Text(title).font(.body.weight(.medium)).foregroundStyle(.white)
+                                .multilineTextAlignment(.center).lineLimit(nil)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .frame(maxWidth: .infinity)
+                                .accessibilityIdentifier("video-loading-title")
+                        }
+                        .frame(width: max(1, min(geometry.size.width - 48, 420)))
+                        .padding(.vertical, 24)
+                        .frame(maxWidth: .infinity, minHeight: max(1, geometry.size.height - 64))
+                    }
+                    .scrollIndicators(.hidden)
+                    .onScrollGeometryChange(for: Bool.self) { $0.contentSize.height > $0.containerSize.height + 1 } action: { _, value in onOverflow(value) }
+                    HStack(spacing: 16) {
+                        if let onViewPage {
+                            Button("查看原始网页", systemImage: "safari", action: onViewPage)
+                                .accessibilityIdentifier("inspect-current-webpage")
+                        }
+                        Button("取消", action: onCancel)
+                    }.buttonStyle(.bordered).tint(.white).padding(.horizontal, 24).padding(.bottom, 16)
+                }
+            }
+            .frame(width: geometry.size.width, height: geometry.size.height)
         }
     }
 }
@@ -433,6 +464,7 @@ private struct DiagnosticSheet: View {
                 }
                 .padding()
             }
+            .appSurface()
             .navigationTitle("提取失败诊断")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

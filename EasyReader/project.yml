@@ -58,6 +58,16 @@ targets:
       - path: Tests/Fixtures/Sites
         type: folder
         buildPhase: resources
+      - path: Tests/Fixtures/Audio
+        type: folder
+        buildPhase: resources
+      - path: Tests/Fixtures/SiteRegressions
+        type: folder
+        buildPhase: resources
+    preBuildScripts:
+      - name: Bundle private regression snapshots for tests
+        script: '"${SRCROOT}/../scripts/bundle-site-tests.sh"'
+        basedOnDependencyAnalysis: false
     dependencies:
       - target: EasyReader
     settings:
@@ -76,8 +86,8 @@ targets:
           - "**/*.md"
       - path: Resources/Assets.xcassets
         buildPhase: resources
-    resources:
       - path: Sources/EasyReader/Features/WebReader/BlockerRules.json
+        buildPhase: resources
     preBuildScripts:
       - name: Bundle local site definitions
         script: '"${SRCROOT}/../scripts/bundle-sites.sh"'
@@ -101,6 +111,7 @@ targets:
             CFBundleTypeRole: Editor
             LSHandlerRank: Owner
             LSItemContentTypes: [dev.cove.site]
+        LSSupportsOpeningDocumentsInPlace: true
         CFBundleDisplayName: Cove
         CFBundleVersion: "1"
         CFBundleShortVersionString: "1.0"
@@ -123,7 +134,6 @@ targets:
           - audio
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
-          NSAllowsArbitraryLoads: true
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: true
           UISceneConfigurations: {}

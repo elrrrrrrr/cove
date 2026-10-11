@@ -70,6 +70,7 @@ final class VideoURLExtractor: NSObject {
     var diagnostic: String? = nil
     let webView: WKWebView
     private var targetURL: URL?
+    var originalPageRequest: URLRequest? { targetURL.map { pageRequest(url: $0) } }
     private var definitionID: String?
     private var extractTask: Task<Void, Never>?
     private var loadTimeoutTask: Task<Void, Never>?
@@ -286,14 +287,6 @@ final class VideoURLExtractor: NSObject {
 extension VideoURLExtractor: WKNavigationDelegate {
     nonisolated func webView(_ wv: WKWebView, didFinish _: WKNavigation!) {
         Task { @MainActor in self.startExtraction() }
-    }
-    nonisolated func webView(
-        _ webView: WKWebView,
-        didReceive challenge: URLAuthenticationChallenge,
-        completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
-    ) {
-        if WebReaderTLS.handle(challenge, completionHandler: completionHandler) { return }
-        completionHandler(.performDefaultHandling, nil)
     }
     nonisolated func webView(_ wv: WKWebView, didFail _: WKNavigation!, withError _: Error) {
         Task { @MainActor in self.state = .notFound }

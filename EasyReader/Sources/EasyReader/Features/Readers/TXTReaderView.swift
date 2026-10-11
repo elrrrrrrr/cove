@@ -4,13 +4,13 @@ import CoreText
 
 // MARK: - Data types
 
-struct PageContent: Identifiable {
+struct PageContent: Identifiable, Sendable {
     let id: Int
     let text: String
     let chapterTitle: String?
 }
 
-struct Chapter: Identifiable {
+struct Chapter: Identifiable, Sendable {
     let id: Int
     let title: String
     let location: Int   // character offset in full text
@@ -21,6 +21,19 @@ struct Chapter: Identifiable {
 
 enum TextPaginator {
 
+    static func load(_ url: URL) async throws -> (text: String, chapters: [Chapter]) {
+        let work = Task.detached(priority: .userInitiated) {
+            let data = try Data(contentsOf: url)
+            let encoding = String.Encoding(rawValue: CFStringConvertEncodingToNSStringEncoding(CFStringEncoding(CFStringEncodings.GB_18030_2000.rawValue)))
+            guard let text = String(data: data, encoding: .utf8) ?? String(data: data, encoding: encoding) else {
+                throw ReaderSafetyError.message("无法识别小说文件编码")
+            }
+            try Task.checkCancellation()
+            return (text: text, chapters: detectChapters(in: text))
+        }
+        return try await withTaskCancellationHandler { try await work.value } onCancel: { work.cancel() }
+    }
+
     static func paginate(
         text: String,
         font: UIFont,
@@ -29,7 +42,7 @@ enum TextPaginator {
         insets: UIEdgeInsets,
         chapters: [Chapter]
     ) async -> [PageContent] {
-        await Task.detached(priority: .userInitiated) {
+        let work = Task<[PageContent], Never>.detached(priority: .userInitiated) {
             let drawSize = CGSize(
                 width:  containerSize.width  - insets.left - insets.right,
                 height: containerSize.height - insets.top  - insets.bottom
@@ -53,6 +66,7 @@ enum TextPaginator {
             var startIndex = 0
 
             while startIndex < totalLength {
+                guard !Task.isCancelled else { return [] as [PageContent] }
                 let path = CGPath(rect: CGRect(origin: .zero, size: drawSize), transform: nil)
                 let frame = CTFramesetterCreateFrame(framesetter, CFRangeMake(startIndex, 0), path, nil)
                 let visibleRange = CTFrameGetVisibleStringRange(frame)
@@ -76,7 +90,8 @@ enum TextPaginator {
                 startIndex = visibleRange.location + visibleRange.length
             }
             return pages
-        }.value
+        }
+        return await withTaskCancellationHandler { await work.value } onCancel: { work.cancel() }
     }
 
     // Pre-compiled chapter detection regex patterns
@@ -145,7 +160,8 @@ struct TXTReaderView: View {
     @Environment(\.modelContext) private var context
     @Environment(\.dismiss) private var dismiss
     @AppStorage("readerFontSize") private var fontSize: Double = 17
-    @AppStorage("readerTheme")    private var theme: ReaderTheme = .system
+    @AppStorage(AppTheme.storageKey) private var theme: AppTheme = .system
+    @AppStorage(NovelReadingMode.storageKey) private var readingMode: NovelReadingMode = .paged
     @AppStorage("readerLineSpacing") private var lineSpacing: Double = 8
 
     @State private var fullText = ""
@@ -159,24 +175,14 @@ struct TXTReaderView: View {
     @State private var showChapterList = false
     @State private var containerSize: CGSize = .zero
     @State private var dragOffset: CGFloat = 0
+    @State private var scrollPage: Int?
+    @State private var paginationTask: Task<Void, Never>?
+    @State private var paginationRevision = 0
+    @State private var restoredProgress: Double = 0
+    @State private var scrollProgress: Double = 0
 
-    private var backgroundColor: Color {
-        switch theme {
-        case .dark:   Color.black
-        case .sepia:  Color(red: 0.98, green: 0.95, blue: 0.87)
-        case .light:  Color.white
-        case .system: Color(UIColor.systemBackground)
-        }
-    }
-
-    private var textColor: Color {
-        switch theme {
-        case .dark:   Color(white: 0.85)
-        case .sepia:  Color(red: 0.30, green: 0.22, blue: 0.12)
-        case .light:  Color.black
-        case .system: Color(UIColor.label)
-        }
-    }
+    private var backgroundColor: Color { theme.backgroundColor }
+    private var textColor: Color { theme.textColor }
 
     var body: some View {
         ZStack {
@@ -213,7 +219,8 @@ struct TXTReaderView: View {
                     Button("返回") { dismiss() }
                 }
             } else {
-                pageContentView
+                if readingMode == .scroll { scrollingContentView }
+                else { pageContentView }
                 if showBars {
                     VStack(spacing: 0) { topBar; Spacer(); bottomBar }
                         .transition(.opacity)
@@ -223,14 +230,45 @@ struct TXTReaderView: View {
         .navigationBarHidden(true)
         .statusBarHidden(!showBars)
         .task { await loadFile() }
-        .onDisappear { saveProgress() }
+        .onDisappear { paginationTask?.cancel(); paginationRevision += 1; saveProgress() }
         .onChange(of: fontSize) { repaginate() }
         .onChange(of: lineSpacing) { repaginate() }
+        .onChange(of: readingMode) { _, mode in
+            if mode == .scroll { scrollProgress = Double(currentPage) / Double(max(pages.count - 1, 1)) }
+            scrollPage = currentPage; dragOffset = 0
+        }
+        .onChange(of: scrollPage) { _, page in
+            if readingMode == .scroll, let page { currentPage = page }
+        }
         .sheet(isPresented: $showChapterList) { chapterListSheet }
-        .preferredColorScheme(theme == .dark ? .dark : theme == .system ? nil : .light)
+        .preferredColorScheme(theme.colorScheme)
     }
 
     // MARK: - Page content + swipe / tap
+
+    private var scrollingContentView: some View {
+        ScrollView {
+            LazyVStack(spacing: 0) {
+                ForEach(pages) { page in
+                    Text(page.text).font(.system(size: fontSize)).lineSpacing(lineSpacing)
+                        .foregroundStyle(textColor).fixedSize(horizontal: false, vertical: true)
+                        .frame(width: max(containerSize.width - 40, 1), alignment: .leading).id(page.id)
+                }
+            }
+            .scrollTargetLayout()
+            .padding(.horizontal, 20)
+            .padding(.top, 60).padding(.bottom, 80)
+        }
+        .scrollPosition(id: $scrollPage, anchor: .top)
+        .onScrollGeometryChange(for: Double.self) { geometry in
+            let distance = max(geometry.contentSize.height - geometry.containerSize.height, 1)
+            return min(max(Double(geometry.contentOffset.y / distance), 0), 1)
+        } action: { _, progress in
+            scrollProgress = progress
+        }
+        .accessibilityIdentifier("novel-scroll")
+        .simultaneousGesture(TapGesture().onEnded { withAnimation { showBars.toggle() } })
+    }
 
     private var pageContentView: some View {
         GeometryReader { geo in
@@ -375,12 +413,12 @@ struct TXTReaderView: View {
                     Text("\(currentPage + 1)").font(.caption).monospacedDigit().foregroundStyle(.secondary)
                     Slider(value: Binding(
                         get: { Double(currentPage) },
-                        set: { currentPage = Int($0) }
+                        set: { selectPage(Int($0)) }
                     ), in: 0...Double(max(pages.count - 1, 0)), step: 1)
                     Text("\(pages.count)").font(.caption).monospacedDigit().foregroundStyle(.secondary)
                 }
             }
-            HStack(spacing: 20) {
+            HStack(spacing: 12) {
                 HStack(spacing: 8) {
                     Button { if fontSize > 12 { fontSize -= 1 } } label: {
                         Image(systemName: "textformat.size.smaller")
@@ -391,23 +429,30 @@ struct TXTReaderView: View {
                     }
                 }
                 Divider().frame(height: 20)
-                HStack(spacing: 12) {
-                    ForEach(ReaderTheme.allCases) { t in
+                HStack(spacing: 8) {
+                    ForEach(AppTheme.allCases) { t in
                         Circle()
                             .fill(themeDotColor(t))
-                            .frame(width: 26, height: 26)
+                            .frame(width: 24, height: 24)
                             .overlay { Circle().stroke(t == theme ? Color.accentColor : .clear, lineWidth: 2) }
                             .onTapGesture { theme = t }
                     }
                 }
-                Spacer()
+                Menu {
+                    Picker("小说翻页方式", selection: $readingMode) {
+                        ForEach(NovelReadingMode.allCases) { mode in Text(mode.label).tag(mode) }
+                    }
+                } label: {
+                    Image(systemName: readingMode == .scroll ? "arrow.up.arrow.down" : "arrow.left.arrow.right")
+                }
+                .accessibilityLabel("小说翻页方式")
             }
         }
         .padding(.horizontal, 16).padding(.vertical, 12)
         .background(.ultraThinMaterial)
     }
 
-    private func themeDotColor(_ t: ReaderTheme) -> Color {
+    private func themeDotColor(_ t: AppTheme) -> Color {
         switch t {
         case .system: Color(UIColor.secondarySystemBackground)
         case .light:  .white
@@ -422,7 +467,7 @@ struct TXTReaderView: View {
         NavigationStack {
             List(chapters) { ch in
                 Button {
-                    currentPage = ch.pageIndex
+                    selectPage(ch.pageIndex)
                     showChapterList = false
                     showBars = false
                 } label: {
@@ -433,6 +478,7 @@ struct TXTReaderView: View {
                     }
                 }
             }
+            .appSurface()
             .navigationTitle("目录")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) { Button("完成") { showChapterList = false } }
@@ -442,36 +488,45 @@ struct TXTReaderView: View {
 
     // MARK: - Load
 
+    private func selectPage(_ page: Int) {
+        currentPage = page
+        scrollPage = page
+    }
+
     private func loadFile() async {
         loadError = nil; isLoading = true
+        let path = fileURL.path
+        let stored = try? context.fetch(FetchDescriptor<ReadingHistory>(predicate: #Predicate { $0.filePath == path })).first
+        restoredProgress = historyItem?.progress ?? stored?.progress ?? 0
         do {
-            fullText = try String(contentsOf: fileURL, encoding: .utf8)
+            let loaded = try await TextPaginator.load(fileURL)
+            try Task.checkCancellation()
+            fullText = loaded.text
+            chapters = loaded.chapters
         } catch {
-            if let data = try? Data(contentsOf: fileURL),
-               let text = String(data: data, encoding: .init(rawValue: CFStringConvertEncodingToNSStringEncoding(CFStringEncoding(CFStringEncodings.GB_18030_2000.rawValue)))) {
-                fullText = text
-            } else {
-                loadError = error.localizedDescription; isLoading = false; return
-            }
+            guard !Task.isCancelled else { return }
+            loadError = error.localizedDescription; isLoading = false; return
         }
         isLoading = false
-        chapters = TextPaginator.detectChapters(in: fullText)
         await paginateText()
     }
 
     private func repaginate() {
         guard !fullText.isEmpty, containerSize != .zero else { return }
-        Task { await paginateText() }
+        paginationTask?.cancel()
+        paginationTask = Task { await paginateText() }
     }
 
     private func paginateText() async {
-        isPaginating = true
         // Wait for containerSize — GeometryReader will set it and call repaginate()
         guard containerSize.width > 0, containerSize.height > 0 else { return }
+        isPaginating = true
+        paginationRevision += 1
+        let revision = paginationRevision
 
         let savedProgress: Double = pages.isEmpty
-            ? (historyItem?.progress ?? 0)
-            : Double(currentPage) / Double(max(pages.count, 1))
+            ? restoredProgress
+            : (readingMode == .scroll ? scrollProgress : Double(currentPage) / Double(max(pages.count - 1, 1)))
 
         let result = await TextPaginator.paginate(
             text: fullText,
@@ -481,18 +536,24 @@ struct TXTReaderView: View {
             insets: UIEdgeInsets(top: 60, left: 20, bottom: 80, right: 20),
             chapters: chapters
         )
+        guard !Task.isCancelled, paginationRevision == revision else { return }
         TextPaginator.assignPageIndices(chapters: &chapters, pages: result)
         pages = result
         isPaginating = false
 
         if !pages.isEmpty {
             currentPage = min(Int(savedProgress * Double(pages.count - 1)), pages.count - 1)
+            scrollPage = currentPage
+            scrollProgress = savedProgress
         }
     }
 
     private func saveProgress() {
-        let p = pages.isEmpty ? 0 : Double(currentPage) / Double(max(pages.count - 1, 1))
-        if let item = historyItem {
+        guard !pages.isEmpty else { return }
+        let p = readingMode == .scroll ? scrollProgress : Double(currentPage) / Double(max(pages.count - 1, 1))
+        let path = fileURL.path
+        let stored = try? context.fetch(FetchDescriptor<ReadingHistory>(predicate: #Predicate { $0.filePath == path })).first
+        if let item = historyItem ?? stored {
             item.progress = p; item.lastReadAt = Date()
         } else {
             context.insert(ReadingHistory(
@@ -500,5 +561,6 @@ struct TXTReaderView: View {
                 filePath: fileURL.path, fileType: .txt, progress: p
             ))
         }
+        try? context.save()
     }
 }

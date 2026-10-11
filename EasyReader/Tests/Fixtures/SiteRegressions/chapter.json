@@ -1,0 +1,8 @@
+{
+  "images": [
+    "https://images.example/1.png",
+    "https://media.example/2.png"
+  ],
+  "prevChapter": "https://media.example/chapter/1",
+  "nextChapter": "https://media.example/chapter/3"
+}

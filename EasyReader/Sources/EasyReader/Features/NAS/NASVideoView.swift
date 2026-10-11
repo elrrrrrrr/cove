@@ -133,11 +133,11 @@ private struct VideoPage: View {
     let initialStreamURL: URL?
     let isActive: Bool
 
-    private static let streamableExts: Set<String> = ["mp4", "mov", "m4v", "ts"]
-
     @State private var player: AVPlayer?
     @State private var isLoadingFile = false
     @State private var loadTask: Task<Void, Never>?
+    @State private var loadError: String?
+    @State private var temporaryURL: URL?
 
     var body: some View {
         ZStack {
@@ -145,6 +145,8 @@ private struct VideoPage: View {
 
             if player != nil {
                 NASPlayerViewController(player: $player)
+            } else if let loadError {
+                Text(loadError).foregroundStyle(.white).padding()
             } else {
                 ProgressView().tint(.white)
             }
@@ -192,8 +194,7 @@ private struct VideoPage: View {
     private func loadEntry(_ entry: NASFileEntry) {
         // SMB: stream or download
         guard let client else { return }
-        let ext = (entry.name as NSString).pathExtension.lowercased()
-        if Self.streamableExts.contains(ext) {
+        if SMBStreamLoader.supportsVideo(path: entry.path) {
             let item = SMBStreamLoader.makePlayerItem(client: client, remotePath: entry.path)
             setupPlayer(item: item)
         } else {
@@ -205,6 +206,7 @@ private struct VideoPage: View {
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
         try? AVAudioSession.sharedInstance().setActive(true)
         player?.pause()
+        SMBStreamLoader.cancel(in: player?.currentItem?.asset)
         player?.replaceCurrentItem(with: nil)
         let p = AVPlayer(playerItem: item)
         player = p
@@ -215,6 +217,7 @@ private struct VideoPage: View {
         try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
         try? AVAudioSession.sharedInstance().setActive(true)
         player?.pause()
+        SMBStreamLoader.cancel(in: player?.currentItem?.asset)
         player?.replaceCurrentItem(with: nil)
         let p = AVPlayer(url: url)
         player = p
@@ -224,17 +227,16 @@ private struct VideoPage: View {
     private func downloadAndPlay(entry: NASFileEntry, client: SMBClient) {
         guard !isLoadingFile else { return }
         isLoadingFile = true
+        loadError = nil
         loadTask = Task {
             do {
-                let data = try await client.readFile(at: entry.path)
-                guard !Task.isCancelled else { return }
-                let tempDir = FileManager.default.temporaryDirectory
-                    .appendingPathComponent("NASOpen", isDirectory: true)
-                try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
-                let dest = tempDir.appendingPathComponent(entry.name)
-                try data.write(to: dest)
-                guard !Task.isCancelled else { return }
+                let dest = try await client.temporaryFile(for: entry.path)
+                guard !Task.isCancelled else {
+                    try? FileManager.default.removeItem(at: dest.deletingLastPathComponent())
+                    return
+                }
                 await MainActor.run {
+                    temporaryURL = dest
                     isLoadingFile = false
                     loadTask = nil
                     setupPlayer(url: dest)
@@ -244,6 +246,7 @@ private struct VideoPage: View {
                 await MainActor.run {
                     isLoadingFile = false
                     loadTask = nil
+                    loadError = error.localizedDescription
                 }
             }
         }
@@ -254,8 +257,11 @@ private struct VideoPage: View {
         loadTask = nil
         isLoadingFile = false
         player?.pause()
+        SMBStreamLoader.cancel(in: player?.currentItem?.asset)
         player?.replaceCurrentItem(with: nil)
         player = nil
+        if let temporaryURL { try? FileManager.default.removeItem(at: temporaryURL.deletingLastPathComponent()) }
+        temporaryURL = nil
     }
 }
 

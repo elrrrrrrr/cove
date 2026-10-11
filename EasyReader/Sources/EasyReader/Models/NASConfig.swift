@@ -10,12 +10,7 @@ final class NASConfig {
     var username: String
     var shareName: String         // SMB share name e.g. "media"
     var isActive: Bool
-    var connectionType: String = "smb"   // "smb", "quickConnect", or "fnConnect"
-    var quickConnectID: String?          // Only for QuickConnect type
-    var fnConnectID: String?             // Only for FnConnect type
-
-    /// Old remote-protocol records remain editable until the user supplies SMB coordinates.
-    var requiresSMBSetup: Bool { connectionType != "smb" || host.isEmpty || shareName.isEmpty }
+    var requiresSMBSetup: Bool { host.isEmpty || shareName.isEmpty }
 
     /// SMB connection
     init(
@@ -32,7 +27,6 @@ final class NASConfig {
         self.username = username
         self.shareName = shareName
         self.isActive = false
-        self.connectionType = "smb"
     }
 
 }

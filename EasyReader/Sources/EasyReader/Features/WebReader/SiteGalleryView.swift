@@ -8,32 +8,27 @@ struct SiteGalleryView: View {
     let siteURLString : String
     /// Non-nil when launched from BookmarkSite — used to apply custom JS overrides.
     let bookmarkSite  : BookmarkSite?
-    /// True when this view is one of the pages inside SiteTabsView's TabView.
-    /// In that context the navigation title is suppressed (the tab picker owns the title area)
-    /// and toolbar items are shown only for the currently selected page.
-    let isTabPage     : Bool
-    let isSelected    : Bool
-
-    // Called from SiteTabsView — controls tab-page behaviour.
-    init(site: BookmarkSite, isTabPage: Bool = false, isSelected: Bool = true) {
+    init(site: BookmarkSite) {
         definitionID = site.definitionID
         siteName        = site.name
         siteURLString   = site.urlString
         bookmarkSite    = site
-        self.isTabPage  = isTabPage
-        self.isSelected = isSelected
         _loader         = State(wrappedValue: Self.makeLoader())
+        _parser = State(initialValue: SiteParserRegistry.parser(for: site.urlString, definitionID: site.definitionID).applying(site.parserOverrides))
+        _navigation = State(initialValue: SiteCatalogNavigation(entryURLString: site.urlString))
+        _savedLayout = AppStorage(wrappedValue: "", BrowserLayout.preferenceKey(source: "web", location: site.id.uuidString))
     }
 
-    // Called via NavigationLink for sub-site navigation — always "selected".
+    // Sub-site navigation.
     init(name: String, urlString: String, definitionID: String? = nil) {
         self.definitionID = definitionID
         siteName      = name
         siteURLString = urlString
         bookmarkSite  = nil
-        isTabPage     = false
-        isSelected    = true
         _loader       = State(wrappedValue: Self.makeLoader())
+        _parser = State(initialValue: SiteParserRegistry.parser(for: urlString, definitionID: definitionID))
+        _navigation = State(initialValue: SiteCatalogNavigation(entryURLString: urlString))
+        _savedLayout = AppStorage(wrappedValue: "", BrowserLayout.preferenceKey(source: "web:" + (definitionID ?? ""), location: urlString))
     }
 
     /// Creates a bare PageLoader — cache is pre-populated asynchronously in .task
@@ -42,6 +37,7 @@ struct SiteGalleryView: View {
 
     @State private var loader: PageLoader
     @State private var showWeb          = false
+    @State private var showParsingWeb = false
     @State private var showPageInput    = false
     @State private var pageInputText    = ""
     @State private var showJSConfig     = false
@@ -54,27 +50,36 @@ struct SiteGalleryView: View {
     @State private var pendingEpisodeVideo: ParsedItem? = nil
     /// Cached Set so we don't allocate a new one on every body re-evaluation.
     @State private var favoriteURLCache : Set<String> = []
-    /// Currently active category URL (nil = use default siteURLString).
-    @State private var activeCategoryURL: String? = nil
+    @State private var navigation: SiteCatalogNavigation
     /// Search
     @State private var searchText       = ""
     @State private var isSearchActive   = false
+    @State private var searchUnavailable = false
     @Environment(\.horizontalSizeClass) private var hSizeClass
     @Environment(\.modelContext) private var modelContext
     @Query private var allFavorites: [FavoriteVideo]
 
     @State private var library = SiteDefinitionStore.shared
-    private var parser: SiteParser {
-        let id = bookmarkSite?.definitionID ?? definitionID
-        let _ = library.definitions
-        return SiteParserRegistry.parser(for: siteURLString, definitionID: id).applying(bookmarkSite?.parserOverrides)
+    @State private var parser: SiteParser
+    @AppStorage private var savedLayout: String
+    @State private var navigationItem: ParsedItem?
+    @State private var visibleItemID: UUID?
+    @State private var automaticImages = false
+    private var layout: BrowserLayout { BrowserLayout(rawValue: savedLayout) ?? parser.galleryLayout }
+    private var layoutSelection: Binding<BrowserLayout> {
+        Binding(get: { layout }, set: { savedLayout = $0.rawValue })
     }
-    private var effectiveURLString: String { activeCategoryURL ?? siteURLString }
-    private var siteURL: URL? { URL(string: effectiveURLString) }
+    private func refreshParser() {
+        parser = navigation.parser(definitionID: bookmarkSite?.definitionID ?? definitionID, overrides: bookmarkSite?.parserOverrides)
+        guard let url = siteURL else { return }
+        loader.load(url: url, parser: parser, forceRefresh: true)
+    }
+    private var effectiveURLString: String { navigation.categoryURLString }
+    private var siteURL: URL? { navigation.currentURL }
 
     // Grid columns based on gallery layout
     private var columns: Int {
-        switch parser.galleryLayout {
+        switch layout {
         case .list:     return 1
         case .portrait: return hSizeClass == .regular ? 4 : 3
         case .bento:    return hSizeClass == .regular ? 3 : 2
@@ -90,22 +95,25 @@ struct SiteGalleryView: View {
                 contentLayer
             }
         }
-        .navigationTitle(isTabPage ? "" : siteName)
+        .appSurface()
+        .navigationTitle(siteName)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { toolbarItems }
-        // ── Deferred loading ─────────────────────────────────────────────────
-        // Problem: TabView(.page) keeps all page views live simultaneously.
-        // If every page called loader.load() in .task, N WebViews would navigate
-        // in parallel at startup → CPU/memory spike → frame drops.
-        //
-        // Fix: only load the initially-selected tab page here; non-selected tab
-        // pages stay idle (WebView exists but is not navigated) and load on demand
-        // when the user actually swipes to them.
+        .safeAreaInset(edge: .bottom) {
+            if !showWeb, loader.state.isActive {
+                Button("查看原始网页", systemImage: "safari") { showParsingWeb = true }
+                    .accessibilityIdentifier("inspect-current-webpage")
+                    .buttonStyle(.bordered).padding(10)
+                    .frame(maxWidth: .infinity).background(.bar)
+            }
+        }
+        .sheet(isPresented: $showParsingWeb) {
+            if let request = loader.originalPageRequest ?? siteURL.map({ URLRequest(url: $0) }) {
+                ParsingWebViewSheet(webView: loader.webView, request: request, status: loader.inspectionStatus)
+            }
+        }
         .task {
             guard let url = siteURL else { return }
-            // Non-selected tab pages skip both cache pre-warm and network load;
-            // they load via onChange(of: isSelected) when the user swipes to them.
-            guard !isTabPage || isSelected else { return }
             // Async cache pre-warm (disk I/O runs on actor, not main thread)
             if case .idle = loader.state,
                let (cached, _) = await GalleryCache.load(for: parser.cacheURL(for: url)) {
@@ -113,40 +121,37 @@ struct SiteGalleryView: View {
             }
             loader.load(url: url, parser: parser)
         }
-        // When the user swipes to this tab page, trigger its load for the first time.
-        .onChange(of: isSelected) { _, selected in
-            guard isTabPage, selected, let url = siteURL else { return }
-            if case .idle = loader.state {
-                Task {
-                    if let (cached, _) = await GalleryCache.load(for: parser.cacheURL(for: url)) {
-                        loader.preload(cached)
-                    }
-                    loader.load(url: url, parser: parser)
-                }
-            }
-        }
         // Keep favoriteURLCache in sync — avoids rebuilding a Set<String> on
         // every body re-evaluation (which can happen many times during a load).
         .onChange(of: allFavorites) { _, favorites in
             favoriteURLCache = Set(favorites.map(\.pageURLString))
         }
         .onChange(of: library.definitions) { _, _ in
-            guard !isTabPage || isSelected,
-                  let url = URL(string: activeCategoryURL ?? siteURLString) else { return }
-            loader.load(url: url, parser: parser, forceRefresh: true)
+            refreshParser()
         }
+        .onChange(of: bookmarkSite?.customParserConfig) { _, _ in refreshParser() }
+        .onChange(of: bookmarkSite?.definitionID) { _, _ in refreshParser() }
+        .onChange(of: loader.state, initial: true) { _, state in
+            if case .done(let items) = state { automaticImages = isImageContent(items) }
+        }
+        .navigationDestination(item: $navigationItem) { item in destinationView(for: item) }
         .task(id: "favorites") {
             favoriteURLCache = Set(allFavorites.map(\.pageURLString))
         }
-        .searchable(text: $searchText, isPresented: $isSearchActive, prompt: "搜索")
+        .searchable(text: $searchText, isPresented: $isSearchActive,
+                    placement: .navigationBarDrawer(displayMode: .always), prompt: "搜索")
         .onSubmit(of: .search) { executeSearch() }
         .onChange(of: isSearchActive) { _, active in
-            if !active, !searchText.isEmpty {
+            if !active, navigation.searchURL != nil {
                 searchText = ""
-                if let url = URL(string: activeCategoryURL ?? siteURLString) {
-                    loader.load(url: url, parser: parser, forceRefresh: true)
-                }
+                navigation.cancelSearch()
+                refreshParser()
             }
+        }
+        .alert("搜索不可用", isPresented: $searchUnavailable) {
+            Button("知道了", role: .cancel) {}
+        } message: {
+            Text("请在站点解析规则中配置包含 {keyword} 的搜索地址。")
         }
         .refreshable { await loader.reloadAsync() }
         .alert("跳转到页码", isPresented: $showPageInput) {
@@ -230,10 +235,10 @@ struct SiteGalleryView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 Color.clear.frame(height: 0).id("gallery-top")
-                if isImageContent(items) {
+                if savedLayout.isEmpty && automaticImages {
                     imageGalleryLayout(items)
                 } else {
-                    switch parser.galleryLayout {
+                    switch layout {
                     case .list:
                         listLayout(items)
                     case .portrait:
@@ -243,6 +248,10 @@ struct SiteGalleryView: View {
                     }
                 }
             }
+            .scrollPosition(id: $visibleItemID, anchor: .top)
+            .onChange(of: layout) { _, _ in
+                if let visibleItemID { proxy.scrollTo(visibleItemID, anchor: .top) }
+            }
         }
     }
 
@@ -251,7 +260,7 @@ struct SiteGalleryView: View {
     private func imageGalleryLayout(_ items: [ParsedItem]) -> some View {
         LazyVStack(spacing: 2) {
             ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                ThreadImageCard(url: item.thumbnail, index: index)
+                ThreadImageCard(url: item.thumbnail, index: index, referer: item.pageURL, definitionID: parser.definitionID)
             }
             infiniteScrollFooter
         }
@@ -262,14 +271,14 @@ struct SiteGalleryView: View {
     private func listLayout(_ items: [ParsedItem]) -> some View {
         LazyVStack(spacing: 10) {
             ForEach(items) { item in
-                NavigationLink(destination: destinationView(for: item)) {
-                    NavLinkCard(item: item)
-                }
-                .buttonStyle(CardPressStyle())
+                Button { openItem(item) } label: { NavLinkCard(item: item, definitionID: parser.definitionID) }
+                    .buttonStyle(CardPressStyle())
+                    .contextMenu { itemMenu(for: item) }
             }
             infiniteScrollFooter
         }
         .padding(12)
+        .scrollTargetLayout()
     }
 
     // MARK: - Layout: Portrait grid (2:3 cards)
@@ -282,6 +291,7 @@ struct SiteGalleryView: View {
                     portraitCard(for: item)
                 }
             }
+            .scrollTargetLayout()
             .padding(.horizontal, 12)
             infiniteScrollFooter
         }
@@ -291,15 +301,8 @@ struct SiteGalleryView: View {
     private func portraitCard(for item: ParsedItem) -> some View {
         if parser.itemKind == .video {
             ZStack(alignment: .topLeading) {
-                Button {
-                    videoFullScreen = item
-                } label: {
-                    ComicCard(
-                        item: item,
-                        isFavorited: favoriteURLCache.contains(item.pageURL.absoluteString)
-                    )
-                }
-                .buttonStyle(CardPressStyle())
+                ComicCard(item: item, isFavorited: isFavorited(item), definitionID: parser.definitionID,
+                    onTap: { openItem(item) }, onExtraTap: extraAction(for: item))
 
                 if let count = listEpisodeCount(for: item) {
                     Button {
@@ -323,7 +326,8 @@ struct SiteGalleryView: View {
             NavigationLink(destination: destinationView(for: item)) {
                 ComicCard(
                     item: item,
-                    isFavorited: favoriteURLCache.contains(item.pageURL.absoluteString)
+                    isFavorited: favoriteURLCache.contains(item.pageURL.absoluteString),
+                    definitionID: parser.definitionID
                 )
             }
             .buttonStyle(CardPressStyle())
@@ -370,23 +374,37 @@ struct SiteGalleryView: View {
     // MARK: - Layout: Bento grid (16:9 variable-size cards)
 
     private func bentoLayout(_ items: [ParsedItem]) -> some View {
-        BentoVideoGrid(items: items, columns: columns) { item, cardSize in
+        BentoGrid(items: items, columns: columns) { item, cardSize in
             VideoCard(
                 item:        item,
                 isFavorited: favoriteURLCache.contains(item.pageURL.absoluteString),
                 cardSize:    cardSize,
-                onExtraTap: !item.extra.isEmpty ? { tag in
-                    extraNavTarget = extraSearchTarget(for: tag)
-                } : nil
+                definitionID: parser.definitionID,
+                onTap: { openItem(item) },
+                onLongPress: parser.itemKind == .navLink && !isMixedMediaItem(item) ? nil : { handleVideoCardLongPress(item) },
+                placeholder: parser.itemKind == .video ? "play.rectangle.fill" : "photo.on.rectangle.angled",
+                onExtraTap: extraAction(for: item)
             )
-            .contentShape(Rectangle())
-            .gesture(videoCardGesture(for: item))
+            .id(item.id)
+            .contextMenu { itemMenu(for: item) }
         } footer: {
             infiniteScrollFooter
         }
     }
 
     // MARK: - Destination routing (based on itemKind)
+
+    private func openItem(_ item: ParsedItem) {
+        if parser.itemKind == .video { videoFullScreen = item }
+        else { navigationItem = item }
+    }
+
+    @ViewBuilder private func itemMenu(for item: ParsedItem) -> some View {
+        if parser.itemKind != .navLink { favoriteMenuButton(for: item) }
+        if parser.itemKind == .video, let count = listEpisodeCount(for: item) {
+            Button("选集") { episodePickerTarget = GalleryEpisodePickerTarget(item: item, count: count) }
+        }
+    }
 
     @ViewBuilder
     private func destinationView(for item: ParsedItem) -> some View {
@@ -422,21 +440,6 @@ struct SiteGalleryView: View {
         }
     }
 
-    private func videoCardGesture(for item: ParsedItem) -> some Gesture {
-        LongPressGesture(minimumDuration: 0.45)
-            .exclusively(before: TapGesture())
-            .onEnded { value in
-                switch value {
-                case .first(true):
-                    handleVideoCardLongPress(item)
-                case .second:
-                    videoFullScreen = item
-                default:
-                    break
-                }
-            }
-    }
-
     private func isFavorited(_ item: ParsedItem) -> Bool {
         favoriteURLCache.contains(item.pageURL.absoluteString)
     }
@@ -469,7 +472,7 @@ struct SiteGalleryView: View {
 
     @ViewBuilder
     private var skeletonGrid: some View {
-        switch parser.galleryLayout {
+        switch layout {
         case .bento:
             BentoSkeletonGrid(columns: max(columns, 2))
         case .portrait:
@@ -520,10 +523,12 @@ struct SiteGalleryView: View {
 
     private var emptyView: some View {
         ContentUnavailableView {
-            Label("未能提取到内容", systemImage: "doc.questionmark")
+            Label(navigation.searchURL == nil ? "未能提取到内容" : "没有搜索结果", systemImage: "doc.questionmark")
         } description: {
             if let info = diagInfo {
                 Text(info).font(.caption2).foregroundStyle(.secondary)
+            } else if navigation.searchURL != nil {
+                Text("未找到「\(navigation.keyword)」的结果，可查看原始网页确认。")
             } else {
                 Text("该站点结构暂不支持，可在完整 WebView 中查看")
             }
@@ -591,8 +596,9 @@ struct SiteGalleryView: View {
                     resolved = nil
                 }
                 guard let url = resolved else { return }
-                activeCategoryURL = url.absoluteString
-                loader.load(url: url, parser: parser, forceRefresh: true)
+                navigation.selectCategory(url)
+                searchText = ""
+                refreshParser()
             }
         )
     }
@@ -625,60 +631,64 @@ struct SiteGalleryView: View {
 
     @ToolbarContentBuilder
     private var toolbarItems: some ToolbarContent {
-        if !isTabPage || isSelected {
-            // ── Status subtitle ─────────────────────────────────────
-            if !statusSubtitle.isEmpty {
-                ToolbarItem(placement: .status) {
-                    Text(statusSubtitle)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+        // ── Status subtitle ─────────────────────────────────────
+        if !statusSubtitle.isEmpty {
+            ToolbarItem(placement: .status) {
+                Text(statusSubtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
-            // ── Menu 1: category + jump to page ─────────────────────
-            if parser.itemKind != .navLink {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Menu {
-                        if parser.categories.count > 1 {
-                            Picker(activeCategoryName, selection: categorySelection) {
-                                ForEach(parser.categories, id: \.urlString) { cat in
-                                    Text(cat.name).tag(cat.urlString)
-                                }
-                            }
-                            Divider()
-                        }
-                        Button {
-                            pageInputText = "\(loader.currentPage)"
-                            showPageInput = true
-                        } label: {
-                            Label("跳转页码", systemImage: "number")
-                        }
-                    } label: {
-                        Image(systemName: "book.pages")
-                    }
-                }
-            }
-            // ── Menu 2: tools ───────────────────────────────────────
+        }
+        // ── Menu 1: category + jump to page ─────────────────────
+        if parser.itemKind != .navLink {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
-                    Button { loader.reload() } label: {
-                        Label("刷新", systemImage: "arrow.clockwise")
-                    }
-                    Button { showWeb.toggle() } label: {
-                        Label(showWeb ? "解析模式" : "网页模式", systemImage: "safari")
-                    }
-                    Divider()
-                    if bookmarkSite != nil {
-                        Button { showJSConfig = true } label: {
-                            Label("解析规则", systemImage: "chevron.left.forwardslash.chevron.right")
+                    if parser.categories.count > 1 {
+                        Picker(activeCategoryName, selection: categorySelection) {
+                            ForEach(parser.categories, id: \.urlString) { cat in
+                                Text(cat.name).tag(cat.urlString)
+                            }
                         }
+                        Divider()
                     }
-                    Button { showDebugSheet = true } label: {
-                        Label("解析结果", systemImage: "ant")
+                    Button {
+                        pageInputText = "\(loader.currentPage)"
+                        showPageInput = true
+                    } label: {
+                        Label("跳转页码", systemImage: "number")
                     }
                 } label: {
-                    Image(systemName: "ellipsis.circle")
+                    Image(systemName: "book.pages")
                 }
             }
+        }
+        if !showWeb {
+            ToolbarItem(placement: .topBarTrailing) { BrowserLayoutMenu(layout: layoutSelection) }
+        }
+        // ── Menu 2: tools ───────────────────────────────────────
+        ToolbarItem(placement: .topBarTrailing) {
+            Menu {
+                Button("查看原始网页", systemImage: "safari") { showParsingWeb = true }
+                    .accessibilityIdentifier("inspect-current-webpage-menu")
+                Button { loader.reload() } label: {
+                    Label("刷新", systemImage: "arrow.clockwise")
+                }
+                Button { showWeb.toggle() } label: {
+                    Label(showWeb ? "解析模式" : "网页模式", systemImage: "safari")
+                }
+                Divider()
+                if bookmarkSite != nil {
+                    Button { showJSConfig = true } label: {
+                        Label("解析规则", systemImage: "chevron.left.forwardslash.chevron.right")
+                    }
+                }
+                Button { showDebugSheet = true } label: {
+                    Label("解析结果", systemImage: "ant")
+                }
+            } label: {
+                Image(systemName: "ellipsis.circle")
+            }
+            .accessibilityLabel("站点工具")
         }
     }
 
@@ -686,21 +696,21 @@ struct SiteGalleryView: View {
 
     /// Build a full search URL from the parser's template and a keyword.
     private func buildSearchURL(keyword: String) -> URL? {
-        guard let template = parser.searchURLTemplate,
-              let encoded = keyword.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) else { return nil }
-        let urlString = template.replacingOccurrences(of: "{keyword}", with: encoded)
-        // Absolute URL → use directly; relative → resolve against current base
-        if urlString.hasPrefix("http") {
-            return URL(string: urlString)
-        }
-        let base = loader.resolvedBaseURL ?? URL(string: siteURLString)
-        return base.flatMap { URL(string: urlString, relativeTo: $0)?.absoluteURL }
+        parser.searchURL(keyword: keyword, base: loader.resolvedBaseURL ?? URL(string: siteURLString))
+    }
+    private func extraAction(for item: ParsedItem) -> ((String) -> Void)? {
+        guard !item.extra.isEmpty, parser.searchURLTemplate != nil else { return nil }
+        return { tag in extraNavTarget = extraSearchTarget(for: tag) }
     }
 
     private func executeSearch() {
         let keyword = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !keyword.isEmpty, let url = buildSearchURL(keyword: keyword) else { return }
-        loader.load(url: url, parser: parser, forceRefresh: true)
+        guard !keyword.isEmpty else { return }
+        guard navigation.search(keyword, parser: parser, base: loader.resolvedBaseURL ?? siteURL) else {
+            searchUnavailable = true
+            return
+        }
+        refreshParser()
     }
 
     // MARK: - Extra tag navigation
@@ -757,6 +767,7 @@ private struct GalleryEpisodePickerSheet: View {
                 }
                 .padding()
             }
+            .appSurface()
             .navigationTitle("选集 · 共 \(target.count) 集")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -772,6 +783,7 @@ private struct GalleryEpisodePickerSheet: View {
 
 struct NavLinkCard: View {
     let item: ParsedItem
+    var definitionID: String?
 
     private var hasThumbnail: Bool { item.thumbnail != nil }
 
@@ -779,7 +791,7 @@ struct NavLinkCard: View {
         HStack(spacing: 14) {
             // Only show thumbnail area when one exists
             if hasThumbnail {
-                CachedThumbnail(url: item.thumbnail, placeholder: "globe", referer: item.pageURL)
+                CachedThumbnail(url: item.thumbnail, placeholder: "globe", referer: item.pageURL, definitionID: definitionID)
                     .frame(width: 48, height: 48)
                     .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             }
@@ -814,6 +826,10 @@ struct VideoCard: View {
     let item: ParsedItem
     var isFavorited: Bool = false
     var cardSize: BentoCardSize = .small
+    var definitionID: String?
+    var onTap: (() -> Void)?
+    var onLongPress: (() -> Void)?
+    var placeholder = "play.rectangle.fill"
     /// Called with the tapped tag string (e.g. actress name, category keyword).
     var onExtraTap: ((String) -> Void)?
 
@@ -833,11 +849,15 @@ struct VideoCard: View {
         VStack(alignment: .leading, spacing: 0) {
             thumbnailView
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .contentShape(Rectangle())
+                .gesture(cardGesture)
             VStack(alignment: .leading, spacing: 3) {
                 Text(item.title)
                     .font(titleFont)
                     .lineLimit(titleLines)
                     .foregroundStyle(.primary)
+                    .contentShape(Rectangle())
+                    .gesture(cardGesture)
                 if !item.extra.isEmpty {
                     if onExtraTap != nil {
                         extraTagsView
@@ -846,6 +866,7 @@ struct VideoCard: View {
                             .font(extraFont)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
+                            .gesture(cardGesture)
                     }
                 }
             }
@@ -855,25 +876,22 @@ struct VideoCard: View {
         .contentShape(Rectangle())
     }
 
-    // MARK: - Extra tags
-
-    private var extraTags: [String] {
-        item.extra
-            .split(separator: ",")
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty }
+    private var cardGesture: some Gesture {
+        LongPressGesture(minimumDuration: 0.45)
+            .exclusively(before: TapGesture())
+            .onEnded { value in
+                switch value {
+                case .first(true): onLongPress?()
+                case .second: onTap?()
+                default: break
+                }
+            }
     }
 
+    // MARK: - Extra tags
+
     private var extraTagsView: some View {
-        HStack(spacing: 4) {
-            ForEach(extraTags, id: \.self) { tag in
-                Text(tag)
-                    .font(extraFont)
-                    .foregroundColor(.accentColor)
-                    .lineLimit(1)
-                    .onTapGesture { onExtraTap?(tag) }
-            }
-        }
+        ItemTagLinks(tags: item.extraTags, font: extraFont) { onExtraTap?($0) }
     }
 
     // MARK: - Thumbnail
@@ -882,11 +900,11 @@ struct VideoCard: View {
     private var thumbnailView: some View {
         ZStack(alignment: .bottomTrailing) {
             if item.thumbnail != nil {
-                CachedThumbnail(url: item.thumbnail, placeholder: "play.rectangle.fill", referer: item.pageURL)
+                CachedThumbnail(url: item.thumbnail, placeholder: placeholder, referer: item.pageURL, definitionID: definitionID)
             } else {
                 Color(.secondarySystemBackground)
                     .overlay {
-                        Image(systemName: "play.rectangle.fill")
+                        Image(systemName: placeholder)
                             .font(.title).foregroundStyle(.tertiary)
                     }
             }
@@ -914,152 +932,24 @@ struct VideoCard: View {
     }
 }
 
-// MARK: - Skeleton card
-
-struct SkeletonCard: View {
-    var isLarge: Bool = false
-    @State private var phase: CGFloat = -1
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(shimmerGradient)
-                .aspectRatio(16/9, contentMode: .fit)
-            VStack(alignment: .leading, spacing: 5) {
-                Capsule().fill(shimmerGradient).frame(height: isLarge ? 14 : 12)
-                Capsule().fill(shimmerGradient).frame(width: isLarge ? 120 : 80, height: isLarge ? 12 : 10)
-                if isLarge {
-                    Capsule().fill(shimmerGradient).frame(width: 60, height: 10)
-                }
-            }
-            .padding(.horizontal, 4).padding(.vertical, 6)
-        }
-        .clipped()
-        .onAppear { animateShimmer() }
-    }
-
-    private var shimmerGradient: LinearGradient {
-        LinearGradient(
-            stops: [
-                .init(color: Color(.systemFill), location: phase),
-                .init(color: Color(.tertiarySystemFill), location: phase + 0.4),
-                .init(color: Color(.systemFill), location: phase + 0.8),
-            ],
-            startPoint: .leading, endPoint: .trailing
-        )
-    }
-
-    private func animateShimmer() {
-        withAnimation(.linear(duration: 1.2).repeatForever(autoreverses: false)) {
-            phase = 1.2
-        }
-    }
-}
-
-// MARK: - Portrait skeleton grid (2:3 cards, uniform LazyVGrid)
-
-struct PortraitSkeletonGrid: View {
-    let columns: Int
-    @State private var phase: CGFloat = -1
-
-    private var shimmerGradient: LinearGradient {
-        LinearGradient(
-            stops: [
-                .init(color: Color(.systemFill), location: phase),
-                .init(color: Color(.tertiarySystemFill), location: phase + 0.4),
-                .init(color: Color(.systemFill), location: phase + 0.8),
-            ],
-            startPoint: .leading, endPoint: .trailing
-        )
-    }
-
-    var body: some View {
-        let cols = Array(repeating: GridItem(.flexible(), spacing: 10), count: columns)
-        ScrollView {
-            LazyVGrid(columns: cols, spacing: 12) {
-                ForEach(0..<12, id: \.self) { _ in
-                    VStack(alignment: .leading, spacing: 0) {
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .fill(shimmerGradient)
-                            .aspectRatio(2/3, contentMode: .fit)
-                        VStack(alignment: .leading, spacing: 4) {
-                            Capsule().fill(shimmerGradient).frame(height: 12)
-                            Capsule().fill(shimmerGradient).frame(width: 60, height: 10)
-                        }
-                        .padding(.horizontal, 2).padding(.vertical, 5)
-                    }
-                }
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-        }
-        .allowsHitTesting(false)
-        .onAppear {
-            withAnimation(.linear(duration: 1.2).repeatForever(autoreverses: false)) {
-                phase = 1.2
-            }
-        }
-    }
-}
-
-// MARK: - List skeleton (horizontal card placeholders)
-
-struct ListSkeletonView: View {
-    @State private var phase: CGFloat = -1
-
-    private var shimmerGradient: LinearGradient {
-        LinearGradient(
-            stops: [
-                .init(color: Color(.systemFill), location: phase),
-                .init(color: Color(.tertiarySystemFill), location: phase + 0.4),
-                .init(color: Color(.systemFill), location: phase + 0.8),
-            ],
-            startPoint: .leading, endPoint: .trailing
-        )
-    }
-
-    var body: some View {
-        ScrollView {
-            LazyVStack(spacing: 10) {
-                ForEach(0..<8, id: \.self) { _ in
-                    HStack(spacing: 12) {
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .fill(shimmerGradient)
-                            .frame(width: 48, height: 48)
-                        VStack(alignment: .leading, spacing: 6) {
-                            Capsule().fill(shimmerGradient).frame(height: 14)
-                            Capsule().fill(shimmerGradient).frame(width: 100, height: 11)
-                        }
-                        Spacer()
-                    }
-                    .padding(14)
-                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                }
-            }
-            .padding(12)
-        }
-        .allowsHitTesting(false)
-        .onAppear {
-            withAnimation(.linear(duration: 1.2).repeatForever(autoreverses: false)) {
-                phase = 1.2
-            }
-        }
-    }
-}
-
 // MARK: - Thread image card (full-width image for forum thread galleries)
 
 private struct ThreadImageCard: View {
     let url: URL?
+    private let source: ThumbnailRequest?
+    @Environment(\.displayScale) private var scale
+    @State private var pixels = 1024
+    private var request: ThumbnailRequest? { source?.resized(.page(width: pixels)) }
     let index: Int
 
     @State private var image: UIImage?
     @State private var failed = false
 
-    init(url: URL?, index: Int) {
+    init(url: URL?, index: Int, referer: URL?, definitionID: String?) {
         self.url = url
         self.index = index
-        _image = State(initialValue: url.flatMap { ImageMemoryCache.shared.image(for: $0) })
+        source = url.map { ThumbnailRequest(url: $0, referer: referer, definitionID: definitionID, sizing: .page(width: 1024)) }
+        _image = State(initialValue: source.flatMap { ImageMemoryCache.shared.image(for: $0) })
     }
 
     var body: some View {
@@ -1087,11 +977,13 @@ private struct ThreadImageCard: View {
                     .background(Color(.secondarySystemBackground))
             }
         }
-        .task(id: url) {
-            guard let url, image == nil else { return }
+        .onGeometryChange(for: Int.self) { [scale] proxy in ImageSizing.pixels(points: proxy.size.width, scale: scale) } action: { pixels = $0 }
+        .task(id: request) {
+            guard let request else { return }
             failed = false
-            if let data = await ThumbnailCache.shared.data(for: url),
-               let img = UIImage(data: data) {
+            let loaded = await ImagePipeline.shared.image(for: request)
+            guard !Task.isCancelled else { return }
+            if let img = loaded {
                 withAnimation(.easeIn(duration: 0.15)) {
                     image = img
                 }
@@ -1100,8 +992,8 @@ private struct ThreadImageCard: View {
             }
         }
         .onAppear {
-            if image == nil, !failed, let url {
-                image = ImageMemoryCache.shared.image(for: url)
+            if image == nil, !failed, let request {
+                image = ImageMemoryCache.shared.image(for: request)
             }
         }
         .onDisappear {
@@ -1245,6 +1137,7 @@ struct ParsedItemsDebugSheet: View {
                     }
                 }
             }
+            .appSurface()
             .navigationTitle("解析结果")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
