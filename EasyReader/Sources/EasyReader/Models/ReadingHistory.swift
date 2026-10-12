@@ -8,7 +8,7 @@ final class ReadingHistory {
     var url: String?              // web article URL or nil for local files
     var filePath: String?         // local or NAS path for files
     var fileType: FileType
-    var progress: Double          // 0.0 – 1.0
+    var progress: Double          // Reading fraction; web video histories retain playback seconds.
     var lastReadAt: Date
     var thumbnailData: Data?         // small JPEG (local files / screenshots)
     var thumbnailURLString: String?  // remote URL — preferred for web video cards

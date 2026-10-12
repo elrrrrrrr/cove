@@ -111,6 +111,7 @@ targets:
             CFBundleTypeRole: Editor
             LSHandlerRank: Owner
             LSItemContentTypes: [dev.cove.site]
+        LSSupportsOpeningDocumentsInPlace: true
         CFBundleDisplayName: Cove
         CFBundleVersion: "1"
         CFBundleShortVersionString: "1.0"

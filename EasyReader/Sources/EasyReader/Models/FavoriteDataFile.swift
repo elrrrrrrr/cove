@@ -1,7 +1,7 @@
 import Foundation
 import SwiftData
 
-/// Optional local first-install data, supplied as data/favorites.json at build time.
+/// Current favorites format shared by first-install import, export and folder synchronization.
 struct FavoriteDataFile: Codable, Sendable {
     var schemaVersion: Int = 1
     var favorites: [FavoriteRecord]

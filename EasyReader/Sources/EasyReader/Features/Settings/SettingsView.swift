@@ -97,6 +97,12 @@ struct SettingsView: View {
                     }
                 }
 
+                Section("云端同步") {
+                    NavigationLink { FolderSyncView() } label: {
+                        Label("iCloud Drive 文件夹", systemImage: "icloud")
+                    }.accessibilityIdentifier("folder-sync-settings")
+                }
+
                 // Data management
                 Section {
                     Button {
@@ -133,7 +139,7 @@ struct SettingsView: View {
                             }
                         }
                     }
-                    .disabled(isClearing)
+                    .disabled(isClearing || FolderSyncManager.shared.isSyncing)
                 } header: {
                     Text("数据管理")
                 } footer: {
@@ -269,8 +275,11 @@ struct SettingsView: View {
     // MARK: - Clear all data
 
     private func clearAllData() async {
+        guard !FolderSyncManager.shared.isSyncing else { return }
         isClearing = true
         defer { isClearing = false }
+
+        FolderSyncManager.shared.disconnect()
 
         // 1. Delete all SwiftData models
         try? context.delete(model: ReadingHistory.self)

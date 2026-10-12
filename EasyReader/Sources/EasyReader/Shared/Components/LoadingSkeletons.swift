@@ -109,4 +109,3 @@ struct ListSkeletonView: View {
         .allowsHitTesting(false)
     }
 }
-

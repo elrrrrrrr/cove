@@ -144,14 +144,14 @@ struct WebReaderView: View {
     private func saveProgress() {
         let currentURL = webCoordinator.currentURL ?? url
         if let existing = historyItem {
-            existing.progress   = scrollProgress
+            existing.progress   = min(1, max(0, scrollProgress))
             existing.lastReadAt = Date()
         } else {
             let entry = ReadingHistory(
                 title: pageTitle.isEmpty ? currentURL.absoluteString : pageTitle,
                 url: currentURL.absoluteString,
                 fileType: .web,
-                progress: scrollProgress
+                progress: min(1, max(0, scrollProgress))
             )
             context.insert(entry)
         }

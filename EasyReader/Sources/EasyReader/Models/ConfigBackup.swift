@@ -8,6 +8,10 @@ struct ConfigBackup: Codable {
     var sites: [SiteBackup]
     var nasConfigs: [NASConfigBackup]
     var siteDefinitions: [SiteDefinition]
+    var favorites: [FavoriteDataFile.FavoriteRecord]?
+    var histories: [HistoryBackup]?
+    var offlineItems: [OfflineBackup]?
+    var preferences: [String: String]?
 }
 
 struct SettingsBackup: Codable {
@@ -27,6 +31,8 @@ struct SiteBackup: Codable {
     var parserConfig: SiteParserOverrides?
     var definitionID: String?
     var entryID: String?
+    var createdAt: Date?
+    var faviconData: Data?
 }
 
 struct NASConfigBackup: Codable {
@@ -36,6 +42,7 @@ struct NASConfigBackup: Codable {
     var port: Int
     var username: String
     var shareName: String
+    var isActive: Bool?
 }
 
 extension ConfigBackup {
@@ -44,9 +51,9 @@ extension ConfigBackup {
         ConfigBackup(exportDate: Date(),
             settings: SettingsBackup(readerFontSize: fontSize, readerTheme: theme.rawValue, contentBlockerEnabled: blockerEnabled, novelReadingMode: readingMode.rawValue),
             sites: sites.map { SiteBackup(id: $0.id, name: $0.name, urlString: $0.urlString, category: $0.category.rawValue,
-                note: $0.note, sortOrder: $0.sortOrder, parserConfig: $0.parserOverrides, definitionID: $0.definitionID, entryID: $0.entryID) },
+                note: $0.note, sortOrder: $0.sortOrder, parserConfig: $0.parserOverrides, definitionID: $0.definitionID, entryID: $0.entryID, createdAt: $0.createdAt, faviconData: $0.faviconData) },
             nasConfigs: nasConfigs.map { NASConfigBackup(id: $0.id, name: $0.name, host: $0.host, port: $0.port,
-                username: $0.username, shareName: $0.shareName) },
+                username: $0.username, shareName: $0.shareName, isActive: $0.isActive) },
             siteDefinitions: SiteDefinitionStore.shared.definitions)
     }
 
@@ -57,6 +64,27 @@ extension ConfigBackup {
         if let mode = settings.novelReadingMode, NovelReadingMode(rawValue: mode) == nil {
             throw SiteDefinitionError.invalid("备份中的小说翻页方式无效")
         }
+        if let favorites {
+            guard favorites.allSatisfy({ $0.id != nil }) else { throw SiteDefinitionError.invalid("备份收藏缺少标识") }
+            try FavoriteDataFile(favorites: favorites).validate()
+        }
+        if let histories {
+            guard Set(histories.map(\.id)).count == histories.count,
+                  histories.allSatisfy({ $0.progress.isFinite && $0.progress >= 0 && ($0.fileType == .web || ($0.fileType == .video && $0.url != nil) || $0.progress <= 1) }) else {
+                throw SiteDefinitionError.invalid("阅读记录重复或进度无效")
+            }
+        }
+        if let offlineItems {
+            guard Set(offlineItems.map(\.id)).count == offlineItems.count, Set(offlineItems.map(\.localPath).filter { !$0.isEmpty }).count == offlineItems.filter { !$0.localPath.isEmpty }.count else { throw SiteDefinitionError.invalid("离线记录重复") }
+            for item in offlineItems { try item.validate() }
+        }
+        for history in histories ?? [] {
+            if let path = history.filePath, history.nasConfigID == nil, history.fileType != .comic {
+                guard path.hasPrefix("Offline/"), !path.split(separator: "/").contains("..") else { throw SiteDefinitionError.invalid("阅读记录包含非便携路径") }
+                _ = try ReaderContainedPath.resolve(path, under: LocalAppStorage.data)
+            }
+        }
+        if let preferences { try SyncPreferences.validate(preferences) }
         for definition in siteDefinitions { try definition.validate() }
         guard Set(siteDefinitions.map(\.id)).count == siteDefinitions.count,
               Set(sites.map(\.id)).count == sites.count,
@@ -70,36 +98,7 @@ extension ConfigBackup {
     }
 
     @MainActor func apply(to context: ModelContext) throws {
-        try validate()
-        let library = SiteDefinitionStore.shared
-        let previousDefinitions = library.definitions
-        try context.save()
-        do {
-            try library.replace(siteDefinitions)
-            try context.delete(model: BookmarkSite.self)
-            try context.delete(model: NASConfig.self)
-            for value in sites {
-                let site = BookmarkSite(name: value.name, urlString: value.urlString,
-                    category: SiteCategory(rawValue: value.category) ?? .other, note: value.note, sortOrder: value.sortOrder)
-                site.id = value.id; site.definitionID = value.definitionID; site.entryID = value.entryID
-                site.parserOverrides = value.parserConfig
-                context.insert(site)
-            }
-            for value in nasConfigs {
-                let config = NASConfig(name: value.name, host: value.host, port: value.port, username: value.username, shareName: value.shareName)
-                config.id = value.id
-                context.insert(config)
-            }
-            try context.save()
-        } catch {
-            context.rollback()
-            try? library.replace(previousDefinitions)
-            throw error
-        }
-        UserDefaults.standard.set(settings.readerFontSize, forKey: "readerFontSize")
-        UserDefaults.standard.set(settings.readerTheme, forKey: AppTheme.storageKey)
-        UserDefaults.standard.set(settings.novelReadingMode ?? NovelReadingMode.paged.rawValue, forKey: NovelReadingMode.storageKey)
-        UserDefaults.standard.set(settings.contentBlockerEnabled, forKey: "contentBlockerEnabled")
+        try applySynchronized(to: context)
     }
 
     func writeToTempFile() throws -> URL {
