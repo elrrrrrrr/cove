@@ -132,7 +132,7 @@ typealias SiteFormPath = [SiteFormPart]
 enum SiteFormSpec {
     indirect enum Kind { case text, inlineCode, code, number, bool, choices([(String, String)]), object(String), list(Kind), map(Kind) }
     static func label(_ key: String) -> String {
-        ["schemaVersion":"格式版本", "id":"标识", "name":"名称", "match":"匹配条件", "hosts":"域名", "includeSubdomains":"包含子域名", "hostPattern":"域名正则", "pathPrefix":"路径前缀", "pathPattern":"路径正则", "query":"查询参数", "entries":"入口", "path":"地址 / 路径", "category":"分类", "rules":"解析规则", "role":"页面角色", "contentType":"内容类型", "priority":"优先级", "load":"加载方式", "mode":"方式", "waitSeconds":"等待秒数", "preNavigateScript":"跳转脚本", "preNavigateExpression":"跳转表达式", "transformScript":"HTML 转换脚本", "headers":"请求头", "presentation":"展示与交互", "layout":"布局", "mixedMedia":"混合图文", "episodeCountField":"集数字段", "episodeURLTemplate":"分集地址模板", "extract":"内容提取", "items":"列表卡片选择器", "fields":"字段", "script":"JavaScript 函数体", "expression":"JavaScript 表达式", "selector":"CSS 选择器", "text":"读取文本", "attribute":"读取属性", "fallbackAttributes":"备用属性", "all":"返回数组", "number":"转换为数值", "resolveURL":"补全地址", "pattern":"提取正则", "capture":"捕获组", "value":"固定值", "pagination":"分页", "thumbnailScript":"缩略图脚本", "categories":"分类入口", "searchURLTemplate":"搜索地址模板", "request":"请求解析", "capturePattern":"页面捕获正则", "urlTemplate":"请求地址模板", "responsePattern":"响应捕获正则", "exclude":"排除内容", "portal":"门户解析", "url":"地址", "base64Pattern":"Base64 捕获正则", "dataPattern":"加密数据正则", "keyPattern":"密钥捕获正则", "urlPaths":"地址字段路径", "identityPaths":"身份字段路径", "identityPattern":"身份正则", "excludedHosts":"排除域名", "images":"图片解码", "key":"AES 密钥", "iv":"IV"][key] ?? key
+        ["blocks":"正文图文块", "publishedAt":"发布时间", "sourceURL":"原文地址", "commentsURL":"评论地址", "schemaVersion":"格式版本", "id":"标识", "name":"名称", "match":"匹配条件", "hosts":"域名", "includeSubdomains":"包含子域名", "hostPattern":"域名正则", "pathPrefix":"路径前缀", "pathPattern":"路径正则", "query":"查询参数", "entries":"入口", "path":"地址 / 路径", "category":"分类", "rules":"解析规则", "role":"页面角色", "contentType":"内容类型", "priority":"优先级", "load":"加载方式", "mode":"方式", "waitSeconds":"等待秒数", "preNavigateScript":"跳转脚本", "preNavigateExpression":"跳转表达式", "transformScript":"HTML 转换脚本", "headers":"请求头", "presentation":"展示与交互", "layout":"布局", "mixedMedia":"混合图文", "episodeCountField":"集数字段", "episodeURLTemplate":"分集地址模板", "extract":"内容提取", "items":"列表卡片选择器", "fields":"字段", "script":"JavaScript 函数体", "expression":"JavaScript 表达式", "selector":"CSS 选择器", "text":"读取文本", "attribute":"读取属性", "fallbackAttributes":"备用属性", "all":"返回数组", "number":"转换为数值", "content":"提取原生图文块", "resolveURL":"补全地址", "pattern":"提取正则", "capture":"捕获组", "value":"固定值", "pagination":"分页", "thumbnailScript":"缩略图脚本", "categories":"分类入口", "searchURLTemplate":"搜索地址模板", "request":"请求解析", "capturePattern":"页面捕获正则", "urlTemplate":"请求地址模板", "responsePattern":"响应捕获正则", "exclude":"排除内容", "portal":"门户解析", "url":"地址", "base64Pattern":"Base64 捕获正则", "dataPattern":"加密数据正则", "keyPattern":"密钥捕获正则", "urlPaths":"地址字段路径", "identityPaths":"身份字段路径", "identityPattern":"身份正则", "excludedHosts":"排除域名", "images":"图片解码", "key":"AES 密钥", "iv":"IV"][key] ?? key
     }
     static func names(_ type: String) -> [String] {
         let first = ["schemaVersion", "id", "name", "role", "category", "match", "entries", "rules", "portal", "images"]
@@ -147,8 +147,8 @@ enum SiteFormSpec {
     static func kind(_ key: String, type: String) -> Kind {
         switch (type, key) {
         case ("entry", "category"): return .choices(SiteCategory.allCases.map { ($0.configurationValue, $0.rawValue) })
-        case ("rule", "role"): return .choices([("catalog","列表"),("video","视频详情"),("comic","漫画详情"),("chapter","章节"),("tags","标签")])
-        case ("rule", "contentType"): return .choices([("video","视频"),("comic","漫画"),("navLink","导航 / 图文")])
+        case ("rule", "role"): return .choices([("catalog","列表"),("video","视频详情"),("comic","漫画详情"),("chapter","章节"),("tags","标签"),("article","图文详情")])
+        case ("rule", "contentType"): return .choices([("video","视频"),("comic","漫画"),("navLink","目录导航"),("article","图文")])
         case ("load", "mode"): return .choices([("auto","自动"),("webView","网页渲染")])
         case ("pagination", "mode"): return .choices([("none","无分页"),("nextLink","下一页链接"),("webNavigation","网页导航"),("ajax","AJAX")])
         case ("presentation", "layout"): return .choices(BrowserLayout.allCases.map { ($0.rawValue, $0.label) })
@@ -162,7 +162,7 @@ enum SiteFormSpec {
         if ["headers","query"].contains(key) { return .map(.text) }
         if ["hosts","fallbackAttributes","urlPaths","identityPaths","excludedHosts","exclude"].contains(key) { return .list(.text) }
         if ["schemaVersion","waitSeconds","priority","capture"].contains(key) { return .number }
-        if ["includeSubdomains","mixedMedia","text","all","number","resolveURL"].contains(key) { return .bool }
+        if ["includeSubdomains","mixedMedia","text","all","number","resolveURL","content"].contains(key) { return .bool }
         if ["script","expression","preNavigateScript","preNavigateExpression","transformScript","thumbnailScript"].contains(key) { return .code }
         if key == "selector" || key.hasSuffix("Pattern") || key == "pattern" { return .inlineCode }
         return .text

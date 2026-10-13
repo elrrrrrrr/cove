@@ -11,17 +11,21 @@ final class FavoriteVideo {
     var siteName: String          // 来源站点显示名称
     var definitionID: String?
     var isComic: Bool = false     // true → route to ComicDetailView
+    var isArticle: Bool = false
     var addedAt: Date
     var isPinned: Bool = false
     var pinOrder: Int = 0
 
     var pageURL: URL? { URL(string: pageURLString) }
     var thumbnailURL: URL? { thumbnailURLString.flatMap { URL(string: $0) } }
+    var contentKind: ItemKind { isArticle ? .article : (isComic ? .comic : .video) }
+    var contentLabel: String { isArticle ? "图文" : (isComic ? "漫画" : "视频") }
+    var contentIcon: String { isArticle ? "doc.text" : (isComic ? "photo.on.rectangle.angled" : "play.rectangle.fill") }
 
     init(title: String, pageURLString: String,
          thumbnailURLString: String? = nil,
          duration: String = "", siteName: String = "",
-         isComic: Bool = false, definitionID: String? = nil) {
+         isComic: Bool = false, isArticle: Bool = false, definitionID: String? = nil) {
         self.id                 = UUID()
         self.title              = title
         self.pageURLString      = pageURLString
@@ -29,6 +33,7 @@ final class FavoriteVideo {
         self.duration           = duration
         self.siteName           = siteName
         self.isComic            = isComic
+        self.isArticle          = isArticle
         self.addedAt            = Date()
         self.definitionID       = definitionID
     }

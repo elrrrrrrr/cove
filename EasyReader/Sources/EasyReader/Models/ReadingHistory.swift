@@ -43,6 +43,7 @@ final class ReadingHistory {
 
 enum FileType: String, Codable, Sendable {
     case web
+    case article
     case pdf
     case cbz
     case cbr
@@ -57,6 +58,7 @@ enum FileType: String, Codable, Sendable {
     var systemImage: String {
         switch self {
         case .web:     "globe"
+        case .article: "doc.text"
         case .pdf:     "doc.richtext"
         case .cbz:     "photo.on.rectangle"
         case .cbr:     "photo.on.rectangle"

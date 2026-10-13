@@ -1,0 +1,47 @@
+schemaVersion: 1
+id: example.hackernews
+name: Hacker News
+match:
+  hosts: [news.ycombinator.com]
+  includeSubdomains: false
+entries:
+  - {id: ask, name: Ask HN, path: /ask, category: news}
+  - {id: top, name: Hacker News, path: /, category: news}
+  - {id: newest, name: New HN, path: /newest, category: news}
+  - {id: show, name: Show HN, path: /show, category: news}
+rules:
+  - id: stories
+    role: catalog
+    contentType: article
+    match: {pathPattern: '^/(news|newest|ask|show|jobs)?/?$'}
+    presentation: {layout: list}
+    categories:
+      - {name: 热门, path: /}
+      - {name: 最新, path: /newest}
+      - {name: 问答, path: /ask}
+      - {name: 展示, path: /show}
+    extract:
+      # Title rows and metadata rows are siblings: JS joins them into one item.
+      script: |
+        return [...document.querySelectorAll('tr.athing')].map(row => {
+          const title = row.querySelector('.titleline > a');
+          const meta = row.nextElementSibling;
+          return {
+            title: title?.textContent.trim() || '',
+            url: new URL('/item?id=' + row.id, document.baseURI).href,
+            extra: [meta?.querySelector('.hnuser')?.textContent, meta?.querySelector('.age')?.textContent].filter(Boolean).join(' · '),
+            duration: meta?.querySelector('.score')?.textContent || ''
+          };
+        }).filter(item => item.title);
+    pagination: {mode: nextLink, selector: 'a.morelink', attribute: href}
+  - id: discussion
+    role: article
+    match: {hosts: [news.ycombinator.com], pathPrefix: /item}
+    extract:
+      fields:
+        title: {selector: '.titleline > a', text: true}
+        author: {selector: '.subtext .hnuser', text: true}
+        publishedAt: {selector: '.subtext .age', text: true}
+        sourceURL: {selector: '.titleline > a', attribute: href, resolveURL: true}
+        commentsURL: {selector: '.subtext .age a', attribute: href, resolveURL: true}
+        blocks: {selector: .toptext, content: true}

@@ -6,12 +6,19 @@ final class ParsingWebViewContainer: UIView {
     let webView: WKWebView
     private weak var previousParent: UIView?
     private let previousFrame: CGRect
+    private let previousAccessibilityHidden: Bool
+    private let previousHidden: Bool
 
-    init(webView: WKWebView) {
+    init(webView: WKWebView, accessibilityHidden: Bool = false) {
         self.webView = webView
         previousParent = webView.superview
         previousFrame = webView.frame
+        previousAccessibilityHidden = webView.accessibilityElementsHidden
+        previousHidden = webView.isHidden
         super.init(frame: .zero)
+        accessibilityElementsHidden = accessibilityHidden
+        webView.accessibilityElementsHidden = accessibilityHidden
+        webView.isHidden = accessibilityHidden
         webView.removeFromSuperview()
         addSubview(webView)
     }
@@ -23,6 +30,8 @@ final class ParsingWebViewContainer: UIView {
     func restore() {
         guard webView.superview === self else { return }
         webView.removeFromSuperview()
+        webView.accessibilityElementsHidden = previousAccessibilityHidden
+        webView.isHidden = previousHidden
         if let previousParent {
             previousParent.addSubview(webView)
             webView.frame = previousFrame

@@ -62,6 +62,7 @@ final class SiteElementPicker: NSObject {
             event.preventDefault(); event.stopImmediatePropagation();
             let el = event.target.closest('*');
             if (!el) return;
+            if (field === 'blocks') el = el.closest('article,main,[role=main]') || el;
             if (field === 'items') el = el.closest('article,li,[class*="card"],[class*="item"]') || el;
             if (['url','nextPageURL','prevChapter','nextChapter','chapters','nextPage'].includes(field)) el = el.closest('a[href]') || el;
             if (['thumbnail','cover','images'].includes(field)) el = el.closest('img') || el.querySelector('img') || el;

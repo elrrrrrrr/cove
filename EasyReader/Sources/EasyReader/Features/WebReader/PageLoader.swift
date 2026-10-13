@@ -691,7 +691,7 @@ struct HiddenWebView: UIViewRepresentable {
     init(loader: PageLoader) { self.webView = loader.webView }
     init(webView: WKWebView) { self.webView = webView }
 
-    func makeUIView(context: Context) -> ParsingWebViewContainer { ParsingWebViewContainer(webView: webView) }
+    func makeUIView(context: Context) -> ParsingWebViewContainer { ParsingWebViewContainer(webView: webView, accessibilityHidden: true) }
     func updateUIView(_ uiView: ParsingWebViewContainer, context: Context) {}
     static func dismantleUIView(_ uiView: ParsingWebViewContainer, coordinator: ()) { uiView.restore() }
 }

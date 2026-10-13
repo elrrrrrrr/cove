@@ -30,7 +30,7 @@ struct SiteDefinition: Codable, Sendable, Equatable, Identifiable {
         }
         for rule in rules {
             try require(!rule.id.isEmpty, "规则 id 不能为空")
-            try require(["catalog", "video", "comic", "chapter", "tags"].contains(rule.role), "未知页面角色：\(rule.role)")
+            try require(["catalog", "video", "comic", "chapter", "tags", "article"].contains(rule.role), "未知页面角色：\(rule.role)")
             if let match = rule.match { try match.validate(requireHost: false) }
             if let kind = rule.contentType { try require(ItemKind(string: kind) != nil, "未知内容类型：\(kind)") }
             if let layout = rule.presentation?.layout { try require(BrowserLayout(rawValue: layout) != nil, "未知布局：\(layout)") }
@@ -50,13 +50,18 @@ struct SiteDefinition: Codable, Sendable, Equatable, Identifiable {
                     case "comic": required = ["chapters"]
                     case "chapter": required = ["images"]
                     case "tags": required = ["tags"]
+                    case "article": required = ["blocks"]
                     default: required = []
                     }
                     try require(required.allSatisfy { fields[$0] != nil }, "规则 \(rule.id) 缺少字段：\(required.joined(separator: "、"))")
                     let arrayField = ["comic": "chapters", "chapter": "images", "tags": "tags"][rule.role]
                     if let arrayField { try require(fields[arrayField]?.all == true, "字段 \(arrayField) 需要 all: true") }
+                    if rule.role == "article" {
+                        try require(fields["blocks"]?.content == true || fields["blocks"]?.all == true, "图文详情 blocks 需要 content: true 或 all: true")
+                    }
                 }
             }
+            if rule.role == "article" { try require(rule.extract != nil, "图文详情需要 extract") }
             if let pagination = rule.pagination {
                 try require(["none", "nextLink", "webNavigation", "ajax"].contains(pagination.mode), "未知分页方式：\(pagination.mode)")
                 try require(pagination.mode == "none" || pagination.selector != nil || pagination.script != nil || pagination.expression != nil, "分页需要选择器或脚本")
@@ -252,12 +257,13 @@ struct SiteExtraction: Codable, Sendable, Equatable {
         """
     }
 
-    static let selectorEngine = #"""
+    static var selectorEngine: String { ArticleDOM.script + #"""
     function readFields(root, fields) {
         const result = {};
         for (const [name, field] of Object.entries(fields || {})) {
             const elements = field.selector ? [...root.querySelectorAll(field.selector)] : [root];
             const values = elements.map(el => {
+                if (field.content === true) return readArticleContent(el);
                 if (field.fields) return readFields(el, field.fields);
                 if (field.value !== undefined) return field.value;
                 let value = field.attribute ? el.getAttribute(field.attribute) : (el.textContent || '').trim();
@@ -265,7 +271,7 @@ struct SiteExtraction: Codable, Sendable, Equatable {
                     if (!value) value = el.getAttribute(attribute);
                 }
                 if (field.pattern && value) value = value.match(new RegExp(field.pattern))?.[field.capture ?? 1] || '';
-                if (value && (field.resolveURL === true || ['url','thumbnail','cover','nextPageURL','prevChapter','nextChapter','images'].includes(name))) {
+                if (value && (field.resolveURL === true || ['url','thumbnail','cover','nextPageURL','prevChapter','nextChapter','images','sourceURL','commentsURL'].includes(name))) {
                     try { value = new URL(value, document.baseURI).href; } catch (_) { value = ''; }
                 }
                 if (field.number === true || ['episodeNumber','episodeCount'].includes(name)) {
@@ -274,11 +280,11 @@ struct SiteExtraction: Codable, Sendable, Equatable {
                 }
                 return value || '';
             });
-            result[name] = field.all ? values.filter(v => v !== '') : (values[0] ?? field.value ?? '');
+            result[name] = field.all ? values.filter(v => v !== '') : (values[0] ?? field.value ?? (field.content === true ? [] : ''));
         }
         return result;
     }
-    """#
+    """# }
 }
 
 struct SiteField: Codable, Sendable, Equatable {
@@ -293,9 +299,14 @@ struct SiteField: Codable, Sendable, Equatable {
     var capture: Int?
     var value: String?
     var fields: [String: SiteField]?
+    /// Turn a selected DOM subtree into ordered, safe text/image/link blocks.
+    var content: Bool?
     func validate() throws {
         if let selector, selector.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { throw SiteDefinitionError.invalid("字段选择器不能为空") }
         if let pattern { _ = try NSRegularExpression(pattern: pattern) }
+        if content == true && (attribute != nil || fields != nil || all == true || value != nil || pattern != nil || number == true) {
+            throw SiteDefinitionError.invalid("content 图文提取只需 selector 和 content: true")
+        }
         for nested in fields?.values ?? Dictionary<String, SiteField>().values { try nested.validate() }
     }
 }
@@ -310,7 +321,7 @@ enum SiteSchema {
         "load": ["mode", "waitSeconds", "preNavigateScript", "preNavigateExpression", "transformScript", "headers"],
         "presentation": ["layout", "mixedMedia", "episodeCountField", "episodeURLTemplate"],
         "extract": ["items", "fields", "script", "expression"],
-        "field": ["selector", "text", "attribute", "fallbackAttributes", "all", "number", "resolveURL", "pattern", "capture", "value", "fields"],
+        "field": ["selector", "text", "attribute", "fallbackAttributes", "all", "number", "resolveURL", "pattern", "capture", "value", "fields", "content"],
         "pagination": ["mode", "selector", "attribute", "script", "expression", "thumbnailScript"],
         "category": ["name", "path"],
         "request": ["capturePattern", "urlTemplate", "responsePattern", "exclude"],

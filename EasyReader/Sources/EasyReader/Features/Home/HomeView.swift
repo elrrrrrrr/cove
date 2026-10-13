@@ -270,7 +270,11 @@ struct HomeView: View {
             }
         case .web:
             if let s = item.url, let url = URL(string: s) {
-                WebReaderView(url: url)
+                WebReaderView(url: url, historyItem: item)
+            }
+        case .article:
+            if let address = item.url, let url = URL(string: address) {
+                ArticleReaderView(item: ParsedItem(title: item.title, pageURL: url, thumbnail: item.thumbnailURL, duration: "", extra: ""), definitionID: item.definitionID, historyItem: item)
             }
         case .pdf:
             if let p = item.filePath, let fileURL = OfflineFiles.shared.historyURL(for: p) {

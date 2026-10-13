@@ -35,6 +35,7 @@ struct SiteSetupWizard: View {
     private var fieldNames: [String] {
         switch activeRule?.role {
         case "video": ["url", "title", "nextPageURL", "episodeNumber", "episodeCount"]
+        case "article": ["title", "author", "publishedAt", "blocks", "sourceURL", "commentsURL"]
         case "comic": ["title", "author", "status", "desc", "cover", "tags", "chapters"]
         case "chapter": ["images", "bookName", "chapterName", "prevChapter", "nextChapter"]
         case "tags": ["tags"]
@@ -122,7 +123,7 @@ struct SiteSetupWizard: View {
                 }
                 rulePicker
                 Section("添加页面规则") {
-                    ForEach(["catalog", "video", "comic", "chapter", "tags"], id: \.self) { role in
+                    ForEach(["catalog", "video", "comic", "chapter", "tags", "article"], id: \.self) { role in
                         Button("添加\(roleName(role))规则") { addRule(role: role) }
                     }
                 }
@@ -137,7 +138,7 @@ struct SiteSetupWizard: View {
             }
             if activeRule?.role == "catalog" {
                 Picker("内容类型", selection: contentTypeBinding) {
-                    Text("视频").tag("video"); Text("漫画").tag("comic"); Text("导航 / 图文").tag("navLink")
+                    Text("视频").tag("video"); Text("漫画").tag("comic"); Text("目录导航").tag("navLink"); Text("图文").tag("article")
                 }
                 Picker("布局", selection: layoutBinding) {
                     Text("视频网格").tag("bento"); Text("竖版网格").tag("portrait"); Text("列表").tag("list")
@@ -332,6 +333,7 @@ struct SiteSetupWizard: View {
     private func defaultExtraction(role: String) -> SiteExtraction {
         switch role {
         case "video": .init(fields: ["url": .init(selector: "video source", attribute: "src", resolveURL: true)])
+        case "article": .init(fields: ["title": .init(selector: "h1", text: true), "blocks": .init(selector: "article, main", content: true)])
         case "comic": .init(fields: ["title": .init(selector: "h1", text: true), "chapters": .init(selector: "a[data-chapter]", all: true, fields: ["title": .init(text: true), "url": .init(attribute: "href", resolveURL: true)])])
         case "chapter": .init(fields: ["images": .init(selector: "main img", attribute: "src", all: true, resolveURL: true)])
         case "tags": .init(fields: ["tags": .init(selector: "a[rel=tag]", text: true, all: true)])
@@ -486,12 +488,12 @@ struct SiteSetupWizard: View {
     }
 
     private func roleName(_ value: String) -> String {
-        ["catalog": "列表", "video": "视频详情", "comic": "漫画详情", "chapter": "章节图片", "tags": "标签"][value] ?? value
+        ["catalog": "列表", "video": "视频详情", "comic": "漫画详情", "chapter": "章节图片", "tags": "标签", "article": "图文详情"][value] ?? value
     }
     private func fieldName(_ value: String) -> String {
         ["items": "列表卡片", "title": "标题", "url": "内容链接 / 播放地址", "thumbnail": "缩略图", "duration": "时长", "extra": "附加信息",
          "nextPage": "下一页链接", "nextPageURL": "下一集链接", "episodeNumber": "当前集数", "episodeCount": "总集数", "author": "作者",
-         "status": "状态", "desc": "简介", "cover": "封面", "tags": "标签", "chapters": "章节链接", "images": "章节图片",
+         "status": "状态", "desc": "简介", "cover": "封面", "tags": "标签", "article": "图文详情", "chapters": "章节链接", "images": "章节图片",
          "bookName": "作品名", "chapterName": "章节名", "prevChapter": "上一章", "nextChapter": "下一章"][value] ?? value
     }
 }

@@ -14,6 +14,7 @@ struct FavoriteDataFile: Codable, Sendable {
         var duration: String?
         var siteName: String?
         var isComic: Bool?
+        var isArticle: Bool?
         var definitionID: String?
         var addedAt: Date?
         var isPinned: Bool?
@@ -28,6 +29,7 @@ struct FavoriteDataFile: Codable, Sendable {
             guard let url = URL(string: record.pageURL), ["https", "http"].contains(url.scheme ?? ""),
                   url.host() != nil, !record.title.isEmpty else { throw SiteDefinitionError.invalid("收藏标题或地址无效：\(record.title)") }
             guard record.pinOrder.map({ $0 >= 0 }) ?? true else { throw SiteDefinitionError.invalid("收藏置顶顺序不能为负数") }
+            guard !(record.isComic == true && record.isArticle == true) else { throw SiteDefinitionError.invalid("收藏不能同时是漫画和图文") }
         }
     }
 
@@ -45,6 +47,7 @@ struct FavoriteDataFile: Codable, Sendable {
             let value = FavoriteVideo(title: record.title, pageURLString: record.pageURL,
                 thumbnailURLString: record.thumbnail, duration: record.duration ?? "", siteName: record.siteName ?? "",
                 isComic: record.isComic ?? false,
+                isArticle: record.isArticle ?? false,
                 definitionID: record.definitionID ?? URL(string: record.pageURL).flatMap { SiteParserRegistry.definition(for: $0)?.id })
             if let id = record.id { value.id = id }
             if let date = record.addedAt { value.addedAt = date }
@@ -68,7 +71,7 @@ struct FavoriteDataFile: Codable, Sendable {
         FavoriteDataFile(favorites: values.map {
             FavoriteRecord(id: $0.id, title: $0.title, pageURL: $0.pageURLString,
                 thumbnail: $0.thumbnailURLString, duration: $0.duration, siteName: $0.siteName,
-                isComic: $0.isComic, definitionID: $0.definitionID, addedAt: $0.addedAt, isPinned: $0.isPinned, pinOrder: $0.pinOrder)
+                isComic: $0.isComic, isArticle: $0.isArticle, definitionID: $0.definitionID, addedAt: $0.addedAt, isPinned: $0.isPinned, pinOrder: $0.pinOrder)
         })
     }
 

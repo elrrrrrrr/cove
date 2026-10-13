@@ -29,8 +29,9 @@ struct FavoritesView: View {
     var body: some View {
         let items = filtered
         let pinned = FavoritePins.ordered(items)
-        let videoFavs = items.filter { !$0.isPinned && !$0.isComic }
+        let videoFavs = items.filter { !$0.isPinned && !$0.isComic && !$0.isArticle }
         let comicFavs = items.filter { !$0.isPinned && $0.isComic }
+        let articleFavs = items.filter { !$0.isPinned && $0.isArticle }
 
         NavigationStack {
             Group {
@@ -39,7 +40,7 @@ struct FavoritesView: View {
                 } else if items.isEmpty {
                     ContentUnavailableView.search(text: searchText)
                 } else {
-                    grid(pinned: pinned, videoFavs: videoFavs, comicFavs: comicFavs)
+                    grid(pinned: pinned, videoFavs: videoFavs, comicFavs: comicFavs, articleFavs: articleFavs)
                 }
             }
             .appSurface()
@@ -80,7 +81,7 @@ struct FavoritesView: View {
 
     // MARK: - Grid
 
-    private func grid(pinned: [FavoriteVideo], videoFavs: [FavoriteVideo], comicFavs: [FavoriteVideo]) -> some View {
+    private func grid(pinned: [FavoriteVideo], videoFavs: [FavoriteVideo], comicFavs: [FavoriteVideo], articleFavs: [FavoriteVideo]) -> some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 24) {
                 if !pinned.isEmpty {
@@ -89,10 +90,7 @@ struct FavoritesView: View {
                         ForEach(pinned) { fav in
                             if let url = fav.pageURL {
                                 NavigationLink {
-                                    let item = ParsedItem(title: fav.title, pageURL: url, thumbnail: fav.thumbnailURL,
-                                                          duration: fav.duration, extra: fav.siteName)
-                                    if fav.isComic { ComicDetailView(item: item, definitionID: fav.definitionID) }
-                                    else { VideoDetailView(item: item, definitionID: fav.definitionID) }
+                                    FavoriteDestination(favorite: fav, url: url)
                                 } label: {
                                     FavoritePinRow(favorite: fav).padding(12)
                                         .background(.background, in: RoundedRectangle(cornerRadius: 12))
@@ -104,6 +102,19 @@ struct FavoritesView: View {
                             }
                         }
                     }.padding(.horizontal, 12).padding(.top, 10)
+                }
+                if !articleFavs.isEmpty {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("图文").font(.headline)
+                        ForEach(articleFavs) { favorite in
+                            if let url = favorite.pageURL {
+                                NavigationLink { FavoriteDestination(favorite: favorite, url: url) } label: {
+                                    FavoritePinRow(favorite: favorite).padding(12)
+                                        .background(.background, in: RoundedRectangle(cornerRadius: 12))
+                                }.buttonStyle(.plain).contextMenu { favoriteActions(favorite) }
+                            }
+                        }
+                    }.padding(.horizontal, 12)
                 }
                 // Video favorites
                 if !videoFavs.isEmpty {
@@ -181,6 +192,19 @@ struct FavoritesView: View {
             Label("暂无收藏", systemImage: "heart")
         } description: {
             Text("长按内容卡片可添加收藏")
+        }
+    }
+}
+
+private struct FavoriteDestination: View {
+    let favorite: FavoriteVideo
+    let url: URL
+    var body: some View {
+        let item = ParsedItem(title: favorite.title, pageURL: url, thumbnail: favorite.thumbnailURL, duration: favorite.duration, extra: favorite.siteName)
+        switch favorite.contentKind {
+        case .article: ArticleReaderView(item: item, definitionID: favorite.definitionID)
+        case .comic: ComicDetailView(item: item, definitionID: favorite.definitionID)
+        case .video, .navLink: VideoDetailView(item: item, definitionID: favorite.definitionID)
         }
     }
 }
