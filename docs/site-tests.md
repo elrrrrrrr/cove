@@ -77,3 +77,9 @@ AJAX 样本额外填写 `page` 和 `responses`，将指定请求替换为快照�
 `testDefinitionRoundTripsAndReportsFixtureCoverage` 输出每个定义已经覆盖的提取规则和缺少样本的规则。没有样本只能算语法和格式已校验，不代表该站点的功能已经验证。本地首批覆盖近期列表、门户和封面问题；其他站点的网页样本仍需补充。
 
 离线回归防止代码或规则修改破坏已保存的页面；网站自身改版、登录态、网络可达性和真机播放需要现场验证。解析测试通过也不能替代布局、手势或性能测试。
+
+## 公开图文示例
+
+`ArticleTests` 直接读取 `examples/sites/hacker-news.site`，使用 `Tests/Fixtures/Articles/` 的虚构 HTML 和图片验证当前 schema、CSS/JS 同一图文契约、列表/下一页、正文/评论边界、安全链接、输出预算、超时/取消、收藏/置顶、历史身份和备份/文件夹同步。它不依赖私有目录或线上请求。
+
+`ArticleUITests` 用 localhost 导入同一配置，检查原生列表、分页、正文、收藏、原网页检查和进度恢复；滚动至末段后从收藏和主页重开，必须恢复末段。README 的三张实际截图来自无私有预置的构建，使用固定演示内容。配置示例和手动调试步骤见 [HTML → 原生阅读](html-to-native.md)。
