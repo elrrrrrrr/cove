@@ -113,7 +113,7 @@ final class PageLoader: NSObject {
 
     private static func createWebView() -> WKWebView {
         let config = WKWebViewConfiguration()
-        config.websiteDataStore = .default()
+        config.websiteDataStore = SiteWebSession.dataStore
         config.allowsInlineMediaPlayback = true
         let prefs = WKWebpagePreferences()
         prefs.allowsContentJavaScript = true

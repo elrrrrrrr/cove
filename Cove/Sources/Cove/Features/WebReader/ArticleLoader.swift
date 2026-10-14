@@ -6,7 +6,7 @@ import WebKit
     private var storedWebView: WKWebView?
     var webView: WKWebView {
         if let storedWebView { return storedWebView }
-        let config = WKWebViewConfiguration(); config.websiteDataStore = .default()
+        let config = WKWebViewConfiguration(); config.websiteDataStore = SiteWebSession.dataStore
         let view = WKWebView(frame: .zero, configuration: config)
         view.navigationDelegate = self; storedWebView = view; return view
     }
