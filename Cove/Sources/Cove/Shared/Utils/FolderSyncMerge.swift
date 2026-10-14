@@ -26,6 +26,26 @@ enum SyncJSON: Codable, Equatable, Sendable {
     var object: [String: SyncJSON]? { if case .object(let v) = self { return v }; return nil }
 }
 
+extension SyncJSON {
+    /// Normalized form for equality comparison: drops volatile metadata (`exportDate`)
+    /// and sorts arrays (by `id`, or by scalar value) so ordering differences don't count as changes.
+    func normalized(idSortedKeys: [String], scalarSortedKeys: [String] = []) -> SyncJSON {
+        guard var object = self.object else { return self }
+        object.removeValue(forKey: "exportDate")
+        for key in idSortedKeys {
+            if case .array(let values) = object[key] {
+                object[key] = .array(values.sorted { String(describing: $0.object?["id"]) < String(describing: $1.object?["id"]) })
+            }
+        }
+        for key in scalarSortedKeys {
+            if case .array(let values) = object[key] {
+                object[key] = .array(values.sorted { String(describing: $0) < String(describing: $1) })
+            }
+        }
+        return .object(object)
+    }
+}
+
 enum FolderSyncMerge {
     struct Result: Sendable { var data: Data; var hasConflicts: Bool }
     static func merge(local: Data, remote: Data, baseline: Data?) throws -> Result {
@@ -89,15 +109,9 @@ enum FolderSyncMerge {
         return Result(data: try encoder.encode(SyncJSON.object(output)), hasConflicts: conflicts)
     }
     static func equivalent(_ first: Data, _ second: Data) throws -> Bool {
+        let keys = ["sites", "nasConfigs", "siteDefinitions", "favorites", "histories", "offlineItems"]
         func value(_ data: Data) throws -> [String: SyncJSON] {
-            var object = try JSONDecoder().decode(SyncJSON.self, from: data).object ?? [:]
-            object.removeValue(forKey: "exportDate")
-            for key in ["sites", "nasConfigs", "siteDefinitions", "favorites", "histories", "offlineItems"] {
-                if case .array(let values) = object[key] {
-                    object[key] = .array(values.sorted { String(describing: $0.object?["id"]) < String(describing: $1.object?["id"]) })
-                }
-            }
-            return object
+            try JSONDecoder().decode(SyncJSON.self, from: data).normalized(idSortedKeys: keys).object ?? [:]
         }
         return try value(first) == value(second)
     }
