@@ -1,6 +1,8 @@
 # IPA 与 Release
 
-GitHub Actions 使用 `macos-26`、Xcode 26.6 与 XcodeGen 编译真机 Release archive，再打包为 `Payload/Cove.app`。产物是 **未签名 IPA**，要求 iOS 26+，需要下载后用自己的签名工具签名才能安装。它不适用于直接提交 TestFlight / App Store。
+GitHub Actions 使用 `xcode-27`、稳定版 Xcode 27.0 与 XcodeGen 编译真机 Release archive，再打包为 `Payload/Cove.app`。产物是 **未签名 IPA**，要求 iOS 26+，需要下载后用自己的签名工具签名才能安装。它不适用于直接提交 TestFlight / App Store。
+
+GitHub 的 `xcode-27` runner 当前处于 preview；固定使用稳定版 Xcode 27.0，避免 Xcode 26.x 在本项目 Release 编译时出现的 Swift IRGen 崩溃。iOS 最低版本仍为 26，不需要关闭严格并发或 Release 优化。
 
 不需要 Apple 证书或 GitHub Secrets。公开构建不包含私有站点、预置收藏、开发描述文件或用户资料；站点可在 App 内导入。本地 `Cove-test.ipa` 属于开发签名测试包，与此流程不同。
 
