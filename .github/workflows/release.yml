@@ -8,6 +8,8 @@ on:
       - 'scripts/package-ipa.py'
       - 'scripts/test_release.py'
       - 'Cove/project.yml'
+      - 'Cove/Sources/**'
+      - 'Cove/Resources/**'
   push:
     tags: ['v*']
   workflow_dispatch:

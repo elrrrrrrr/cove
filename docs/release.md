@@ -6,7 +6,7 @@ GitHub Actions 使用 `macos-26`、Xcode 26.3 与 XcodeGen 编译真机 Release 
 
 ## 合并与发布
 
-1. 通过 PR 合并代码到 `main`。涉及打包流程或项目配置的 PR 会验证真机 archive 和 IPA；其他代码回归由 CI 负责。
+1. 通过 PR 合并代码到 `main`。涉及应用源码、资源、打包流程或项目配置的 PR 会验证真机 archive 和 IPA；单元测试等回归由 CI 负责。
 2. 在准备好的提交上打标签，例如：
 
    ```sh
