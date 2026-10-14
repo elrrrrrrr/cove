@@ -44,3 +44,6 @@ credentials.json
 id_rsa
 id_ed25519
 __pycache__/
+
+# Optional brand intermediate (layout source is scripts/render-brand.mjs)
+/docs/brand/hero.svg

@@ -1,0 +1,33 @@
+schemaVersion: 1
+id: example.local.video
+name: 山海影库
+match: {hosts: [video.example, 127.0.0.1]}
+entries:
+  - {id: films, name: 山海影库, path: 'http://127.0.0.1:8765/videos/', category: video}
+rules:
+  - id: films
+    role: catalog
+    contentType: video
+    match: {pathPrefix: /videos/}
+    presentation: {layout: bento}
+    searchURLTemplate: '/videos/?q={keyword}'
+    categories:
+      - {name: 全部, path: /videos/}
+      - {name: 自然, path: '/videos/?tag=nature'}
+      - {name: 城市, path: '/videos/?tag=city'}
+    extract:
+      items: article.media-card
+      fields:
+        title: {selector: .title, text: true}
+        url: {selector: a, attribute: href}
+        thumbnail: {selector: img, attribute: src}
+        duration: {selector: .duration, text: true}
+        extra: {selector: .tag, text: true}
+    pagination: {mode: nextLink, selector: 'a[rel=next]', attribute: href}
+  - id: film
+    role: video
+    match: {pathPrefix: /watch/}
+    extract:
+      fields:
+        title: {selector: h1, text: true}
+        url: {selector: 'video source', attribute: src, resolveURL: true}

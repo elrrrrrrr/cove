@@ -1,69 +1,133 @@
-# Cove
+<p align="center">
+  <img src="docs/brand/icon.png" width="88" alt="Cove App icon">
+</p>
+<h1 align="center">Cove</h1>
+<p align="center"><strong>网页、NAS、本地文件，都能好好读。</strong></p>
+<p align="center">A configurable iOS browser and reader for your own content.</p>
+<p align="center">
+  <a href="#体验示例">体验示例</a> ·
+  <a href="#从-html-到原生界面">HTML → 原生界面</a> ·
+  <a href="#开始使用">开始使用</a>
+</p>
 
-把网页、NAS 与本地文件，放进同一个浏览与阅读空间。
+![Cove 展示：网站资源、漫画书架与 NAS 资料库](docs/brand/hero.png)
 
-Cove is a configurable iOS resource browser and reader for websites, SMB shares, and local files.
+看视频、翻漫画、读文章，或继续 NAS 上的一本书。Cove 把不同来源的内容放进熟悉的浏览与阅读界面，收藏和阅读进度留在本地。
 
-Cove 用 `.site` 配置描述网页的入口、内容和交互：普通页面用 CSS 选择器，复杂页面用 JavaScript，解析后的内容进入原生列表、播放器或阅读器。站点规则可以在 App 内编辑，应用代码无需为每个站点增加分支。
+## 你的内容，你的阅读空间
 
-## 你可以用它做什么
+| 来源与浏览 | 阅读与播放 | 整理与继续 |
+| --- | --- | --- |
+| 网页解析、SMB 与本地文件 | 原生图文、TXT、EPUB、PDF | 收藏置顶、手动排序、继续阅读 |
+| 列表 / Bento / 竖版随时切换 | 图片与 CBZ 漫画、视频与音乐 | 离线下载、快速访问、全局主题 |
+| 配置分类、搜索与分页 | NAS 音视频流式播放、Ogg Opus | TXT 翻页或滚动、[文件夹同步](docs/icloud-folder-sync.md) |
 
-- **浏览资源**：网站与 NAS 可切换列表、Bento、竖版布局；网站支持按规则配置分类、搜索与分页。
-- **阅读和播放**：原生图文、TXT、EPUB、PDF、图片与 CBZ 漫画；视频与音乐播放，包含 Ogg Opus。NAS 音视频支持流式播放。
-- **管理内容**：快速访问、收藏置顶与排序、继续阅读、离线下载；全局主题，TXT 翻页或滚动阅读。
-- **管理配置**：交互式表单、完整 YAML 源码、网页点选与解析预览；解析卡住时查看当前原始网页。可通过授权的 [iCloud Drive 文件夹](docs/icloud-folder-sync.md)同步配置与资料。
+网站适配写在 `.site` 中：简单页面用 CSS，复杂页面用 JavaScript。在 App 里可以点选网页、预览解析结果，用表单或 YAML 编辑规则；遇到加载问题，可以打开当前原始网页排查。
 
-## 从 HTML 到原生阅读
+## 体验示例
 
-[Hacker News 示例](examples/sites/hacker-news.site)提供热门、最新、Ask HN 与 Show HN 入口。列表按标题行提取帖子，点击后将正文转换为原生段落、图片和链接；收藏和阅读进度保存在本地。评论在原网页中查看。链接帖可继续进入外部文章，正文提取失败时可打开原网页。
+这里的示例可以实际运行。网页结构取自站点适配中常见的场景，内容与规则重新编写为可公开的演示；真实站点规则仍放在本地私有目录。
 
 <table>
+<tr><th>网站 · Bento 影库</th><th>网站 · 竖版漫画书架</th><th>NAS · 同一个浏览空间</th></tr>
 <tr>
-<th>原始 HTML 页面</th><th>原生列表</th><th>原生图文阅读</th>
-</tr>
-<tr>
-<td><img src="docs/assets/hn-original-article.png" width="250" alt="Hacker News 风格的演示原网页"></td>
-<td><img src="docs/assets/hn-native-list.png" width="250" alt="配置解析后生成的 Cove 原生帖子列表"></td>
-<td><img src="docs/assets/hn-native-article.png" width="250" alt="Cove 原生图文阅读器展示段落、图片和标题"></td>
+<td><img src="docs/assets/website-bento.png" width="250" alt="实际 Cove 界面：山海影库的视频缩略图、分类和分页"></td>
+<td><img src="docs/assets/website-comic.png" width="250" alt="实际 Cove 界面：漫游书架的竖版封面列表"></td>
+<td><img src="docs/assets/nas-bento.png" width="250" alt="实际 Cove 界面：SMB 资料库中的视频、图片、音乐与阅读文件"></td>
 </tr>
 </table>
 
-截图来自实际运行的 Cove 和固定的离线演示页面，内容为虚构资料，不是线上 Hacker News 用户帖子。
+| 示例 | 能体验什么 | 直接查看 |
+| --- | --- | --- |
+| **山海影库** | 视频缩略图、Bento、分类、搜索、下一页与播放 | [视频配置](examples/sites/local-video.site) |
+| **漫游书架** | 竖版封面、漫画详情、章节与图片阅读 | [漫画配置](examples/sites/local-comic.site) |
+| **沿途手记** | 原生图文、图片、链接、收藏与阅读进度 | [图文配置](examples/sites/local-journal.site) |
+| **资源导航** | 从目录进入子列表，再打开资源 | [目录配置](examples/sites/local-directory.site) |
+| **Hacker News** | 公开站点、JS 组合列表、CSS 正文提取 | [HN 配置](examples/sites/hacker-news.site) |
+| **NAS 资料库** | SMB 浏览与流式播放，打开 CBZ / TXT / PDF / Opus | [NAS 指南与演示文件](examples/nas/README.md) |
+
+启动本地网站，在模拟器中的 Cove 导入 `examples/sites/local-*.site`：
+
+```sh
+python3 scripts/serve-examples.py
+```
+
+浏览器打开 `http://127.0.0.1:8765/`，可以看到同一份内容的原始网页。[完整示例指南](examples/README.md)包含真机局域网设置与验证说明。
+
+### NAS：把共享目录变成资料库
+
+把 [演示文件](examples/nas/files) 放进自己的 SMB 共享，在 Cove 的 NAS 页添加连接。目录中混合的视频、图片、漫画、小说、文档与音频会进入各自的播放器或阅读器，右上角可以切换浏览布局。
+
+<table>
+<tr><th>按文件浏览</th><th>按内容浏览</th></tr>
+<tr>
+<td><img src="docs/assets/nas-list.png" width="260" alt="NAS 列表布局展示演示文件及类型"></td>
+<td><img src="docs/assets/nas-bento.png" width="260" alt="同一 NAS 目录切换为 Bento 布局"></td>
+</tr>
+</table>
+
+没有 NAS 也可以运行只读的 localhost SMB 示例，见 [NAS 示例指南](examples/nas/README.md)。截图使用实际生产视图与 SMB 请求；文件、插画与标题均为固定演示内容。[截图来源](docs/assets/README.md)
+
+## 从 HTML 到原生界面
+
+一份 `.site` 描述入口、页面角色和解析规则，Cove 把解析结果交给原生列表、播放器或阅读器。应用代码无需为每个站点增加分支。
 
 ```mermaid
 flowchart LR
-    HTML[HTML 网页] --> Rules[.site 的 CSS / JavaScript]
-    Rules --> Data[列表条目 / 图文块]
-    Data --> UI[SwiftUI 列表 / 阅读器]
+    HTML[HTML 网页] --> Rules[.site · CSS / JavaScript]
+    Rules --> Data[列表条目 / 图文块 / 播放地址]
+    Data --> UI[原生列表 / 阅读器 / 播放器]
     UI --> Local[本地收藏 / 阅读进度]
 ```
 
-一份 `.site` 使用当前唯一的 `schemaVersion: 1`：
+<table>
+<tr><th>原始网页</th><th>原生列表</th><th>原生图文阅读</th></tr>
+<tr>
+<td><img src="docs/assets/hn-original-article.png" width="250" alt="Hacker News 风格的演示 HTML 页面"></td>
+<td><img src="docs/assets/hn-native-list.png" width="250" alt="同一配置生成的 Cove 原生帖子列表"></td>
+<td><img src="docs/assets/hn-native-article.png" width="250" alt="Cove 原生图文阅读器中的段落、图片和标题"></td>
+</tr>
+</table>
+
+[Hacker News 示例](examples/sites/hacker-news.site)提供热门、最新、Ask HN 与 Show HN 入口。链接帖可以继续进入外部文章，评论在原网页中查看。以上截图是实际应用读取离线虚构页面的结果，不是线上用户帖子。
+
+### schema 的四个部分
+
+只有一个当前格式：`schemaVersion: 1`。
 
 | 字段 | 负责什么 |
 | --- | --- |
 | `id`、`name` | 稳定的站点身份与显示名称 |
-| `match` | 匹配域名；规则还可按路径、查询参数匹配 |
-| `entries` | 用户可以打开的入口 |
-| `rules` | 每种页面的角色、加载、提取、分页与展示 |
+| `match` | 匹配域名；规则还可按路径和查询参数匹配 |
+| `entries` | 可以打开的入口与分类 |
+| `rules` | 页面角色、加载、提取、搜索、分页与展示 |
 
-列表规则设置 `contentType: article`，条目会进入图文阅读器；详情规则设置 `role: article`。正文可以直接用选择器描述：
+例如，一个 HTML 视频列表只需描述卡片、字段与布局：
 
 ```yaml
-# rules 中的一条详情规则
-- id: article
-  role: article
-  match: {pathPrefix: /posts/}
-  extract:
-    fields:
-      title: {selector: h1, text: true}
-      author: {selector: .author, text: true}
-      blocks: {selector: article, content: true}
+schemaVersion: 1
+id: example.video
+name: 我的影库
+match: {hosts: [video.example]}
+entries:
+  - {id: films, name: 影库, path: /videos/, category: video}
+rules:
+  - id: films
+    role: catalog
+    contentType: video
+    match: {pathPrefix: /videos/}
+    presentation: {layout: bento}
+    extract:
+      items: article.media-card
+      fields:
+        title: {selector: .title, text: true}
+        url: {selector: a, attribute: href}
+        thumbnail: {selector: img, attribute: src}
 ```
 
-`content: true` 按 DOM 顺序提取段落、标题、图片、引用、代码和链接。复杂页面可以用 `extract.script` 返回相同的图文块结构。Hacker News 的标题与元信息位于相邻表格行，因此示例用 JavaScript 组合列表，正文仍用 CSS。
+详情页再补一条播放或阅读规则。图文正文可用 `blocks: {selector: article, content: true}` 按 DOM 顺序提取段落、标题、图片、引用、代码和链接。JavaScript 的 `extract.script` 返回相同的内容结构。
 
-查看 [HTML → 原生阅读教程](docs/html-to-native.md)了解完整配置与结果结构，或查阅 [schema 参考](docs/site-format.md)。
+[完整 schema 参考](docs/site-format.md) · [HTML → 原生阅读教程](docs/html-to-native.md) · [可导入的完整示例](examples/README.md)
 
 ## 开始使用
 
@@ -75,11 +139,12 @@ xcodegen generate
 open Cove.xcodeproj
 ```
 
-在 Xcode 的 Signing & Capabilities 中选择自己的 Team；长期修改请同步到 `Cove/project.yml`，它是项目配置来源。选择模拟器或自己的设备运行。项目、Swift 模块和 Scheme 均为 `Cove`；已安装应用的 Bundle ID 和 NAS Keychain 标识保持原值，以便覆盖升级保留资料与密码。
+在 Xcode 的 Signing & Capabilities 中选择自己的 Team；长期修改请同步到 `Cove/project.yml`，它是项目配置来源。项目、Swift 模块和 Scheme 均为 `Cove`；已安装应用的 Bundle ID 和 NAS Keychain 标识保持原值，以便覆盖升级保留资料与密码。
 
-首次运行可以没有任何站点配置。在「设置 → 管理网站」导入 [hacker-news.site](examples/sites/hacker-news.site)，也可以创建配置并用表单或 YAML 编辑。普通站点是否支持搜索、分页与正文，取决于该站点的规则和页面结构；外部文章的自动提取优先寻找 `article`、`main` 或 `[role=main]`。
+在「设置 → 管理网站」导入示例，也可以创建配置并用表单或 YAML 编辑。首次运行可以没有任何站点。普通站点的搜索、分页与正文能力取决于配置和页面结构。
 
-可选的本地预置目录：
+<details>
+<summary>本地预置与资料存储</summary>
 
 ```text
 sites/*.site             # 本地构建自动打包的站点规则
@@ -87,23 +152,22 @@ data/favorites.json      # 可选预置收藏
 config/                  # 私有回归样本与工具资料
 ```
 
-预置只在首次初始化导入一次；删除后不会自动重新添加。后续修改可在 App 内导入，或使用 iCloud Drive 文件夹同步。根目录的 `sites/`、`data/`、`config/` 和其他私有 `.site` 均被 Git 忽略；`examples/` 保存可提交的示例。应用数据位于 `Application Support/Cove/config` 和 `data`，NAS 密码留在 Keychain。
+预置只在首次初始化导入一次；删除后不会自动重新添加。后续可在 App 内导入，或使用 iCloud Drive 文件夹同步。根目录的 `sites/`、`data/`、`config/` 与其他私有 `.site` 均被 Git 忽略；`examples/` 保存可提交的示例。应用数据位于 `Application Support/Cove/config` 和 `data`，NAS 密码留在 Keychain。
+
+</details>
 
 ## 开发与验证
 
 ```sh
 python3 scripts/test_export.py
+python3 scripts/test_examples.py
 cd Cove
 xcodebuild -project Cove.xcodeproj -scheme Cove \
   -destination 'platform=iOS Simulator,name=iPhone 17 Pro' test
 ```
 
-测试使用离线页面与 localhost；可选的私有回归样本放在 `config/site-tests/`，缺少样本时相关测试跳过。新增、删除或移动 Swift 文件后运行 `xcodegen generate`。
+测试使用离线页面与 localhost。可选私有回归样本放在 `config/site-tests/`，缺少时相关测试跳过。新增、删除或移动 Swift 文件后运行 `xcodegen generate`。
 
-- [代码结构](docs/architecture.md)
-- [站点规则测试](docs/site-tests.md)
-- [缓存与性能](docs/performance.md)
-- [审计修复记录](docs/review-status.md)
-- [虚构站点配置](examples/sites/demo.site)与[预置收藏](examples/data/favorites.json)
+[代码结构](docs/architecture.md) · [规则测试](docs/site-tests.md) · [缓存与性能](docs/performance.md) · [审计修复](docs/review-status.md) · [品牌素材与设计工具](docs/brand/README.md)
 
-RAR/CBR 尚无实际解码器；视频格式支持还取决于系统解码能力。X 尚未适配。真实站点登录、NAS 与真机性能需要实际环境验证。
+RAR/CBR 尚无实际解码器；视频格式取决于系统解码能力。X 尚未适配。真实站点登录、NAS 与真机性能需要实际环境验证。

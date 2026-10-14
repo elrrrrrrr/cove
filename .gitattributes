@@ -1,0 +1,2 @@
+# PDF exports contain byte offsets and must not be treated as line-oriented text.
+*.pdf binary

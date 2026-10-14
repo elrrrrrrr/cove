@@ -1,0 +1,43 @@
+schemaVersion: 1
+id: example.local.comic
+name: 漫游书架
+match: {hosts: [comic.example, 127.0.0.1]}
+entries:
+  - {id: books, name: 漫游书架, path: 'http://127.0.0.1:8765/comics/', category: comic}
+rules:
+  - id: books
+    role: catalog
+    contentType: comic
+    match: {pathPrefix: /comics/}
+    presentation: {layout: portrait}
+    searchURLTemplate: '/comics/?q={keyword}'
+    extract:
+      items: article.book-card
+      fields:
+        title: {selector: .title, text: true}
+        url: {selector: a, attribute: href}
+        thumbnail: {selector: img, attribute: src}
+        extra: {selector: .author, text: true}
+  - id: book
+    role: comic
+    match: {pathPrefix: /book/}
+    extract:
+      fields:
+        title: {selector: h1, text: true}
+        author: {selector: .author, text: true}
+        desc: {selector: .description, text: true}
+        cover: {selector: .cover, attribute: src}
+        chapters:
+          selector: a.chapter
+          all: true
+          fields:
+            title: {text: true}
+            url: {attribute: href, resolveURL: true}
+  - id: chapter
+    role: chapter
+    match: {pathPrefix: /chapter/}
+    extract:
+      fields:
+        images: {selector: 'main img', attribute: src, all: true}
+        nextChapter: {selector: 'a[rel=next]', attribute: href}
+        prevChapter: {selector: 'a[rel=prev]', attribute: href}

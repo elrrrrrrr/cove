@@ -1,0 +1,27 @@
+schemaVersion: 1
+id: example.local.journal
+name: 沿途手记
+match: {hosts: [journal.example, 127.0.0.1]}
+entries:
+  - {id: stories, name: 沿途手记, path: 'http://127.0.0.1:8765/journal/', category: news}
+rules:
+  - id: stories
+    role: catalog
+    contentType: article
+    match: {pathPrefix: /journal/}
+    presentation: {layout: list}
+    extract:
+      items: article.story
+      fields:
+        title: {selector: h2, text: true}
+        url: {selector: a, attribute: href}
+        thumbnail: {selector: img, attribute: src}
+        extra: {selector: .author, text: true}
+  - id: story
+    role: article
+    match: {pathPrefix: /post/}
+    extract:
+      fields:
+        title: {selector: h1, text: true}
+        author: {selector: .author, text: true}
+        blocks: {selector: article.body, content: true}
