@@ -464,26 +464,16 @@ struct TXTReaderView: View {
     // MARK: - Chapter list
 
     private var chapterListSheet: some View {
-        NavigationStack {
-            List(chapters) { ch in
-                Button {
-                    selectPage(ch.pageIndex)
-                    showChapterList = false
-                    showBars = false
-                } label: {
-                    HStack {
-                        Text(ch.title).lineLimit(2)
-                        Spacer()
-                        Text("p.\(ch.pageIndex + 1)").font(.caption).foregroundStyle(.secondary)
-                    }
-                }
+        ChapterListSheet(
+            chapters: chapters,
+            title: { $0.title },
+            subtitle: { "p.\($0.pageIndex + 1)" },
+            onSelect: { ch in
+                selectPage(ch.pageIndex)
+                showChapterList = false
+                showBars = false
             }
-            .appSurface()
-            .navigationTitle("目录")
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) { Button("完成") { showChapterList = false } }
-            }
-        }
+        )
     }
 
     // MARK: - Load
