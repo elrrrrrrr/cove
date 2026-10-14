@@ -10,6 +10,12 @@ struct ByteLRUCache<Key: Hashable> {
     let countLimit: Int
     var ttl: TimeInterval = 3600
 
+    init(byteLimit: Int, countLimit: Int, ttl: TimeInterval = 3600) {
+        self.byteLimit = byteLimit
+        self.countLimit = countLimit
+        self.ttl = ttl
+    }
+
     mutating func value(for key: Key, now: Date = Date()) -> Data? {
         guard let entry = entries[key] else { return nil }
         guard now.timeIntervalSince(entry.savedAt) <= ttl else {

@@ -86,7 +86,7 @@ struct SiteGalleryView: View {
         }
     }
 
-    var body: some View {
+    private var browserContent: some View {
         Group {
             if showWeb {
                 WebReaderView(url: loader.resolvedBaseURL ?? siteURL ?? URL(string: "https://example.com")!,
@@ -112,6 +112,10 @@ struct SiteGalleryView: View {
                 ParsingWebViewSheet(webView: loader.webView, request: request, status: loader.inspectionStatus)
             }
         }
+    }
+
+    private var observedContent: some View {
+        browserContent
         .task {
             guard let url = siteURL else { return }
             // Async cache pre-warm (disk I/O runs on actor, not main thread)
@@ -138,6 +142,10 @@ struct SiteGalleryView: View {
         .task(id: "favorites") {
             favoriteURLCache = Set(allFavorites.map(\.pageURLString))
         }
+    }
+
+    private var searchableContent: some View {
+        observedContent
         .searchable(text: $searchText, isPresented: $isSearchActive,
                     placement: .navigationBarDrawer(displayMode: .always), prompt: "搜索")
         .onSubmit(of: .search) { executeSearch() }
@@ -153,6 +161,10 @@ struct SiteGalleryView: View {
         } message: {
             Text("请在站点解析规则中配置包含 {keyword} 的搜索地址。")
         }
+    }
+
+    var body: some View {
+        searchableContent
         .refreshable { await loader.reloadAsync() }
         .alert("跳转到页码", isPresented: $showPageInput) {
             TextField("页码", text: $pageInputText)
