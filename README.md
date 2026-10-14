@@ -185,4 +185,4 @@ xcodebuild -project Cove.xcodeproj -scheme Cove \
 
 [代码结构](docs/architecture.md) · [规则测试](docs/site-tests.md) · [缓存与性能](docs/performance.md) · [审计修复](docs/review-status.md) · [品牌素材与设计工具](docs/brand/README.md)
 
-RAR/CBR 尚无实际解码器；视频格式取决于系统解码能力。X 尚未适配。真实站点登录、NAS 与真机性能需要实际环境验证。
+RAR/CBR 尚无实际解码器；视频格式取决于系统解码能力。X 处于实验适配阶段，真实规则保存在本地私有配置；见 [动态图文说明](docs/dynamic-articles.md)。真实站点登录、NAS 与真机性能需要实际环境验证。

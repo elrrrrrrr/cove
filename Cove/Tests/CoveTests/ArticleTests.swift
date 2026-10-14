@@ -61,6 +61,40 @@ import WebKit
         let js = try await execute(.init(script: "return {title:'标题',author:'作者',blocks:[{type:'paragraph',text:'正文'}]};"), html: "<main></main>")
         XCTAssertEqual(try ArticleDocument.decode(css, base: base, fallbackTitle: ""), try ArticleDocument.decode(js, base: base, fallbackTitle: ""))
     }
+    func testScriptContentHelperPreservesPostWhitespaceAndSafeLinks() async throws {
+        let html = "<main style='white-space:pre-wrap'>第一行\n第二行 <a href='/reference'>链接</a><script>secret()</script></main>"
+        let script = "return {title:'短帖',blocks:readArticleContent(document.querySelector('main'))};"
+        let result = try await execute(.init(script: script), html: html)
+        let expression = try await execute(.init(expression: "({title:'短帖',blocks:readArticleContent(document.querySelector('main'))})"), html: html)
+        let value = try ArticleDocument.decode(result, base: base, fallbackTitle: "")
+        XCTAssertEqual(value, try ArticleDocument.decode(expression, base: base, fallbackTitle: ""))
+        XCTAssertEqual(String(value.blocks[0].text.characters), "第一行\n第二行 链接")
+        XCTAssertTrue(value.blocks[0].text.runs.contains { $0.link == URL(string: "https://news.example/reference") })
+    }
+    func testSameOriginLoginRedirectKeepsConfiguredDiagnostics() async throws {
+        let html = Data("<main><p>这里需要登录</p><form><input type='password'></form></main>".utf8)
+        let server = try ArticleFixtureServer(routes: ["/login":("text/html; charset=utf-8", html)], redirects: ["/post":"/login"])
+        var value = SiteDefinition.starter(name: "动态文章", url: URL(string: server.url)!)
+        value.rules = [.init(id: "post", role: "article", match: .init(pathPrefix: "/post"), extract: .init(script: "throw new Error('请在原始网页登录后重新解析');"))]
+        let previous = SiteParserRegistry.definitions; defer { SiteParserRegistry.replaceDefinitions(previous) }
+        SiteParserRegistry.replaceDefinitions([value])
+        let loader = ArticleLoader(); loader.load(url: URL(string: server.url + "/post")!, title: "帖子", definitionID: value.id)
+        try await wait { if case .failed = loader.state { return true }; return false }
+        if case .failed(let message) = loader.state { XCTAssertTrue(message.contains("登录后重新解析"), message) }
+        XCTAssertEqual(loader.webView.url?.path, "/login")
+        XCTAssertEqual(loader.request?.url?.path, "/post")
+    }
+    func testCrossOriginRedirectCannotReuseOriginalExtractor() async throws {
+        let destination = try ArticleFixtureServer(routes: ["/article":("text/html; charset=utf-8", Data("<main><p>外站普通正文</p></main>".utf8))])
+        let source = try ArticleFixtureServer(routes: [:], redirects: ["/post":destination.url + "/article"])
+        var value = SiteDefinition.starter(name: "动态文章", url: URL(string: source.url)!)
+        value.rules = [.init(id: "post", role: "article", match: .init(pathPrefix: "/post"), extract: .init(script: "throw new Error('原站规则不应在外站执行');"))]
+        let previous = SiteParserRegistry.definitions; defer { SiteParserRegistry.replaceDefinitions(previous) }
+        SiteParserRegistry.replaceDefinitions([value])
+        let loader = ArticleLoader(); loader.load(url: URL(string: source.url + "/post")!, title: "外站", definitionID: value.id)
+        try await wait { if case .loaded = loader.state { return true }; return false }
+        if case .loaded(let document) = loader.state { XCTAssertEqual(String(document.blocks[0].text.characters), "外站普通正文") }
+    }
     func testMissingUnsafeAndOversizedContentReportsError() throws {
         XCTAssertThrowsError(try ArticleDocument.decode(Data(#"{"blocks":[]}"#.utf8), base: base, fallbackTitle: ""))
         XCTAssertThrowsError(try ArticleDocument.decode(Data(#"{"blocks":[{"type":"iframe","url":"https://news.example"}]}"#.utf8), base: base, fallbackTitle: ""))
@@ -194,7 +228,7 @@ import WebKit
         webView.navigationDelegate = self
         try await withCheckedThrowingContinuation { continuation in
             pending = continuation
-            webView.loadHTMLString("<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; script-src 'unsafe-eval'\">" + html, baseURL: base)
+            webView.loadHTMLString("<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; script-src 'unsafe-eval'; style-src 'unsafe-inline'\">" + html, baseURL: base)
             Task { @MainActor [weak self] in
                 try? await Task.sleep(for: .seconds(5))
                 guard let pending = self?.pending else { return }; self?.pending = nil

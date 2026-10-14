@@ -65,6 +65,9 @@ struct SiteDefinition: Codable, Sendable, Equatable, Identifiable {
             if let pagination = rule.pagination {
                 try require(["none", "nextLink", "webNavigation", "ajax"].contains(pagination.mode), "未知分页方式：\(pagination.mode)")
                 try require(pagination.mode == "none" || pagination.selector != nil || pagination.script != nil || pagination.expression != nil, "分页需要选择器或脚本")
+                if let expression = pagination.hasMoreExpression {
+                    try require(pagination.mode == "ajax" && !expression.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, "hasMoreExpression 需要 AJAX 分页和非空表达式")
+                }
             }
             if let request = rule.request {
                 _ = try NSRegularExpression(pattern: request.capturePattern)
@@ -96,7 +99,7 @@ struct SiteDefinition: Codable, Sendable, Equatable, Identifiable {
         encoder.options.allowUnicode = true
         let text = try encoder.encode(self)
         guard var node = try Yams.compose(yaml: text) else { return text }
-        let codeKeys: Set<String> = ["script", "expression", "preNavigateScript", "preNavigateExpression", "transformScript", "thumbnailScript"]
+        let codeKeys: Set<String> = ["script", "expression", "preNavigateScript", "preNavigateExpression", "transformScript", "thumbnailScript", "hasMoreExpression"]
         func format(_ node: inout Yams.Node) {
             if var mapping = node.mapping {
                 for index in mapping.indices {
@@ -243,8 +246,8 @@ struct SiteExtraction: Codable, Sendable, Equatable {
     }
 
     var javascript: String {
-        if let expression { return SiteScript.jsonExpression(expression) }
-        if let script { return SiteScript.jsonExpression("(async function(){\n" + script + "\n})()") }
+        if let expression { return SiteScript.jsonExpression("(async function(){\n" + ArticleDOM.script + "\nreturn await (" + expression + ");\n})()") }
+        if let script { return SiteScript.jsonExpression("(async function(){\n" + ArticleDOM.script + "\n" + script + "\n})()") }
         let config = SiteScript.json(self)
         return """
         (async function() {
@@ -322,7 +325,7 @@ enum SiteSchema {
         "presentation": ["layout", "mixedMedia", "episodeCountField", "episodeURLTemplate"],
         "extract": ["items", "fields", "script", "expression"],
         "field": ["selector", "text", "attribute", "fallbackAttributes", "all", "number", "resolveURL", "pattern", "capture", "value", "fields", "content"],
-        "pagination": ["mode", "selector", "attribute", "script", "expression", "thumbnailScript"],
+        "pagination": ["mode", "selector", "attribute", "script", "expression", "thumbnailScript", "hasMoreExpression"],
         "category": ["name", "path"],
         "request": ["capturePattern", "urlTemplate", "responsePattern", "exclude"],
         "portal": ["url", "base64Pattern", "dataPattern", "keyPattern", "urlPaths", "identityPaths", "identityPattern", "excludedHosts", "headers"],
@@ -369,6 +372,7 @@ struct SitePagination: Codable, Sendable, Equatable {
     var script: String?
     var expression: String?
     var thumbnailScript: String?
+    var hasMoreExpression: String?
 }
 
 struct SiteTextRequest: Codable, Sendable, Equatable {

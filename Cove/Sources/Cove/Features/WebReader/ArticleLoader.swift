@@ -43,8 +43,12 @@ import WebKit
         if state == .loading { state = .idle }
     }
 
-    private func rule(for url: URL) -> SiteRule? {
-        SiteParserRegistry.rule(for: url, role: "article", definitionID: definitionID)
+    private func rule(for url: URL, allowRequestFallback: Bool = false) -> SiteRule? {
+        if let match = SiteParserRegistry.rule(for: url, role: "article", definitionID: definitionID) { return match }
+        // Login redirects on the same origin still need the configured extractor's diagnostics.
+        guard allowRequestFallback, let original = request?.url, original.scheme == url.scheme,
+              original.host == url.host, original.port == url.port else { return nil }
+        return SiteParserRegistry.rule(for: original, role: "article", definitionID: definitionID)
     }
 
     private func navigate(_ request: URLRequest) { navigationID = webView.load(request).map(ObjectIdentifier.init) }
@@ -52,7 +56,7 @@ import WebKit
     private func extract() {
         guard state == .loading, let url = webView.url ?? request?.url else { return }
         extraction?.cancel()
-        let id = generation, rule = rule(for: url)
+        let id = generation, rule = rule(for: url, allowRequestFallback: true)
         extraction = Task {
             do {
                 if let wait = rule?.load?.waitSeconds, wait > 0 { try await Task.sleep(for: .seconds(wait)) }
@@ -75,7 +79,7 @@ import WebKit
                 timeout?.cancel(); timeout = nil; state = .loaded(document)
             } catch {
                 guard generation == id, !Task.isCancelled, state == .loading else { return }
-                fail(error.localizedDescription)
+                fail(WebScript.message(for: error))
             }
         }
     }

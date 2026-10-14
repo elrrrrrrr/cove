@@ -82,7 +82,9 @@ private struct ArticleRun: Decodable { let text: String; let url: String? }
 enum ArticleDOM {
     static let script = #"""
     function readArticleContent(root) {
+        if (!root) return [];
         const blocks = []; let runs = [], type = 'paragraph', level = 2, characters = 0;
+        const preserveWhitespace = ['pre','pre-wrap','break-spaces'].includes(getComputedStyle(root).whiteSpace);
         const ignored = new Set(['SCRIPT','STYLE','IFRAME','FORM','INPUT','BUTTON','NAV','FOOTER','NOSCRIPT','TEMPLATE']);
         const containers = new Set(['P','DIV','SECTION','ARTICLE','MAIN','UL','OL','LI','TABLE','TR','TD']);
         function address(value) {
@@ -101,7 +103,7 @@ enum ArticleDOM {
         }
         function walk(node, link = null) {
             if (node.nodeType === 3) {
-                const text = type === 'code' ? node.textContent : node.textContent.replace(/\s+/g, ' ');
+                const text = type === 'code' || preserveWhitespace ? node.textContent : node.textContent.replace(/\s+/g, ' ');
                 characters += text.length;
                 if (characters > 1000000) throw new Error('正文文字超过限制');
                 if (text) runs.push({text, url: link});

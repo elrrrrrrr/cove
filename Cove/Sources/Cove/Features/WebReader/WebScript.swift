@@ -1,6 +1,12 @@
 import WebKit
 
 @MainActor enum WebScript {
+    static func message(for error: Error) -> String {
+        if let message = (error as NSError).userInfo["WKJavaScriptExceptionMessage"] as? String {
+            return String(message.prefix(1024))
+        }
+        return error.localizedDescription
+    }
     /// Execute expressions, including Promise-returning extraction hooks, in the page context.
     static func evaluate(_ expression: String, in webView: WKWebView) async throws -> Any? {
         try await webView.callAsyncJavaScript("return await (\(expression));", arguments: [:], in: nil, contentWorld: .page)

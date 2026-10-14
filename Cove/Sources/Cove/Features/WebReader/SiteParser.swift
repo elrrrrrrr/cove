@@ -135,6 +135,7 @@ struct SiteParser: Sendable {
 
     // ── Phase 4 ──────────────────────────────────────────────────────────
     let paginationMode: PaginationMode
+    var hasMoreExpression: String?
 
     // ── Optional: sub-categories for gallery picker ──────────────────────
     let categories    : [SiteParserCategory]
@@ -257,6 +258,7 @@ final class SiteParserRegistry: @unchecked Sendable {
         parser.transformScript = rule.load?.transformScript
         parser.requestHeaders = rule.load?.headers ?? [:]
         parser.presentation = rule.presentation ?? .init()
+        parser.hasMoreExpression = rule.pagination?.hasMoreExpression
         return parser
     }
 }
@@ -378,6 +380,7 @@ extension SiteParser {
         result.transformScript = transformScript
         result.requestHeaders = requestHeaders
         result.presentation = presentation
+        result.hasMoreExpression = hasMoreExpression
         return result
     }
 
