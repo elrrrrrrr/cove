@@ -14,14 +14,14 @@ class ExportPolicyTests(unittest.TestCase):
                      "config/site-tests/cases.json", "config/site-tests/source/cover.bin",
                      "Nested/.env", ".env.production", "keys/signing.p8", "cert.p12",
                      "Nested/id_ed25519", ".netrc", "Nested/credentials.json",
-                     "Other/EasyReader.xcodeproj/project.pbxproj", "private-copy.site", "Nested/PRIVATE.SITE"]:
+                     "Other/Cove.xcodeproj/project.pbxproj", "private-copy.site", "Nested/PRIVATE.SITE"]:
             with self.subTest(path=path):
                 self.assertFalse(module.allowed_path(Path(path)))
 
     def test_reserved_examples_and_code_remain_exportable(self):
         for path in ["examples/sites/demo.site", "examples/data/favorites.json",
-                     "EasyReader/Tests/Fixtures/Sites/demo.site",
-                     "EasyReader/Sources/EasyReader/Core/Resource.swift", ".env.example"]:
+                     "Cove/Tests/Fixtures/Sites/demo.site",
+                     "Cove/Sources/Cove/Core/Resource.swift", ".env.example"]:
             with self.subTest(path=path):
                 self.assertTrue(module.allowed_path(Path(path)))
 

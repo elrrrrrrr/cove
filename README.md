@@ -70,12 +70,12 @@ flowchart LR
 目前通过源码构建，目标为 **iOS 26+**。需要 Xcode（iOS 26 SDK 或更新）和 XcodeGen；依赖通过 Swift Package Manager 获取。模拟器可直接运行，安装到真机需自己的 Apple 开发签名。
 
 ```sh
-cd EasyReader
+cd Cove
 xcodegen generate
-open EasyReader.xcodeproj
+open Cove.xcodeproj
 ```
 
-在 Xcode 的 Signing & Capabilities 中选择自己的 Team；长期修改请同步到 `EasyReader/project.yml`，它是项目配置来源。选择模拟器或自己的设备运行。
+在 Xcode 的 Signing & Capabilities 中选择自己的 Team；长期修改请同步到 `Cove/project.yml`，它是项目配置来源。选择模拟器或自己的设备运行。项目、Swift 模块和 Scheme 均为 `Cove`；已安装应用的 Bundle ID 和 NAS Keychain 标识保持原值，以便覆盖升级保留资料与密码。
 
 首次运行可以没有任何站点配置。在「设置 → 管理网站」导入 [hacker-news.site](examples/sites/hacker-news.site)，也可以创建配置并用表单或 YAML 编辑。普通站点是否支持搜索、分页与正文，取决于该站点的规则和页面结构；外部文章的自动提取优先寻找 `article`、`main` 或 `[role=main]`。
 
@@ -93,8 +93,8 @@ config/                  # 私有回归样本与工具资料
 
 ```sh
 python3 scripts/test_export.py
-cd EasyReader
-xcodebuild -project EasyReader.xcodeproj -scheme EasyReader \
+cd Cove
+xcodebuild -project Cove.xcodeproj -scheme Cove \
   -destination 'platform=iOS Simulator,name=iPhone 17 Pro' test
 ```
 

@@ -24,7 +24,7 @@ build/
 # Private site files are never tracked outside the reserved example/fixture folders.
 *.[sS][iI][tT][eE]
 !/examples/sites/*.site
-!/EasyReader/Tests/Fixtures/Sites/*.site
+!/Cove/Tests/Fixtures/Sites/*.site
 
 # Local credentials and Python artifacts
 .env
