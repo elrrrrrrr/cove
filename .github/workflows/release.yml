@@ -1,0 +1,89 @@
+name: IPA Release
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/release.yml'
+      - 'scripts/build-ipa.sh'
+      - 'scripts/package-ipa.py'
+      - 'scripts/test_release.py'
+      - 'Cove/project.yml'
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号（例如 1.0.0）；仅构建，不创建 Release'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ipa-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 45
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Validate packaging boundaries
+        run: python3 scripts/test_release.py
+      - name: Build unsigned device IPA
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          TAG_NAME: ${{ github.ref_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          if [[ "$EVENT_NAME" == push ]]; then
+            version="${TAG_NAME#v}"
+          elif [[ "$EVENT_NAME" == workflow_dispatch ]]; then
+            version="$INPUT_VERSION"
+          else
+            version=0.0.0
+          fi
+          bash scripts/build-ipa.sh "$version" "$GITHUB_RUN_NUMBER"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: Cove-unsigned-IPA
+          path: |
+            build/release/*.ipa
+            build/release/*.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+  draft-release:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: Cove-unsigned-IPA
+          path: release
+      - name: Create release draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          cat > /tmp/release-notes.md <<'EOF'
+          未签名 iOS IPA，要求 iOS 26 或更新。请使用自己的签名工具签名后安装。
+
+          不含开发证书、provisioning profile、私有站点或预置收藏。可在 App 内导入 .site。
+
+          下载 IPA 和同名 .sha256 后，可用 shasum -a 256 -c 校验完整性。
+          EOF
+          gh release create "$RELEASE_TAG" release/*.ipa release/*.sha256 \
+            --verify-tag --draft --title "Cove $RELEASE_TAG" --notes-file /tmp/release-notes.md

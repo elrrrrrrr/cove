@@ -144,7 +144,9 @@ rules:
 
 ## 开始使用
 
-目前通过源码构建，目标为 **iOS 26+**。需要 Xcode（iOS 26 SDK 或更新）和 XcodeGen；依赖通过 Swift Package Manager 获取。模拟器可直接运行，安装到真机需自己的 Apple 开发签名。
+目标为 **iOS 26+**。GitHub Actions 可生成未签名 IPA，下载后需自行签名安装；版本标签会生成 Release 草稿。[打包与发布流程](docs/release.md)
+
+也可以通过源码构建，需要 Xcode（iOS 26 SDK 或更新）和 XcodeGen；依赖通过 Swift Package Manager 获取。模拟器可直接运行，安装到真机需自己的 Apple 开发签名。
 
 ```sh
 cd Cove
