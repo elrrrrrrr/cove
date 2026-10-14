@@ -29,7 +29,7 @@ def allowed_path(relative: Path) -> bool:
     if name.startswith(".env") and name not in {".env.example", ".env.sample", ".env.template"}:
         return False
     if relative.suffix.lower() == ".site":
-        return parts[:2] == ("examples", "sites") or parts[:4] == ("EasyReader", "Tests", "Fixtures", "Sites")
+        return parts[:2] == ("examples", "sites") or parts[:4] == ("Cove", "Tests", "Fixtures", "Sites")
     return True
 
 def export(root: Path, destination: Path) -> int:

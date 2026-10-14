@@ -3,14 +3,14 @@
 运行完整测试：
 
 ```sh
-cd EasyReader
+cd Cove
 xcodegen generate
-xcodebuild -project EasyReader.xcodeproj -scheme EasyReader \
+xcodebuild -project Cove.xcodeproj -scheme Cove \
   -destination 'platform=iOS Simulator,name=iPhone 17 Pro' \
   -parallel-testing-enabled NO test
 ```
 
-只验证规则样本时，增加 `-only-testing:EasyReaderTests/SiteRegressionTests`。已有 `SiteScriptTests` 检查构建中每份 `.site` 的 YAML 和 JavaScript 语法；新测试进一步验证实际输出。
+只验证规则样本时，增加 `-only-testing:CoveTests/SiteRegressionTests`。已有 `SiteScriptTests` 检查构建中每份 `.site` 的 YAML 和 JavaScript 语法；新测试进一步验证实际输出。
 
 ## 样本目录
 
@@ -27,7 +27,7 @@ config/site-tests/          # 私有；Git 忽略，公开导出排除
 
 `.site` 仍放在根目录 `sites/`。测试读取本次构建中的真实规则，不复制解析实现，也不新增运行时配置版本。`scripts/bundle-site-tests.sh` 只把快照复制到 XCTest 资源目录；正常应用构建不运行这个脚本。目录缺失时公开虚构样本照常运行，私有门户/图片样本明确跳过。脚本清除旧资源，避免删除本地快照后继续测试旧副本。
 
-清单是测试数据，不属于 `.site` 格式。公开示例见 [cases.json](../EasyReader/Tests/Fixtures/SiteRegressions/cases.json)：
+清单是测试数据，不属于 `.site` 格式。公开示例见 [cases.json](../Cove/Tests/Fixtures/SiteRegressions/cases.json)：
 
 ```json
 [
