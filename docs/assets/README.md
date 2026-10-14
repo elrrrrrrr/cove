@@ -20,3 +20,13 @@
 - 标题、作者、封面、视频与阅读文件为公开演示内容；音频为已有公开 Opus 测试音。
 
 `docs/brand/hero.png` 将原图排版进宣传图，版式由 `scripts/render-brand.mjs` 生成。设备外框是展示装饰，屏幕内容来自以上截图。
+
+## Hacker News、Rust 与赵雷
+
+`hacker-news.png`、`rust-reader.png`、`zhaolei-player.png` 来自 `ExampleShowcaseTests/testCaptureHackerNewsRustAndZhaoLei`，截图未修改：
+
+- Hacker News 是 2026-10-14 公开首页的标题与元信息快照，使用现有 HN 配置经 localhost 解析。
+- Rust 学习指南是实际打开的 Rust Book 简体中文版 EPUB，来自 MIT 许可的上游项目；正文未改写。
+- 音乐播放器使用赵雷《成都》的官方公开试听流与《无法长大》真实封面，加载完成后暂停。仓库没有存放音乐音频。
+
+完整来源与复现方法见 [展示素材](../../examples/showcase/README.md)。宣传图的三台设备分别展示这些实际屏幕，几何演示插画保留在本地配置教学样例中。

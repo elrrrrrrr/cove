@@ -1,8 +1,8 @@
 # Cove 展示素材
 
-图标沿用 App 的原始资源。宣传图中的屏幕来自实际 SwiftUI 视图和本地演示资源；不生成虚构的 App 界面。
+图标沿用 App 的原始资源。宣传图中的屏幕来自实际生产视图：Hacker News 公开首页快照、Rust 学习指南 EPUB，以及赵雷的公开试听与真实封面；不生成虚构的 App 界面。
 
-配色以原始 icon 的深蓝、淡紫和薄荷色为依据，文字使用系统无衬线字体。网页与 NAS 并列展示，schema 和构建步骤放在 README 后半部分。
+配色以原始 icon 的深蓝、淡紫和薄荷色为依据，文字使用系统无衬线字体。首页用新闻、书籍和音乐说明阅读场景，NAS 展示保留在后续独立段落；schema 和构建步骤放在 README 后半部分。素材来源见 [展示说明](../../examples/showcase/README.md)。
 
 ## 适合的设计工具
 
@@ -31,4 +31,4 @@ COVE_BRAND_SHARP=/tmp/cove-brand-tools/node_modules/sharp \
   node scripts/render-brand.mjs
 ```
 
-加上 `--svg` 会同时导出嵌入截图的 SVG，便于导入设计工具；这个体积较大的中间文件由 Git 忽略。重新拍摄截图时，启动本地 HTTP/SMB 演示服务，并为 `ExampleShowcaseTests` 设置环境变量 `COVE_CAPTURE_SHOWCASE=1`。测试附件保存网站和 NAS 的实际截图；平时测试会跳过这项可选拍摄。
+加上 `--svg` 会同时导出嵌入截图的 SVG，便于导入设计工具；这个体积较大的中间文件由 Git 忽略。重新拍摄截图时，启动本地 HTTP/SMB 演示服务，并为 `ExampleShowcaseTests` 设置环境变量 `COVE_CAPTURE_SHOWCASE=1`。测试附件保存 HN、EPUB、音乐、网站和 NAS 的实际截图。赵雷试听拍摄需要网络，仓库不包含歌曲音频；平时测试会跳过这项可选拍摄。

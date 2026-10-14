@@ -1,6 +1,6 @@
 # 用实例认识 Cove
 
-这些配置可以导入 Cove，不自动预置进 App。所有本地演示都是固定的虚构内容；本地真实站点规则仍留在 Git 忽略的根目录 `sites/`。
+这些配置可以导入 Cove，不自动预置进 App。四套本地网站使用固定虚构内容；公开内容展示使用 Hacker News、Rust Book 简体中文版与赵雷试听，见 [素材说明](showcase/README.md)。本地真实站点规则仍留在 Git 忽略的根目录 `sites/`。
 
 | 示例 | 用到的能力 | 配置 |
 | --- | --- | --- |
@@ -9,6 +9,8 @@
 | 沿途手记 | 列表、原生图文、图片、链接、收藏与进度 | [local-journal.site](sites/local-journal.site) |
 | 资源导航 | 目录列表 → 子列表 → 视频详情 | [local-directory.site](sites/local-directory.site) |
 | Hacker News | 公开站点、JS 组合列表、CSS 正文、下一页 | [hacker-news.site](sites/hacker-news.site) |
+| Rust 学习指南 | Rust Book 简体中文版与 EPUB 阅读 | [阅读文件](nas/files/Rust%20学习指南.epub) |
+| 赵雷 · 成都 | 真实专辑封面、元数据与公开试听 | [来源与复现](showcase/README.md) |
 | NAS 资料库 | SMB 文件、列表/Bento/竖版、阅读与播放 | [NAS 示例](nas/README.md) |
 
 ## 启动本地网站

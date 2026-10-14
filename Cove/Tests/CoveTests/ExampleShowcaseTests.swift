@@ -2,6 +2,8 @@ import XCTest
 import SwiftUI
 import SwiftData
 import WebKit
+import AVFoundation
+import CryptoKit
 @testable import Cove
 
 @MainActor final class ExampleShowcaseTests: XCTestCase {
@@ -106,7 +108,7 @@ import WebKit
         let all = try await client.listDirectory()
         XCTAssertTrue(all.contains { $0.fileType == .video }); XCTAssertTrue(all.contains { $0.fileType == .cbz })
         XCTAssertTrue(all.contains { $0.fileType == .txt }); XCTAssertTrue(all.contains { $0.fileType == .pdf })
-        let names = ["山谷慢行.mp4", "沿海来信.jpg", "沿途音频.opus", "沿途绘本.cbz", "阅读空间.txt", "Cove 使用手记.pdf", "森林回声.jpg", "夜航手记.jpg", "城市漫游.jpg", "星际日记.jpg"]
+        let names = ["赵雷 — 无法长大.jpg", "Rust 学习指南.epub", "山谷慢行.mp4", "沿海来信.jpg", "沿途音频.opus", "沿途绘本.cbz", "阅读空间.txt", "Cove 使用手记.pdf", "森林回声.jpg", "夜航手记.jpg", "城市漫游.jpg", "星际日记.jpg"]
         let entries = names.compactMap { name in all.first { $0.name == name } }
         for layout in [BrowserLayout.list, .bento] {
             try await capture(ExampleNAS(entries: entries, connection: connection, layout: layout), name: "nas-" + layout.rawValue,
@@ -114,12 +116,62 @@ import WebKit
         }
         await client.disconnect()
     }
-    private func capture<V: View>(_ view: V, name: String, container: ModelContainer, expectsPictures: Bool) async throws {
+    func testCaptureHackerNewsRustAndZhaoLei() async throws {
+        guard ProcessInfo.processInfo.environment["COVE_CAPTURE_SHOWCASE"] == "1" else {
+            throw XCTSkip("Optional reading showcase requires the localhost demo and public music preview")
+        }
+        let library = SiteDefinitionStore.shared, previous = library.definitions
+        let oldTheme = UserDefaults.standard.object(forKey: AppTheme.storageKey)
+        UserDefaults.standard.set("light", forKey: AppTheme.storageKey)
+        defer {
+            AudioPlayerManager.shared.stop()
+            do { try library.replace(previous) } catch { XCTFail("Restore: \(error)") }
+            if let oldTheme { UserDefaults.standard.set(oldTheme, forKey: AppTheme.storageKey) }
+            else { UserDefaults.standard.removeObject(forKey: AppTheme.storageKey) }
+        }
+        let yaml = try String(contentsOf: file("sites/hacker-news.site"), encoding: .utf8)
+            .replacingOccurrences(of: "news.ycombinator.com", with: "127.0.0.1")
+        let hn = try SiteDefinition.decode(yaml)
+        try library.replace([hn])
+        let container = try ModelContainer(for: FavoriteVideo.self, ReadingHistory.self, BookmarkSite.self, NASConfig.self,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true))
+        try await capture(NavigationStack { SiteGalleryView(name: "Hacker News", urlString: "http://127.0.0.1:8765/news", definitionID: hn.id) },
+            name: "hacker-news", container: container, expectsPictures: false, minimumWait: .seconds(3))
+        let book = try file("nas/files/Rust 学习指南.epub")
+        let source = try JSONSerialization.jsonObject(with: Data(contentsOf: file("showcase/rust-book-source.json"))) as? [String: String]
+        let digest = SHA256.hash(data: try Data(contentsOf: book)).map { String(format: "%02x", $0) }.joined()
+        XCTAssertEqual(digest, source?["sha256"], "The captured book must match the pinned original EPUB")
+        let reading = ReadingHistory(title: "Rust 学习指南", filePath: book.path, fileType: .epub, progress: 6.0 / 27.0)
+        container.mainContext.insert(reading)
+        try await capture(NavigationStack { EPUBReaderView(fileURL: book, historyItem: reading) },
+            name: "rust-reader", container: container, expectsPictures: false, minimumWait: .seconds(2))
+
+        let catalog = try JSONDecoder().decode(PreviewTrack.self, from: Data(contentsOf: file("showcase/zhaolei.json")))
+        let item = AVPlayerItem(url: try XCTUnwrap(URL(string: catalog.previewUrl)))
+        func tag(_ key: AVMetadataIdentifier, _ value: any NSCopying & NSObjectProtocol) -> AVMetadataItem {
+            let item = AVMutableMetadataItem(); item.identifier = key; item.value = value; return item
+        }
+        item.externalMetadata = [tag(.commonIdentifierTitle, catalog.trackName as NSString),
+            tag(.commonIdentifierArtist, catalog.artistName as NSString), tag(.commonIdentifierAlbumName, catalog.collectionName as NSString),
+            tag(.commonIdentifierArtwork, try Data(contentsOf: file("showcase/zhaolei-cover.jpg")) as NSData)]
+        let manager = AudioPlayerManager.shared
+        manager.play(item: item, name: catalog.trackName, path: catalog.previewUrl)
+        manager.player?.volume = 0
+        for _ in 0..<200 where manager.artwork == nil || manager.duration == 0 || item.status != .readyToPlay {
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        XCTAssertEqual(manager.title, "成都"); XCTAssertEqual(manager.artist, "赵雷")
+        XCTAssertNotNil(manager.artwork); XCTAssertGreaterThan(manager.duration, 0); XCTAssertEqual(item.status, .readyToPlay)
+        if manager.isPlaying { manager.togglePlay() }
+        try await capture(NASAudioView(), name: "zhaolei-player", container: container, expectsPictures: false)
+    }
+    private func capture<V: View>(_ view: V, name: String, container: ModelContainer, expectsPictures: Bool, minimumWait: Duration = .zero) async throws {
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.first as? UIWindowScene)
         let window = UIWindow(windowScene: scene); window.frame = scene.effectiveGeometry.coordinateSpace.bounds
         let controller = UIHostingController(rootView: view.appAppearance().modelContainer(container))
         window.rootViewController = controller; window.makeKeyAndVisible()
         defer { window.isHidden = true; window.rootViewController = nil }
+        try await Task.sleep(for: minimumWait)
         var screenshot: UIImage?
         for _ in 0..<12 {
             try await Task.sleep(for: .milliseconds(500))
@@ -143,12 +195,19 @@ import WebKit
             let values = buffer.bindMemory(to: UInt8.self); var count = 0
             for i in stride(from: 0, to: values.count, by: 4) {
                 let r = Int(values[i]), g = Int(values[i+1]), b = Int(values[i+2])
-                // The demo covers contain green landscapes; blue fallback icons must not count.
-                if g > r + 10 && g > b { count += 1 }
+                // Cover colors count; monochrome chrome and blue fallback icons do not.
+                if max(r, max(g, b)) - min(r, min(g, b)) > 25 && !(b > g + 15 && b > r + 15) { count += 1 }
             }
             return count
         }
     }
+}
+
+private struct PreviewTrack: Decodable {
+    let trackName: String
+    let artistName: String
+    let collectionName: String
+    let previewUrl: String
 }
 
 private struct ExampleNAS: View {

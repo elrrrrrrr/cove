@@ -88,4 +88,8 @@ AJAX 样本额外填写 `page` 和 `responses`，将指定请求替换为快照�
 
 `ExampleShowcaseTests` 使用 `examples/sites/local-*.site` 与 `examples/local-demo/pages/` 验证配置往返、视频列表/搜索/分页、播放地址、漫画章节、图文内容和目录类型。`scripts/test_examples.py` 通过真实 HTTP 请求检查演示页面、资源边界、视频范围请求，并校验 CBZ 文件。
 
-可选拍摄测试需要先运行 `scripts/serve-examples.py --smb`，并在测试环境中设置 `COVE_CAPTURE_SHOWCASE=1`。它使用生产网站与 NAS 目录视图、真实 loopback SMB 连接和内存数据库，验证封面已经显示后保存截图附件；默认跳过，以免普通测试依赖额外服务。参见 [示例指南](../examples/README.md)和[截图来源](assets/README.md)。
+可选拍摄测试需要先运行 `scripts/serve-examples.py --smb`，并在测试环境中设置 `COVE_CAPTURE_SHOWCASE=1`。它使用生产网站与 NAS 目录视图、真实 loopback SMB 连接和内存数据库，验证封面已经显示后保存截图附件。`testCaptureHackerNewsRustAndZhaoLei` 另外打开真实 HN 首页快照、Rust EPUB 和官方音乐试听；仅这项可选拍摄需要互联网。拍摄默认跳过，以免普通测试依赖额外服务。参见 [示例指南](../examples/README.md)和[截图来源](assets/README.md)。
+
+`AudioMetadataTests` 覆盖标题、艺术家、专辑、封面大小限制、切歌与停止时的旧元数据清理；`OpusAudioTests` 继续验证本地和流式播放行为。封面解码复用 ImageDecoder，并随播放任务取消。
+
+EPUB 缓存回归覆盖不同目录的同名文件和同一路径替换后的内容；缓存键包含来源 URL、大小和修改时间。展示使用现有阅读历史恢复到 Rust Book 正文章节，并校验上游 EPUB 的 SHA-256。

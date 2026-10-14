@@ -68,6 +68,8 @@ def catalog(kind, query):
 
 
 def document(path, query):
+    if path == '/news':
+        return (ROOT / 'examples/showcase/hacker-news.html').read_bytes()
     if path == '/':
         return page('Cove 本地演示', '<h1>把内容放进自己的阅读空间</h1>'
                     '<p><a href="/videos/">山海影库</a> · <a href="/comics/">漫游书架</a> · '
