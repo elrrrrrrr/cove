@@ -122,10 +122,12 @@ actor FolderSyncFiles {
         try local.write(to: recovery.appendingPathComponent("Before-Sync.json"), options: .atomic)
         // Fingerprint and upload only immutable model snapshots, not database/WAL files.
         if var offline = backup.offlineItems {
+            let fileCount = offline.count
             for index in offline.indices {
                 let item = offline[index]
-                let report: (String, Int64?, Int64?) -> Void = { phase, bytes, total in
-                    progress(.init(phase: phase, fileName: item.title, fileNumber: index + 1, fileCount: offline.count,
+                let fileName = item.title
+                let report: @Sendable (String, Int64?, Int64?) -> Void = { phase, bytes, total in
+                    progress(.init(phase: phase, fileName: fileName, fileNumber: index + 1, fileCount: fileCount,
                         completedBytes: bytes, totalBytes: total))
                 }
                 report("检查离线文件", nil, nil)
@@ -158,9 +160,11 @@ actor FolderSyncFiles {
         }
         let merged = try ConfigBackup.decode(output.data)
         let incoming = merged.offlineItems ?? []
+        let fileCount = incoming.count
         for (index, item) in incoming.enumerated() {
-            let report: (String, Int64?, Int64?) -> Void = { phase, bytes, total in
-                progress(.init(phase: phase, fileName: item.title, fileNumber: index + 1, fileCount: incoming.count,
+            let fileName = item.title
+            let report: @Sendable (String, Int64?, Int64?) -> Void = { phase, bytes, total in
+                progress(.init(phase: phase, fileName: fileName, fileNumber: index + 1, fileCount: fileCount,
                     completedBytes: bytes, totalBytes: total))
             }
             guard let digest = item.contentSHA256 else {
