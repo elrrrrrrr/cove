@@ -37,7 +37,7 @@ shasum -a 256 -c Cove-1.0.0-unsigned.ipa.sha256
 
 ## 本地复现
 
-使用不含根目录 `sites/`、`data/`、`config/` 内容的干净 checkout，并安装 Xcode 26+ 与 XcodeGen：
+使用不含根目录 `sites/`、`data/`、`config/` 内容的干净 checkout，并安装稳定版 Xcode 27.0 与 XcodeGen：
 
 ```sh
 python3 scripts/test_release.py
