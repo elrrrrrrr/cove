@@ -1,0 +1,35 @@
+schemaVersion: 1
+id: example.local.directory
+name: 资源导航
+match: {hosts: [resources.example, 127.0.0.1]}
+entries:
+  - {id: main, name: 资源导航, path: 'http://127.0.0.1:8765/directory/', category: other}
+rules:
+  - id: folders
+    role: catalog
+    contentType: navLink
+    match: {pathPrefix: /directory/}
+    presentation: {layout: list}
+    extract:
+      items: a.resource
+      fields:
+        title: {selector: .name, text: true}
+        url: {attribute: href}
+        thumbnail: {selector: img, attribute: src}
+  - id: files
+    role: catalog
+    contentType: video
+    match: {pathPrefix: /videos/}
+    presentation: {layout: bento}
+    extract:
+      items: article.media-card
+      fields:
+        title: {selector: .title, text: true}
+        url: {selector: a, attribute: href}
+        thumbnail: {selector: img, attribute: src}
+  - id: video
+    role: video
+    match: {pathPrefix: /watch/}
+    extract:
+      fields:
+        url: {selector: 'video source', attribute: src, resolveURL: true}

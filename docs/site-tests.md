@@ -83,3 +83,9 @@ AJAX 样本额外填写 `page` 和 `responses`，将指定请求替换为快照�
 `ArticleTests` 直接读取 `examples/sites/hacker-news.site`，使用 `Tests/Fixtures/Articles/` 的虚构 HTML 和图片验证当前 schema、CSS/JS 同一图文契约、列表/下一页、正文/评论边界、安全链接、输出预算、超时/取消、收藏/置顶、历史身份和备份/文件夹同步。它不依赖私有目录或线上请求。
 
 `ArticleUITests` 用 localhost 导入同一配置，检查原生列表、分页、正文、收藏、原网页检查和进度恢复；滚动至末段后从收藏和主页重开，必须恢复末段。README 的三张实际截图来自无私有预置的构建，使用固定演示内容。配置示例和手动调试步骤见 [HTML → 原生阅读](html-to-native.md)。
+
+## 本地网站与 NAS 展示
+
+`ExampleShowcaseTests` 使用 `examples/sites/local-*.site` 与 `examples/local-demo/pages/` 验证配置往返、视频列表/搜索/分页、播放地址、漫画章节、图文内容和目录类型。`scripts/test_examples.py` 通过真实 HTTP 请求检查演示页面、资源边界、视频范围请求，并校验 CBZ 文件。
+
+可选拍摄测试需要先运行 `scripts/serve-examples.py --smb`，并在测试环境中设置 `COVE_CAPTURE_SHOWCASE=1`。它使用生产网站与 NAS 目录视图、真实 loopback SMB 连接和内存数据库，验证封面已经显示后保存截图附件；默认跳过，以免普通测试依赖额外服务。参见 [示例指南](../examples/README.md)和[截图来源](assets/README.md)。

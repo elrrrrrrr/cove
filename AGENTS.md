@@ -16,7 +16,7 @@ Application data uses Application Support/Cove/config and data. Preserve existin
 
 Keep the current home, thumbnails, Bento/portrait/list layouts, category/search/pagination tools, favorites, readers and SMB capabilities when changing architecture or performance. Establish feature parity with the same configuration and data. UI labels are Chinese. Use @Observable @MainActor and foregroundColor(.accentColor).
 
-Private domains, selectors and transformation parameters belong in private .site files. Root sites/, data/, config/ and non-example .site files are ignored. Bundled definitions and optional favorites import once; deletion never triggers reseeding. Examples use reserved fictional domains, except the user-approved public Hacker News teaching definition. Offline fixtures and screenshots use synthetic content; account credentials never enter examples.
+Private domains, selectors and transformation parameters belong in private .site files. Root sites/, data/, config/ and non-example .site files are ignored. Bundled definitions and optional favorites import once; deletion never triggers reseeding. Examples use reserved fictional domains, except the user-approved public Hacker News teaching definition and loopback-only local demos. Offline fixtures and screenshots use synthetic content; account credentials never enter examples.
 
 Use default TLS verification. Cache writes use URL hashes; contained legacy cache reads must reject traversal and symlinks. Archives and EPUB references remain within owned directories and enforce expansion limits. Disable EPUB content JavaScript. ReaderFileSafety contains shared path checks.
 
