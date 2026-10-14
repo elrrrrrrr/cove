@@ -117,22 +117,18 @@ struct EPUBReaderView: View {
     }
 
     private var tocSheet: some View {
-        NavigationStack {
-            List(Array(chapters.enumerated()), id: \.offset) { idx, ch in
-                Button(ch.title) {
-                    currentChapter = idx
-                    showTOC = false
-                }
-                .foregroundStyle(idx == currentChapter ? Color.accentColor : .primary)
+        ChapterListSheet(
+            chapters: chapters,
+            title: { $0.title },
+            isCurrent: { [chapters, currentChapter] ch in
+                chapters.indices.contains(currentChapter) && chapters[currentChapter].id == ch.id
+            },
+            doneTitle: "关闭",
+            onSelect: { ch in
+                if let idx = chapters.firstIndex(where: { $0.id == ch.id }) { currentChapter = idx }
+                showTOC = false
             }
-            .appSurface()
-            .navigationTitle("目录")
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("关闭") { showTOC = false }
-                }
-            }
-        }
+        )
     }
 
     // MARK: - EPUB parsing
