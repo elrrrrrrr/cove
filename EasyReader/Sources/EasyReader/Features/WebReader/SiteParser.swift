@@ -36,12 +36,14 @@ enum ItemKind: Sendable {
     case video    // tap → VideoDetailView
     case navLink  // tap → new SiteGalleryView
     case comic    // tap → ComicDetailView
+    case article  // tap → native article reader
 
     var stringValue: String {
         switch self {
         case .video:   "video"
         case .navLink: "navLink"
         case .comic:   "comic"
+        case .article: "article"
         }
     }
 
@@ -50,6 +52,7 @@ enum ItemKind: Sendable {
         case "video":   self = .video
         case "navLink": self = .navLink
         case "comic":   self = .comic
+        case "article": self = .article
         default:        return nil
         }
     }
@@ -60,7 +63,7 @@ extension BrowserLayout {
         switch kind {
         case .video: .bento
         case .comic: .portrait
-        case .navLink: .list
+        case .navLink, .article: .list
         }
     }
 }

@@ -1,48 +1,109 @@
 # Cove
 
-Cove 是可配置的 iOS 浏览与阅读应用，支持网页、SMB、本地文件、视频、音乐、漫画和电子书。
+把网页、NAS 与本地文件，放进同一个浏览与阅读空间。
 
-音频包含 `.opus`（Ogg Opus），支持 NAS 流式播放及本地/离线播放，沿用暂停、跳转和切曲控件。
+Cove is a configurable iOS resource browser and reader for websites, SMB shares, and local files.
 
-在「设置 → 外观」选择全局主题（跟随系统、浅色、深色、护眼黄），界面与阅读器共享同一设置。TXT 小说可在「设置 → 阅读设置」或阅读器工具栏切换左右翻页和上下滚动，恢复并保存阅读进度。
+Cove 用 `.site` 配置描述网页的入口、内容和交互：普通页面用 CSS 选择器，复杂页面用 JavaScript，解析后的内容进入原生列表、播放器或阅读器。站点规则可以在 App 内编辑，应用代码无需为每个站点增加分支。
 
-首页提供快速访问、继续阅读、最近阅读、下载和稍后再看。站点保留图标、封面、分类、搜索、分页与选集；NAS 与网站浏览页均可在右上角切换列表、Bento、竖版，分别记住站点入口或 NAS 目录的选择；站点配置仍提供初始布局。
+## 你可以用它做什么
 
-## 构建
+- **浏览资源**：网站与 NAS 可切换列表、Bento、竖版布局；网站支持按规则配置分类、搜索与分页。
+- **阅读和播放**：原生图文、TXT、EPUB、PDF、图片与 CBZ 漫画；视频与音乐播放，包含 Ogg Opus。NAS 音视频支持流式播放。
+- **管理内容**：快速访问、收藏置顶与排序、继续阅读、离线下载；全局主题，TXT 翻页或滚动阅读。
+- **管理配置**：交互式表单、完整 YAML 源码、网页点选与解析预览；解析卡住时查看当前原始网页。可通过授权的 [iCloud Drive 文件夹](docs/icloud-folder-sync.md)同步配置与资料。
 
-    cd EasyReader
-    xcodegen generate
-    open EasyReader.xcodeproj
+## 从 HTML 到原生阅读
 
-需要 Xcode、XcodeGen，目标 iOS 26+，Swift 6 严格并发。依赖 AMSMB2、ZIPFoundation、Yams。
+[Hacker News 示例](examples/sites/hacker-news.site)提供热门、最新、Ask HN 与 Show HN 入口。列表按标题行提取帖子，点击后将正文转换为原生段落、图片和链接；收藏和阅读进度保存在本地。评论在原网页中查看。链接帖可继续进入外部文章，正文提取失败时可打开原网页。
 
-## 配置与数据
+<table>
+<tr>
+<th>原始 HTML 页面</th><th>原生列表</th><th>原生图文阅读</th>
+</tr>
+<tr>
+<td><img src="docs/assets/hn-original-article.png" width="250" alt="Hacker News 风格的演示原网页"></td>
+<td><img src="docs/assets/hn-native-list.png" width="250" alt="配置解析后生成的 Cove 原生帖子列表"></td>
+<td><img src="docs/assets/hn-native-article.png" width="250" alt="Cove 原生图文阅读器展示段落、图片和标题"></td>
+</tr>
+</table>
 
-项目只维护当前一套配置格式：schemaVersion: 1。站点规则用 .site YAML，普通规则用 CSS，复杂规则用 JavaScript。
+截图来自实际运行的 Cove 和固定的离线演示页面，内容为虚构资料，不是线上 Hacker News 用户帖子。
 
-在“设置 → 管理网站”点击站点右侧的文档按钮，默认直接显示交互式表单；右上角菜单可切换完整 YAML 源码，并进入网页点选、解析预览，共用一份配置草稿，支持校验、导出、保存和取消。
+```mermaid
+flowchart LR
+    HTML[HTML 网页] --> Rules[.site 的 CSS / JavaScript]
+    Rules --> Data[列表条目 / 图文块]
+    Data --> UI[SwiftUI 列表 / 阅读器]
+    UI --> Local[本地收藏 / 阅读进度]
+```
 
-网页解析卡住时，可从加载页或站点工具菜单打开“查看原始网页”。默认查看同一个解析 WebView，保留当前跳转、登录和页面状态；查看选项可重新加载完整原网页。列表、视频、漫画详情与章节加载都支持。
+一份 `.site` 使用当前唯一的 `schemaVersion: 1`：
 
-收藏页支持长按置顶/取消置顶，右上角“管理置顶”可拖动排序。视频与漫画共用置顶区，顺序保存在本地并随收藏导出。
+| 字段 | 负责什么 |
+| --- | --- |
+| `id`、`name` | 稳定的站点身份与显示名称 |
+| `match` | 匹配域名；规则还可按路径、查询参数匹配 |
+| `entries` | 用户可以打开的入口 |
+| `rules` | 每种页面的角色、加载、提取、分页与展示 |
 
-- [站点、收藏与备份格式](docs/site-format.md)
+列表规则设置 `contentType: article`，条目会进入图文阅读器；详情规则设置 `role: article`。正文可以直接用选择器描述：
+
+```yaml
+# rules 中的一条详情规则
+- id: article
+  role: article
+  match: {pathPrefix: /posts/}
+  extract:
+    fields:
+      title: {selector: h1, text: true}
+      author: {selector: .author, text: true}
+      blocks: {selector: article, content: true}
+```
+
+`content: true` 按 DOM 顺序提取段落、标题、图片、引用、代码和链接。复杂页面可以用 `extract.script` 返回相同的图文块结构。Hacker News 的标题与元信息位于相邻表格行，因此示例用 JavaScript 组合列表，正文仍用 CSS。
+
+查看 [HTML → 原生阅读教程](docs/html-to-native.md)了解完整配置与结果结构，或查阅 [schema 参考](docs/site-format.md)。
+
+## 开始使用
+
+目前通过源码构建，目标为 **iOS 26+**。需要 Xcode（iOS 26 SDK 或更新）和 XcodeGen；依赖通过 Swift Package Manager 获取。模拟器可直接运行，安装到真机需自己的 Apple 开发签名。
+
+```sh
+cd EasyReader
+xcodegen generate
+open EasyReader.xcodeproj
+```
+
+在 Xcode 的 Signing & Capabilities 中选择自己的 Team；长期修改请同步到 `EasyReader/project.yml`，它是项目配置来源。选择模拟器或自己的设备运行。
+
+首次运行可以没有任何站点配置。在「设置 → 管理网站」导入 [hacker-news.site](examples/sites/hacker-news.site)，也可以创建配置并用表单或 YAML 编辑。普通站点是否支持搜索、分页与正文，取决于该站点的规则和页面结构；外部文章的自动提取优先寻找 `article`、`main` 或 `[role=main]`。
+
+可选的本地预置目录：
+
+```text
+sites/*.site             # 本地构建自动打包的站点规则
+data/favorites.json      # 可选预置收藏
+config/                  # 私有回归样本与工具资料
+```
+
+预置只在首次初始化导入一次；删除后不会自动重新添加。后续修改可在 App 内导入，或使用 iCloud Drive 文件夹同步。根目录的 `sites/`、`data/`、`config/` 和其他私有 `.site` 均被 Git 忽略；`examples/` 保存可提交的示例。应用数据位于 `Application Support/Cove/config` 和 `data`，NAS 密码留在 Keychain。
+
+## 开发与验证
+
+```sh
+python3 scripts/test_export.py
+cd EasyReader
+xcodebuild -project EasyReader.xcodeproj -scheme EasyReader \
+  -destination 'platform=iOS Simulator,name=iPhone 17 Pro' test
+```
+
+测试使用离线页面与 localhost；可选的私有回归样本放在 `config/site-tests/`，缺少样本时相关测试跳过。新增、删除或移动 Swift 文件后运行 `xcodegen generate`。
+
 - [代码结构](docs/architecture.md)
-- [审计修复与剩余工作](docs/review-status.md)
-- [性能整改与缓存预算](docs/performance.md)
-- [虚构站点示例](examples/sites/demo.site)
-- [本地站点规则回归测试](docs/site-tests.md)
-- [预置收藏示例](examples/data/favorites.json)
+- [站点规则测试](docs/site-tests.md)
+- [缓存与性能](docs/performance.md)
+- [审计修复记录](docs/review-status.md)
+- [虚构站点配置](examples/sites/demo.site)与[预置收藏](examples/data/favorites.json)
 
-真实规则放 sites/，可选收藏预置放 data/favorites.json；两个目录和 config/ 被 Git 忽略。存在时本地打包自动加载，不存在也能构建。预置仅在首次初始化导入一次。
-
-应用数据位于 Application Support/Cove/config 和 data。离线文件位于 data/Offline，记录使用相对路径；旧文件迁移保留标识与内容。下载失败可在首页重试或取消。NAS 目录缓存 60 秒，可用右上角刷新主动更新。密码放 Keychain。修改架构和性能时保留现有界面与用户数据。
-
-## 验证
-
-    python3 scripts/test_export.py
-    cd EasyReader
-    xcodebuild -project EasyReader.xcodeproj -scheme EasyReader \
-      -destination 'platform=iOS Simulator,name=iPhone 17 Pro' test
-
-测试使用虚构配置和本地页面，可从 Git 忽略的 `config/site-tests/` 加载真实规则的离线快照，检查列表、搜索、分页、漫画详情/章节、门户及封面解码。搜索测试检查 URL 转义、目标规则与分页切换、取消返回分类，以及结果进入漫画详情的 UI 链路。缺少样本的规则会在覆盖清单中列出。真实站点、NAS 和真机性能需要实际环境验证。RAR/CBR 尚未包含实际解码器。仓库保持 Private。
+RAR/CBR 尚无实际解码器；视频格式支持还取决于系统解码能力。X 尚未适配。真实站点登录、NAS 与真机性能需要实际环境验证。

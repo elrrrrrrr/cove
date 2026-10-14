@@ -42,6 +42,9 @@ targets:
     deploymentTarget: "26.0"
     sources:
       - path: Tests/EasyReaderUITests
+      - path: Tests/Support
+      - {path: Tests/Fixtures/Articles, type: folder, buildPhase: resources}
+      - {path: ../examples, type: folder, buildPhase: resources}
     dependencies:
       - target: EasyReader
     settings:
@@ -55,6 +58,8 @@ targets:
     deploymentTarget: "26.0"
     sources:
       - path: Tests/EasyReaderTests
+      - path: Tests/Support
+      - {path: Tests/Fixtures/Articles, type: folder, buildPhase: resources}
       - path: Tests/Fixtures/Sites
         type: folder
         buildPhase: resources
@@ -62,6 +67,9 @@ targets:
         type: folder
         buildPhase: resources
       - path: Tests/Fixtures/SiteRegressions
+        type: folder
+        buildPhase: resources
+      - path: ../examples
         type: folder
         buildPhase: resources
     preBuildScripts:

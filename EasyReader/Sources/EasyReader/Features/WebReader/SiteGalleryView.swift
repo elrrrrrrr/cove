@@ -382,7 +382,7 @@ struct SiteGalleryView: View {
                 definitionID: parser.definitionID,
                 onTap: { openItem(item) },
                 onLongPress: parser.itemKind == .navLink && !isMixedMediaItem(item) ? nil : { handleVideoCardLongPress(item) },
-                placeholder: parser.itemKind == .video ? "play.rectangle.fill" : "photo.on.rectangle.angled",
+                placeholder: parser.itemKind == .video ? "play.rectangle.fill" : (parser.itemKind == .article ? "doc.text" : "photo.on.rectangle.angled"),
                 onExtraTap: extraAction(for: item)
             )
             .id(item.id)
@@ -415,6 +415,8 @@ struct SiteGalleryView: View {
             ComicDetailView(item: item, definitionID: parser.definitionID)
         case .video:
             VideoDetailView(item: item, definitionID: parser.definitionID)
+        case .article:
+            ArticleReaderView(item: item, definitionID: parser.definitionID)
         }
     }
 
@@ -458,6 +460,7 @@ struct SiteGalleryView: View {
                 duration:           item.duration,
                 siteName:           siteName,
                 isComic:            isComic,
+                isArticle:          parser.itemKind == .article,
                 definitionID:       parser.definitionID
             ))
             favoriteURLCache.insert(key)

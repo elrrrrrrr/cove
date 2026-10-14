@@ -1,6 +1,6 @@
 # Cove `.site` 配置规范
 
-`.site` 是 UTF-8 YAML 文本，一份文件描述一个站点的完整规则。普通规则用 CSS 选择器，复杂规则用 JavaScript；两者使用同一结果结构。完整示例见 `examples/sites/demo.site`。
+`.site` 是 UTF-8 YAML 文本，一份文件描述一个站点的完整规则。普通规则用 CSS 选择器，复杂规则用 JavaScript；两者使用同一结果结构。虚构示例见 [`demo.site`](../examples/sites/demo.site)，公开 Hacker News 示例见 [`hacker-news.site`](../examples/sites/hacker-news.site)。图文阅读的完整教程见 [HTML → 原生阅读](html-to-native.md)。
 
 ## 本地目录与首次安装
 
@@ -9,7 +9,7 @@
 ├── sites/                 # 私有 .site 文件；本地构建自动打包
 ├── data/favorites.json    # 可选的私有预置收藏
 ├── config/                # 私有参考、工具等
-└── examples/              # 可公开的虚构示例
+└── examples/              # 虚构示例与获准公开的 Hacker News 教学配置
 
 App Application Support/Cove/
 ├── config/sites.json      # 已导入的完整规则
@@ -85,11 +85,12 @@ extract:
 | `attribute` | 读取属性，如 `href / src / data-src` |
 | `fallbackAttributes` | 主属性为空时依次尝试的属性 |
 | `all` | 返回所有匹配结果组成的数组，适用于图片、标签、章节 |
-| `resolveURL` | 补全相对链接；`url / thumbnail / cover / images / nextPageURL / prevChapter / nextChapter` 自动补全 |
+| `resolveURL` | 补全相对链接；`url / thumbnail / cover / images / nextPageURL / prevChapter / nextChapter / sourceURL / commentsURL` 自动补全 |
 | `number` | 转为数值；集数相关字段自动转为数值 |
 | `pattern` / `capture` | 用 JavaScript 正则取捕获组；捕获组默认 1 |
 | `value` | 固定文本值 |
 | `fields` | 嵌套字段，适用于章节等对象数组 |
+| `content` | `true` 时把选中的正文元素转成有序图文块；不可与属性、固定值、数组、嵌套字段或文本转换选项混用 |
 
 ## JavaScript 提取
 
@@ -117,12 +118,17 @@ extract:
 | `comic` | 对象；必需 `chapters` 数组（每项 `url`，可选 `id / title`）；可选 `title / author / status / tags / desc / cover` |
 | `chapter` | 对象；必需 `images` 数组；可选 `bookId / chapterId / bookName / chapterName / prevChapter / nextChapter` |
 | `tags` | 标签文本数组，或带 `tags` 数组的对象 |
+| `article` | 对象；必需 `blocks`，可选 `title / author / publishedAt / sourceURL / commentsURL` |
 
-列表 `contentType` 为 `video / comic / navLink`；分别进入视频、漫画、子页面。图文列表可以通过 `navLink` 配置逐层提取，混合图文可使用网页详情展示。电子书、TXT、PDF、压缩漫画、图片和音乐的本地/SMB 阅读播放保持独立。
+列表 `contentType` 为 `video / comic / navLink / article`；分别进入视频、漫画、目录子页面、原生图文阅读。`navLink` 用于继续浏览目录，图文正文使用 `article`。混合列表仍可通过长按查看网页详情。电子书、TXT、PDF、压缩漫画、图片和音乐继续使用本地/SMB 阅读播放能力。
+
+CSS 图文详情通常用 `blocks: {selector: article, content: true}`；手动构造块数组也可用 `all: true` 与嵌套 `fields`。JavaScript 返回相同对象，块类型为 `paragraph / heading / image / quote / code / link`，文字可用 `text` 或 `runs: [{text, url?}]`，图片使用 `url` 和可选尺寸、说明。完整字段、边界和示例见[图文契约](html-to-native.md#3-复杂页面改用-javascript)。
+
+图文阅读支持本地收藏、置顶、历史和进度恢复。普通链接和评论在原网页查看；`sourceURL` 可进入外部原文的原生阅读。没有适用规则时使用语义正文选择器兜底，失败可查看原始网页。
 
 ## 加载、分页与展示
 
-`load` 支持 `mode: auto / webView`、`waitSeconds`（0–30）、`headers`，以及可选 `preNavigateScript`（返回跳转地址）、`preNavigateExpression`（完整表达式）、`transformScript`（接收 `html`，返回资源标签剥离前的 HTML）。需要网页脚本生成内容时选择 `webView`。
+`load` 支持 `mode: auto / webView`、`waitSeconds`（0–30）、`headers`，以及可选 `preNavigateScript`（返回跳转地址）、`preNavigateExpression`（完整表达式）、`transformScript`（接收 `html`，返回资源标签剥离前的 HTML）。需要网页脚本生成内容时选择 `webView`。图文详情始终用 WebView，支持请求头、等待和跳转；`mode` 不改变此行为，`transformScript` 仅用于列表的快加载路径。
 
 ```yaml
 pagination:
@@ -150,6 +156,6 @@ pagination:
 
 ## 收藏数据与备份
 
-预置收藏示例见 `examples/data/favorites.json`。`schemaVersion` 为 `1`，`favorites` 数组每项必需 `title / pageURL`，可选 `id / thumbnail / duration / siteName / isComic / definitionID / addedAt / isPinned / pinOrder`。日期使用 ISO 8601。`isPinned` 为置顶开关，`pinOrder` 为非负顺序值；省略时默认不置顶。收藏页长按可置顶/取消置顶，右上角“管理置顶”可拖动排序。合并导入保留已有收藏的置顶选择和顺序，新导入的置顶项目按文件顺序追加（优先 `pinOrder`），取消置顶不删除收藏。App 收藏页可导出这种格式，然后保存到私有 `data/favorites.json`。
+预置收藏示例见 `examples/data/favorites.json`。`schemaVersion` 为 `1`，`favorites` 数组每项必需 `title / pageURL`，可选 `id / thumbnail / duration / siteName / isComic / isArticle / definitionID / addedAt / isPinned / pinOrder`。日期使用 ISO 8601。`isArticle: true` 表示图文收藏，`isComic: true` 表示漫画，两者不可同时为真；均省略或为假时为视频。已有收藏省略 `isArticle` 默认不是图文，格式仍为 `schemaVersion: 1`。`isPinned` 为置顶开关，`pinOrder` 为非负顺序值；省略时默认不置顶。收藏页长按可置顶/取消置顶，右上角“管理置顶”可拖动排序。合并导入保留已有收藏的置顶选择和顺序，新导入的置顶项目按文件顺序追加（优先 `pinOrder`），取消置顶不删除收藏。App 收藏页可导出这种格式，然后保存到私有 `data/favorites.json`。
 
 配置备份同样使用 `schemaVersion: 1`，包含阅读设置、站点定义、入口身份、单站解析覆盖和 NAS UUID；不包含密码。配置备份的“导入并替换”与单站点导入分开；单站点导入不替换其他配置，收藏导入以合并为准。

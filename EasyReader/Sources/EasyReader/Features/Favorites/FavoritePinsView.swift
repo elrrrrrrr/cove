@@ -62,13 +62,13 @@ struct FavoritePinRow: View {
     let favorite: FavoriteVideo
     var body: some View {
         HStack(spacing: 12) {
-            CachedThumbnail(url: favorite.thumbnailURL, placeholder: favorite.isComic ? "photo.on.rectangle.angled" : "play.rectangle.fill",
+            CachedThumbnail(url: favorite.thumbnailURL, placeholder: favorite.contentIcon,
                             referer: favorite.pageURL, definitionID: favorite.definitionID)
                 .frame(width: 56, height: 56)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
             VStack(alignment: .leading, spacing: 4) {
                 Text(favorite.title).font(.subheadline.weight(.medium)).lineLimit(2).foregroundStyle(.primary)
-                Text(favorite.siteName.isEmpty ? (favorite.isComic ? "漫画" : "视频") : favorite.siteName)
+                Text(favorite.siteName.isEmpty ? favorite.contentLabel : favorite.siteName)
                     .font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer(minLength: 0)
