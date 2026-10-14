@@ -34,6 +34,39 @@ import CryptoKit
             XCTAssertTrue(value.rules.allSatisfy { $0.load?.headers == nil })
         }
     }
+    func testTXTAutomaticallyBuildsChaptersAndPages() async throws {
+        let url = try file("nas/files/Rust 学习指南.txt")
+        let loaded = try await TextPaginator.load(url)
+        var chapters = loaded.chapters
+        XCTAssertEqual(chapters.count, 22)
+        XCTAssertEqual(chapters.first?.title, "第1章 入门指南")
+        XCTAssertEqual(chapters[1].title, "第2章 编写一个猜数字游戏")
+        XCTAssertTrue(TextPaginator.detectChapters(in: "正文提到第3章 所有权，但这不是章标题。\n第六章将介绍枚举。\nChapter 2 Real heading\n").count == 1)
+        let pages = await TextPaginator.paginate(text: loaded.text, font: .systemFont(ofSize: 17), lineSpacing: 8,
+            containerSize: CGSize(width: 402, height: 778), insets: UIEdgeInsets(top: 60, left: 20, bottom: 80, right: 20), chapters: chapters)
+        TextPaginator.assignPageIndices(chapters: &chapters, pages: pages)
+        XCTAssertEqual(pages.map(\.text).joined(), loaded.text)
+        XCTAssertGreaterThan(chapters[1].pageIndex, chapters[0].pageIndex)
+        guard ProcessInfo.processInfo.environment["COVE_CAPTURE_SHOWCASE"] == "1" else { return }
+        let oldTheme = UserDefaults.standard.object(forKey: AppTheme.storageKey)
+        let oldMode = UserDefaults.standard.object(forKey: NovelReadingMode.storageKey)
+        UserDefaults.standard.set("light", forKey: AppTheme.storageKey)
+        UserDefaults.standard.set("paged", forKey: NovelReadingMode.storageKey)
+        defer {
+            for (key, value) in [(AppTheme.storageKey, oldTheme), (NovelReadingMode.storageKey, oldMode)] {
+                if let value { UserDefaults.standard.set(value, forKey: key) } else { UserDefaults.standard.removeObject(forKey: key) }
+            }
+        }
+        let container = try ModelContainer(for: FavoriteVideo.self, ReadingHistory.self, BookmarkSite.self, NASConfig.self,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true))
+        let history = ReadingHistory(title: "Rust 学习指南", filePath: url.path, fileType: .txt,
+            progress: Double(chapters[1].pageIndex) / Double(max(pages.count - 1, 1)))
+        container.mainContext.insert(history)
+        try await capture(NavigationStack { TXTReaderView(fileURL: url, historyItem: history) },
+            name: "txt-reader", container: container, expectsPictures: false, minimumWait: .seconds(2))
+        try await capture(TXTChapterList(chapters: chapters, onSelect: { _ in }),
+            name: "txt-chapters", container: container, expectsPictures: false)
+    }
     func testVideoExampleListPaginationSearchAndMediaAddress() async throws {
         let value = try definition("video"), rule = value.rules[0]
         let first = try items(await extract(rule, page: "videos", path: "/videos/"))

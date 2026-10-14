@@ -30,3 +30,7 @@
 - 音乐播放器使用赵雷《成都》的官方公开试听流与《无法长大》真实封面，加载完成后暂停。仓库没有存放音乐音频。
 
 完整来源与复现方法见 [展示素材](../../examples/showcase/README.md)。宣传图的三台设备分别展示这些实际屏幕，几何演示插画保留在本地配置教学样例中。
+
+## TXT 自动章节
+
+`txt-reader.png` 和 `txt-chapters.png` 来自 `ExampleShowcaseTests/testTXTAutomaticallyBuildsChaptersAndPages`，使用真实 Rust Book 转出的 TXT。目录由 TextPaginator 从独立章标题识别出 22 章并分配页码；正文与目录使用生产 TXTReaderView / TXTChapterList。宣传图改用自动目录场景。

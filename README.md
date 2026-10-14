@@ -29,10 +29,10 @@
 先看三种实际内容：公开 Hacker News 的首页快照、可打开的 Rust 学习指南，以及赵雷《成都》的公开试听。下面都是运行 Cove 后拍摄的界面。
 
 <table>
-<tr><th>Hacker News · 原生列表</th><th>Rust 学习指南 · EPUB 阅读</th><th>赵雷 · 成都</th></tr>
+<tr><th>Hacker News · 原生列表</th><th>TXT · 自动章节目录</th><th>赵雷 · 成都</th></tr>
 <tr>
 <td><img src="docs/assets/hacker-news.png" width="250" alt="Cove 解析公开 Hacker News 首页快照生成原生列表"></td>
-<td><img src="docs/assets/rust-reader.png" width="250" alt="Cove 实际打开 Rust 学习指南 EPUB，展示文字和代码"></td>
+<td><img src="docs/assets/txt-chapters.png" width="250" alt="Cove 从 TXT 自动识别章节并生成目录"></td>
 <td><img src="docs/assets/zhaolei-player.png" width="250" alt="Cove 音乐播放器展示赵雷成都的真实封面、曲目和公开试听进度"></td>
 </tr>
 </table>
@@ -44,11 +44,11 @@
 | **沿途手记** | 原生图文、图片、链接、收藏与阅读进度 | [图文配置](examples/sites/local-journal.site) |
 | **资源导航** | 从目录进入子列表，再打开资源 | [目录配置](examples/sites/local-directory.site) |
 | **Hacker News** | 公开站点、JS 组合列表、CSS 正文提取 | [HN 配置](examples/sites/hacker-news.site) |
-| **Rust 学习指南** | Rust Book 简体中文版与 EPUB 章节阅读 | [可打开的 EPUB](examples/nas/files/Rust%20学习指南.epub) |
+| **Rust 学习指南** | TXT 自动识别章标题、生成目录并分页 | [可打开的 TXT](examples/nas/files/Rust%20学习指南.txt) |
 | **赵雷 · 成都** | 真实封面、曲目信息与公开试听播放器 | [素材来源与复现](examples/showcase/README.md) |
 | **NAS 资料库** | SMB 浏览与流式播放，打开 CBZ / TXT / PDF / Opus | [NAS 指南与演示文件](examples/nas/README.md) |
 
-HN 配置可以直接访问公开站点；Rust EPUB 可放进 NAS 或本地资料目录。音乐截图使用官方公开试听流，仓库保留封面与曲目信息。[截图来源与复现](examples/showcase/README.md)
+HN 配置可以直接访问公开站点；Rust TXT 可放进 NAS 或本地资料目录，Cove 会从文本中的章节标题自动生成目录。音乐截图使用官方公开试听流，仓库保留封面与曲目信息。[截图来源与复现](examples/showcase/README.md)
 
 四套本地网站配置继续提供视频、漫画、图文与目录的完整适配示范，真实私有规则不提交。启动服务后，在模拟器中的 Cove 导入 `examples/sites/local-*.site`：
 
@@ -71,6 +71,15 @@ python3 scripts/serve-examples.py
 </table>
 
 没有 NAS 也可以运行只读的 localhost SMB 示例，见 [NAS 示例指南](examples/nas/README.md)。截图使用实际生产视图与 SMB 请求；目录包含 Rust Book 简体中文版、赵雷专辑封面和固定测试资源。[截图来源](docs/assets/README.md)
+
+### TXT：纯文本也能像书一样读
+
+导入 [Rust 学习指南.txt](examples/nas/files/Rust%20学习指南.txt)，Cove 从独立的章标题识别出 22 章，自动生成可跳转的目录，再按字体、行距和屏幕尺寸分页。支持翻页和滚动阅读；文件没有预置章节索引。
+
+<table>
+<tr><th>从 TXT 自动生成目录</th><th>原生排版与继续阅读</th></tr>
+<tr><td><img src="docs/assets/txt-chapters.png" width="260" alt="从纯文本中识别出的 22 章目录及页码"></td><td><img src="docs/assets/txt-reader.png" width="260" alt="Cove 原生 TXT 阅读器显示 Rust 正文"></td></tr>
+</table>
 
 ## 从 HTML 到原生界面
 

@@ -6,6 +6,7 @@
 
 ```text
 CoveDemo/
+├── Rust 学习指南.txt    # 自动识别章节的纯文本样本
 ├── Rust 学习指南.epub   # MIT 许可的 Rust Book 简体中文版
 ├── 赵雷 — 无法长大.jpg   # 公开专辑封面，来源见下文
 ├── 山谷慢行.mp4         # 原创 6 秒动画
