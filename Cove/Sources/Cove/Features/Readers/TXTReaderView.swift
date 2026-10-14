@@ -97,9 +97,8 @@ enum TextPaginator {
     // Pre-compiled chapter detection regex patterns
     private static let chapterRegexes: [NSRegularExpression] = {
         let specs: [(pattern: String, options: NSRegularExpression.Options)] = [
-            (#"第[一二三四五六七八九十百千万零\d]{1,8}[章节回话篇集卷]\s*[^\n]*"#, []),
-            (#"Chapter\s+\d+[^\n]*"#, []),
-            (#"CHAPTER\s+\d+[^\n]*"#, []),
+            (#"^[ \t　]*第[一二三四五六七八九十百千万零\d]{1,8}[章节回话篇集卷][^\n]*"#, [.anchorsMatchLines]),
+            (#"^[ \t]*Chapter[ \t]+\d+[^\n]*"#, [.anchorsMatchLines, .caseInsensitive]),
             (#"^卷[一二三四五六七八九十\d]{1,4}\s*[^\n]*"#, [.anchorsMatchLines])
         ]
         return specs.compactMap { try? NSRegularExpression(pattern: $0.pattern, options: $0.options) }
@@ -112,7 +111,9 @@ enum TextPaginator {
             let matches = regex.matches(in: text, range: NSRange(location: 0, length: nsText.length))
             for match in matches {
                 let title = nsText.substring(with: match.range).trimmingCharacters(in: .whitespacesAndNewlines)
-                if !title.isEmpty { results.append((match.range.location, title)) }
+                if !title.isEmpty, title.count <= 80, !title.contains("。"), !title.hasSuffix("："), !title.hasSuffix(":") {
+                    results.append((match.range.location, title))
+                }
             }
         }
         results.sort { $0.location < $1.location }
@@ -464,25 +465,10 @@ struct TXTReaderView: View {
     // MARK: - Chapter list
 
     private var chapterListSheet: some View {
-        NavigationStack {
-            List(chapters) { ch in
-                Button {
-                    selectPage(ch.pageIndex)
-                    showChapterList = false
-                    showBars = false
-                } label: {
-                    HStack {
-                        Text(ch.title).lineLimit(2)
-                        Spacer()
-                        Text("p.\(ch.pageIndex + 1)").font(.caption).foregroundStyle(.secondary)
-                    }
-                }
-            }
-            .appSurface()
-            .navigationTitle("目录")
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) { Button("完成") { showChapterList = false } }
-            }
+        TXTChapterList(chapters: chapters) { chapter in
+            selectPage(chapter.pageIndex)
+            showChapterList = false
+            showBars = false
         }
     }
 
@@ -562,5 +548,31 @@ struct TXTReaderView: View {
             ))
         }
         try? context.save()
+    }
+}
+
+/// The reader and public capture use the same automatically derived chapter rows.
+struct TXTChapterList: View {
+    let chapters: [Chapter]
+    let onSelect: (Chapter) -> Void
+    @Environment(\.dismiss) private var dismiss
+    var body: some View {
+        NavigationStack {
+            List(chapters) { chapter in
+                Button { onSelect(chapter) } label: {
+                    HStack {
+                        Text(chapter.title).lineLimit(2)
+                        Spacer()
+                        Text("p.\(chapter.pageIndex + 1)").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .appSurface()
+            .navigationTitle("目录")
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) { Text("\(chapters.count) 章").font(.caption).foregroundStyle(.secondary) }
+                ToolbarItem(placement: .topBarTrailing) { Button("完成") { dismiss() } }
+            }
+        }
     }
 }

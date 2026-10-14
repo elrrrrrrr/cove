@@ -1,5 +1,6 @@
 import AVFoundation
 import Observation
+import UIKit
 
 /// Singleton audio player that persists across view dismissals for background playback.
 @Observable
@@ -13,6 +14,10 @@ final class AudioPlayerManager {
     private(set) var duration: Double = 0
     private(set) var trackName: String = ""
     private(set) var trackPath: String = ""
+    private(set) var title = ""
+    private(set) var artist = ""
+    private(set) var album = ""
+    private(set) var artwork: UIImage?
 
     // Sibling navigation context
     private(set) var siblings: [NASFileEntry] = []
@@ -20,6 +25,7 @@ final class AudioPlayerManager {
     private var smbClient: SMBClient?
 
     private var durationTask: Task<Void, Never>?
+    private var metadataTask: Task<Void, Never>?
     private var timeObserver: Any?
 
     private init() {}
@@ -51,6 +57,23 @@ final class AudioPlayerManager {
         self.siblings = siblings
         self.currentIndex = currentIndex
         self.smbClient = client
+
+        metadataTask = Task { [weak self] in
+            guard let current = p.currentItem else { return }
+            let items: [AVMetadataItem]
+            if current.externalMetadata.isEmpty {
+                items = (try? await current.asset.load(.commonMetadata)) ?? []
+            } else { items = current.externalMetadata }
+            let metadata = await AudioTrackMetadata.read(items)
+            guard !Task.isCancelled else { return }
+            let cover: UIImage?
+            if let data = metadata.artwork {
+                let decoding = Task.detached(priority: .utility) { ImageDecoder.decode(data, sizing: .thumbnail(1024)) }
+                cover = await withTaskCancellationHandler(operation: { await decoding.value }, onCancel: { decoding.cancel() })
+            } else { cover = nil }
+            guard !Task.isCancelled, let self, player === p else { return }
+            title = metadata.title; artist = metadata.artist; album = metadata.album; artwork = cover
+        }
 
         // Ignore metadata from a previous track after skip/stop.
         durationTask = Task { [weak self] in
@@ -131,6 +154,8 @@ final class AudioPlayerManager {
 
     private func cleanup() {
         durationTask?.cancel(); durationTask = nil
+        metadataTask?.cancel(); metadataTask = nil
+        title = ""; artist = ""; album = ""; artwork = nil
         if let obs = timeObserver { player?.removeTimeObserver(obs) }
         timeObserver = nil
         player?.pause()
@@ -139,5 +164,30 @@ final class AudioPlayerManager {
         isPlaying = false
         currentTime = 0
         duration = 0
+    }
+}
+
+struct AudioTrackMetadata: Sendable {
+    var title = ""
+    var artist = ""
+    var album = ""
+    var artwork: Data?
+
+    @MainActor static func read(_ items: [AVMetadataItem]) async -> Self {
+        var result = Self()
+        for item in items where !Task.isCancelled {
+            switch item.commonKey {
+            case .commonKeyTitle:
+                if result.title.isEmpty { result.title = (try? await item.load(.stringValue)) ?? "" }
+            case .commonKeyArtist:
+                if result.artist.isEmpty { result.artist = (try? await item.load(.stringValue)) ?? "" }
+            case .commonKeyAlbumName:
+                if result.album.isEmpty { result.album = (try? await item.load(.stringValue)) ?? "" }
+            case .commonKeyArtwork:
+                if result.artwork == nil, let data = try? await item.load(.dataValue), data.count <= 4 * 1024 * 1024 { result.artwork = data }
+            default: break
+            }
+        }
+        return result
     }
 }

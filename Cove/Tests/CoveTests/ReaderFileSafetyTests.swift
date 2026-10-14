@@ -1,7 +1,47 @@
 import XCTest
+import ZIPFoundation
 @testable import Cove
 
 final class ReaderFileSafetyTests: XCTestCase {
+    func testEPUBCacheSeparatesSameNamesAndReplacedFiles() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        var caches: [URL] = []
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            for cache in caches { try? FileManager.default.removeItem(at: cache) }
+        }
+        func book(_ folder: String, _ content: String) throws -> URL {
+            let directory = root.appendingPathComponent(folder)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let url = directory.appendingPathComponent("book.epub")
+            if FileManager.default.fileExists(atPath: url.path) { try FileManager.default.removeItem(at: url) }
+            let archive = try Archive(url: url, accessMode: .create, pathEncoding: .utf8)
+            let files = [
+                "META-INF/container.xml": "<container><rootfiles><rootfile full-path='content.opf'/></rootfiles></container>",
+                "content.opf": "<package><manifest><item id='chapter' href='chapter.xhtml'/></manifest><spine><itemref idref='chapter'/></spine></package>",
+                "chapter.xhtml": content
+            ]
+            for (path, text) in files {
+                let data = Data(text.utf8)
+                try archive.addEntry(with: path, type: .file, uncompressedSize: Int64(data.count)) { position, size in
+                    data.subdata(in: Int(position)..<Int(position) + size)
+                }
+            }
+            return url
+        }
+        let firstURL = try book("one", "<p>first book</p>")
+        let first = try XCTUnwrap(EPUBParser.parse(fileURL: firstURL).first)
+        caches.append(first.htmlURL.deletingLastPathComponent())
+        let second = try XCTUnwrap(EPUBParser.parse(fileURL: book("two", "<p>second book</p>")).first)
+        caches.append(second.htmlURL.deletingLastPathComponent())
+        XCTAssertNotEqual(first.htmlURL, second.htmlURL)
+        XCTAssertEqual(try String(contentsOf: second.htmlURL, encoding: .utf8), "<p>second book</p>")
+        let replaced = try XCTUnwrap(EPUBParser.parse(fileURL: book("one", "<p>replacement has new contents</p>")).first)
+        caches.append(replaced.htmlURL.deletingLastPathComponent())
+        XCTAssertNotEqual(first.htmlURL, replaced.htmlURL)
+        XCTAssertEqual(try String(contentsOf: replaced.htmlURL, encoding: .utf8), "<p>replacement has new contents</p>")
+    }
     func testEscapingArchivePathsAndSiblingPrefixesAreRejected() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

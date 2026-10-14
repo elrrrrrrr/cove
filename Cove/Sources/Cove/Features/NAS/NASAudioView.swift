@@ -19,18 +19,33 @@ struct NASAudioView: View {
             VStack(spacing: 32) {
                 Spacer()
 
-                // Album art placeholder
-                Image(systemName: "waveform.circle.fill")
-                    .font(.system(size: 120))
-                    .foregroundStyle(theme.textColor.opacity(0.3))
+                if let artwork = audioManager.artwork {
+                    Image(uiImage: artwork)
+                        .resizable().scaledToFit()
+                        .frame(maxWidth: 320, maxHeight: 320)
+                        .clipShape(RoundedRectangle(cornerRadius: 16))
+                        .accessibilityLabel("专辑封面")
+                        .padding(.horizontal, 32)
+                } else {
+                    Image(systemName: "waveform.circle.fill")
+                        .font(.system(size: 120))
+                        .foregroundStyle(theme.textColor.opacity(0.3))
+                }
 
                 // Filename
-                Text(audioManager.trackName.isEmpty ? trackName : audioManager.trackName)
-                    .font(.title3.weight(.medium))
-                    .foregroundStyle(theme.textColor)
-                    .lineLimit(2)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 32)
+                VStack(spacing: 8) {
+                    Text(audioManager.title.isEmpty ? (audioManager.trackName.isEmpty ? trackName : audioManager.trackName) : audioManager.title)
+                        .font(.title3.weight(.medium))
+                        .foregroundStyle(theme.textColor)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 32)
+                    if !audioManager.artist.isEmpty || !audioManager.album.isEmpty {
+                        Text([audioManager.artist, audioManager.album].filter { !$0.isEmpty }.joined(separator: " · "))
+                            .font(.subheadline).foregroundStyle(theme.textColor.opacity(0.6))
+                            .lineLimit(2).multilineTextAlignment(.center).padding(.horizontal, 32)
+                    }
+                }
 
                 // Progress
                 VStack(spacing: 4) {

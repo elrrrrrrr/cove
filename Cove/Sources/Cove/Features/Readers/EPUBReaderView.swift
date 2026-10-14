@@ -2,6 +2,7 @@ import SwiftUI
 import WebKit
 import ZIPFoundation
 import SwiftData
+import CryptoKit
 
 /// EPUB reader: unzips the archive, parses OPF manifest, renders chapters in WKWebView.
 struct EPUBReaderView: View {
@@ -144,6 +145,9 @@ struct EPUBReaderView: View {
             }.value
             await MainActor.run {
                 chapters = parsed
+                if let progress = historyItem?.progress, progress.isFinite, !parsed.isEmpty {
+                    currentChapter = min(parsed.count - 1, Int(max(0, min(1, progress)) * Double(parsed.count)))
+                }
                 isLoading = false
             }
         } catch {
@@ -181,14 +185,17 @@ struct EPUBChapter: Identifiable, Sendable {
 
 enum EPUBParser {
     static func parse(fileURL: URL) throws -> [EPUBChapter] {
+        let values = try fileURL.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+        let identity = "\(fileURL.standardizedFileURL.absoluteString)|\(values.fileSize ?? 0)|\(values.contentModificationDate?.timeIntervalSince1970 ?? 0)"
+        let key = SHA256.hash(data: Data(identity.utf8)).map { String(format: "%02x", $0) }.joined()
         let tempDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent(fileURL.deletingPathExtension().lastPathComponent + "_epub")
+            .appendingPathComponent("epub-" + key, isDirectory: true)
 
         // Extract if needed
         if !FileManager.default.fileExists(atPath: tempDir.path) {
-            guard let archive = Archive(url: fileURL, accessMode: .read) else {
-                throw EPUBError.invalidArchive
-            }
+            let archive: Archive
+            do { archive = try Archive(url: fileURL, accessMode: .read, pathEncoding: nil) }
+            catch { throw EPUBError.invalidArchive }
             try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
             var expanded: UInt64 = 0
             for entry in archive {
