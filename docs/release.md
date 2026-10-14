@@ -9,19 +9,13 @@ GitHub 的 `xcode-27` runner 当前处于 preview；固定使用稳定版 Xcode 
 ## 合并与发布
 
 1. 通过 PR 合并代码到 `main`。涉及应用源码、资源、打包流程或项目配置的 PR 会验证真机 archive 和 IPA；单元测试等回归由 CI 负责。
-2. 在准备好的提交上打标签，例如：
+2. 在 GitHub → Releases → Draft a new release 中选择已准备好的提交，新建或选择 `v1.0.0` 这样的标签，填写标题与变更说明。
+3. 点击 **Publish release**。`release.published` 事件触发 `IPA Release` workflow，编译该 Release 标签对应的提交。
+4. 构建完成后，自动将 `Cove-1.0.0-unsigned.ipa` 与同名 `.sha256` 附加到你发布的 Release。标题和变更说明由你维护。
 
-   ```sh
-   git switch main
-   git pull --ff-only
-   git tag v1.0.0
-   git push origin v1.0.0
-   ```
+仅保存草稿、编辑说明或单独推送标签不会触发打包。发布后，附件需要等 Actions 构建完成才会出现；失败可在 Actions 重跑，重跑会替换该 Release 的同名 IPA 和校验文件。
 
-3. `IPA Release` workflow 构建成功后生成 **Release 草稿**，附上 `Cove-1.0.0-unsigned.ipa` 和同名 `.sha256` 文件。
-4. 在 GitHub Releases 编辑草稿，填写变更说明，再手动发布。
-
-标签必须为 `vX.Y.Z`，例如 `v1.0.0`。暂不支持带后缀的预发布版本；草稿允许发布前复核。已有同名 Release 不会被覆盖，失败后先检查 Actions 日志与现有草稿。
+标签必须为 `vX.Y.Z`，例如 `v1.0.0`。暂不支持带后缀的预发布版本。Release 需要允许上传附件；启用不可变 Release 会阻止发布后追加附件，不适用于这条流程。
 
 ## 手动测试包
 
@@ -44,4 +38,4 @@ python3 scripts/test_release.py
 bash scripts/build-ipa.sh 1.0.0 1 /tmp/cove-release
 ```
 
-输出目录需没有同版本 IPA。脚本验证 arm64、iPhoneOS、应用身份、签名与私有预置边界，失败时不发布 Release。正式版本使用新的版本标签；不要移动已有发布标签。
+输出目录需没有同版本 IPA。脚本验证 arm64、iPhoneOS、应用身份、签名与私有预置边界；失败时已发布的 Release 仍在，但不会上传 IPA。正式版本使用新的版本标签；不要移动已有发布标签。

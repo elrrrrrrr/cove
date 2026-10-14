@@ -10,8 +10,8 @@ on:
       - 'Cove/project.yml'
       - 'Cove/Sources/**'
       - 'Cove/Resources/**'
-  push:
-    tags: ['v*']
+  release:
+    types: [published]
   workflow_dispatch:
     inputs:
       version:
@@ -43,10 +43,11 @@ jobs:
       - name: Build unsigned device IPA
         env:
           EVENT_NAME: ${{ github.event_name }}
-          TAG_NAME: ${{ github.ref_name }}
+          TAG_NAME: ${{ github.event.release.tag_name }}
           INPUT_VERSION: ${{ inputs.version }}
         run: |
-          if [[ "$EVENT_NAME" == push ]]; then
+          if [[ "$EVENT_NAME" == release ]]; then
+            [[ "$TAG_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'Release tag must be vX.Y.Z' >&2; exit 1; }
             version="${TAG_NAME#v}"
           elif [[ "$EVENT_NAME" == workflow_dispatch ]]; then
             version="$INPUT_VERSION"
@@ -63,8 +64,8 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-  draft-release:
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+  upload-release:
+    if: github.event_name == 'release' && github.event.action == 'published'
     needs: build
     runs-on: ubuntu-latest
     permissions:
@@ -74,18 +75,10 @@ jobs:
         with:
           name: Cove-unsigned-IPA
           path: release
-      - name: Create release draft
+      - name: Attach IPA to published release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
-          cat > /tmp/release-notes.md <<'EOF'
-          未签名 iOS IPA，要求 iOS 26 或更新。请使用自己的签名工具签名后安装。
-
-          不含开发证书、provisioning profile、私有站点或预置收藏。可在 App 内导入 .site。
-
-          下载 IPA 和同名 .sha256 后，可用 shasum -a 256 -c 校验完整性。
-          EOF
-          gh release create "$RELEASE_TAG" release/*.ipa release/*.sha256 \
-            --verify-tag --draft --title "Cove $RELEASE_TAG" --notes-file /tmp/release-notes.md
+          gh release upload "$RELEASE_TAG" release/*.ipa release/*.sha256 --clobber
