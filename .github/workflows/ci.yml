@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  export-policy:
+    name: Export policy tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run export policy tests
+        run: python3 scripts/test_export.py -v
+
+  build-and-test:
+    name: Build and test (iOS)
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install xcodegen
+        run: brew install xcodegen xcbeautify
+
+      - name: Select Xcode 26
+        run: |
+          XCODE_APP=$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -1)
+          if [ -z "$XCODE_APP" ]; then
+            echo "No Xcode 26 found:"; ls /Applications | grep -i xcode; exit 1
+          fi
+          echo "Using $XCODE_APP"
+          sudo xcode-select -s "$XCODE_APP"
+          xcodebuild -version
+
+      - name: List available simulators
+        run: xcrun simctl list devices available | grep -i "iphone 1[67]" | head -5
+
+      - name: Generate Xcode project
+        run: xcodegen generate --project Cove
+
+      - name: Build
+        run: |
+          xcodebuild build \
+            -project Cove/Cove.xcodeproj \
+            -scheme Cove \
+            -destination 'platform=iOS Simulator,name=iPhone 17' \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            | xcbeautify
+
+      - name: Test (unit tests)
+        run: |
+          xcodebuild test \
+            -project Cove/Cove.xcodeproj \
+            -scheme Cove \
+            -destination 'platform=iOS Simulator,name=iPhone 17' \
+            -only-testing:CoveTests \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            | xcbeautify
