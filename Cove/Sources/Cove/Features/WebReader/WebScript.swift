@@ -17,6 +17,8 @@ import WebKit
     }
 
     static func boundedString(_ expression: String, in webView: WKWebView, timeout: Duration = .seconds(12)) async throws -> String? {
+        // The callback API must keep its receiver alive while a Promise is pending.
+        defer { withExtendedLifetime(webView) {} }
         let call = ScriptStringCall()
         return try await withTaskCancellationHandler {
             try Task.checkCancellation()

@@ -37,6 +37,7 @@ struct SettingsView: View {
                         Label("网站登录", systemImage: "person.crop.circle.badge.checkmark")
                     }
                     .accessibilityIdentifier("website-login-management")
+                    .accessibilityLabel("网站登录")
                     ForEach(sites) { site in
                         HStack {
                             if let data = site.faviconData {
@@ -56,6 +57,8 @@ struct SettingsView: View {
                     } label: {
                         Label("管理网站", systemImage: "pencil")
                     }
+                    .accessibilityIdentifier("website-management")
+                    .accessibilityLabel("管理网站")
                 } header: {
                     Text("网站")
                 } footer: {

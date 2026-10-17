@@ -29,7 +29,7 @@ import WebKit
         await dataStore.removeData(ofTypes: loginDataTypes, for: records)
         // Include cookie-only domains even when WebKit has not produced a data record yet.
         for cookie in await dataStore.httpCookieStore.allCookies() where matches(recordDomain: cookie.domain, host: host) {
-            await dataStore.httpCookieStore.delete(cookie)
+            await dataStore.httpCookieStore.deleteCookie(cookie)
         }
     }
 }

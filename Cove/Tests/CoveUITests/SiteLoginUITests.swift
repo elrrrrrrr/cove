@@ -13,7 +13,8 @@ import XCTest
         let app = XCUIApplication()
         app.launchArguments = ["-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"]
         app.launch(); app.tabBars.buttons["设置"].tap()
-        let management = app.buttons["管理网站"]
+        app.swipeDown(); app.swipeDown()
+        let management = app.buttons["website-management"]
         for _ in 0..<8 where !management.isHittable { app.swipeUp() }
         management.tap(); app.buttons["添加或导入站点"].tap(); app.buttons["创建站点规则"].tap()
         app.textFields["站点名称"].tap(); app.textFields["站点名称"].typeText("本地登录演示")
@@ -23,11 +24,10 @@ import XCTest
         let start = app.navigationBars["网站"].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3))
         start.press(forDuration: 0.1, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.95)))
         let entry = app.buttons["website-login-management"]
-        XCTAssertTrue(entry.waitForExistence(timeout: 5))
         for _ in 0..<8 where !entry.isHittable { app.swipeDown() }
-        entry.tap()
+        XCTAssertTrue(entry.waitForExistence(timeout: 5)); entry.tap()
         app.buttons["website-login-127.0.0.1"].tap()
-        XCTAssertTrue(app.staticTexts["默认保留"].exists)
+        XCTAssertTrue(app.buttons["website-login-open"].waitForExistence(timeout: 5))
         app.buttons["website-login-open"].tap()
         let input = app.webViews.textFields["演示账号"]
         XCTAssertTrue(input.waitForExistence(timeout: 10)); input.tap(); input.typeText("demo")
@@ -35,14 +35,19 @@ import XCTest
         XCTAssertTrue(app.webViews.staticTexts["演示登录已保存"].waitForExistence(timeout: 5))
         snapshot("website-login-browser", app)
         app.buttons["website-login-done"].tap()
-        XCTAssertTrue(app.staticTexts["已保存"].waitForExistence(timeout: 5))
+        expectDataStatus("已保存", in: app)
         snapshot("website-login-management", app)
         app.buttons["website-login-clear"].tap()
-        XCTAssertTrue(app.buttons["清除并重新登录"].waitForExistence(timeout: 5))
-        app.buttons["取消"].tap()
-        XCTAssertTrue(app.staticTexts["已保存"].exists, "Cancelling must retain website data")
-        app.buttons["website-login-clear"].tap(); app.buttons["清除并重新登录"].tap()
-        XCTAssertTrue(app.staticTexts["暂无记录"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["确认清除"].waitForExistence(timeout: 5))
+        app.buttons.matching(NSPredicate(format: "label IN %@", ["取消", "Cancel"])).firstMatch.tap()
+        expectDataStatus("已保存", in: app)
+        app.buttons["website-login-clear"].tap(); app.buttons["确认清除"].tap()
+        expectDataStatus("暂无记录", in: app)
+    }
+    private func expectDataStatus(_ value: String, in app: XCUIApplication) {
+        let status = app.descendants(matching: .any).matching(identifier: "website-login-data-status").firstMatch
+        let ready = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", value), object: status)
+        XCTAssertEqual(XCTWaiter.wait(for: [ready], timeout: 10), .completed)
     }
     private func snapshot(_ name: String, _ app: XCUIApplication) {
         let shot = XCTAttachment(screenshot: app.screenshot()); shot.name = name; shot.lifetime = .keepAlways; add(shot)

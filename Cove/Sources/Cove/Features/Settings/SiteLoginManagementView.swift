@@ -46,13 +46,18 @@ private struct SiteLoginDetailView: View {
                 LabeledContent("网站", value: target.name)
                 LabeledContent("域名", value: target.host)
                 LabeledContent("登录数据", value: "默认保留")
-                LabeledContent("本地网站数据", value: hasData.map { $0 ? "已保存" : "暂无记录" } ?? "检查中…")
+                LabeledContent("本地网站数据", value: dataStatus)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("本地网站数据")
+                    .accessibilityValue(dataStatus)
+                    .accessibilityIdentifier("website-login-data-status")
             } footer: {
                 Text("本地数据不代表账号仍已登录，实际登录状态以网站显示为准。")
             }
             Section {
                 Button("登录或切换账号") { showLogin = true }
                     .accessibilityIdentifier("website-login-open")
+                    .disabled(clearing)
                 Button("清除该站登录数据", role: .destructive) { confirmClear = true }
                     .disabled(clearing)
                     .accessibilityIdentifier("website-login-clear")
@@ -68,8 +73,9 @@ private struct SiteLoginDetailView: View {
         .sheet(isPresented: $showLogin, onDismiss: { Task { await refresh() } }) {
             SiteLoginPage(target: target)
         }
-        .confirmationDialog("清除该站登录数据？", isPresented: $confirmClear, titleVisibility: .visible) {
-            Button("清除并重新登录", role: .destructive) {
+        .alert("清除该站登录数据？", isPresented: $confirmClear) {
+            Button("取消", role: .cancel) {}
+            Button("确认清除", role: .destructive) {
                 Task {
                     clearing = true
                     await SiteWebSession.clearLoginData(for: target.host)
@@ -81,6 +87,7 @@ private struct SiteLoginDetailView: View {
             Text("将删除该站的 Cookie 和本地存储，共享同一网站数据域的其他入口也会受影响。已打开的网页需要重新加载；收藏和阅读记录会保留。")
         }
     }
+    private var dataStatus: String { hasData.map { $0 ? "已保存" : "暂无记录" } ?? "检查中…" }
     private func refresh() async { hasData = await SiteWebSession.hasLoginData(for: target.host) }
 }
 
@@ -128,12 +135,14 @@ private struct SiteLoginPage: View {
     let webView: WKWebView
     let info: ParsingWebPageInfo
     var error: String?
+    private let entryURL: URL
     private var initialURL: URL?
 
     init(url: URL) {
         let view = WebCoordinator().webView
         webView = view
         info = ParsingWebPageInfo(webView: view)
+        entryURL = url
         initialURL = url
         super.init()
         view.navigationDelegate = self
@@ -144,7 +153,11 @@ private struct SiteLoginPage: View {
         initialURL = nil
         webView.load(URLRequest(url: url))
     }
-    func reload() { error = nil; webView.reload() }
+    func reload() {
+        error = nil
+        if webView.url == nil { webView.load(URLRequest(url: entryURL)) }
+        else { webView.reload() }
+    }
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { error = nil }
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) { failed(error) }
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { failed(error) }

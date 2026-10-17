@@ -18,11 +18,15 @@ import WebKit
         controller.view.addSubview(view); window.makeKeyAndVisible(); self.window = window
     }
     private func ready(_ web: WKWebView) async throws {
-        for _ in 0..<160 {
-            if !web.isLoading, (try? await web.evaluateJavaScript("document.readyState")) as? String == "complete" { return }
+        for _ in 0..<320 {
+            let value = try? await web.evaluateJavaScript("({href:location.href, ready:document.readyState})")
+            let page = value as? [String: String]
+            if !web.isLoading, let current = web.url?.absoluteString, !current.hasPrefix("about:"),
+               page?["href"] == current, page?["ready"] == "complete" { return }
             try await Task.sleep(for: .milliseconds(25))
         }
         XCTFail("Fixture did not finish loading")
+        throw URLError(.timedOut)
     }
 
     func testWebsiteSessionSurvivesWebViewRecreationAndContentCacheCleanup() async throws {
@@ -60,10 +64,10 @@ import WebKit
             _ = try await recreated.evaluateJavaScript("localStorage.removeItem('\(name)')")
         } catch {
             _ = try? await first.evaluateJavaScript("localStorage.removeItem('\(name)')")
-            await store.httpCookieStore.delete(cookie)
+            await store.httpCookieStore.deleteCookie(cookie)
             throw error
         }
-        await store.httpCookieStore.delete(cookie)
+        await store.httpCookieStore.deleteCookie(cookie)
     }
 
     func testMovingLiveViewKeepsDocumentDelegateAndRestoresHiddenHost() async throws {

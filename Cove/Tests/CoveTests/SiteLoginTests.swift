@@ -40,6 +40,6 @@ import WebKit
         let remaining = await store.allCookies()
         XCTAssertFalse(remaining.contains { $0.domain == host && $0.name == first.name })
         XCTAssertTrue(remaining.contains { $0.domain == otherHost && $0.name == other.name })
-        await store.delete(first); await store.delete(other)
+        await store.deleteCookie(first); await store.deleteCookie(other)
     }
 }

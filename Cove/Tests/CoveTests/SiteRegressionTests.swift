@@ -102,7 +102,7 @@ import UIKit
             try await page.load(bytes(fixture.sample.input, fixture: fixture), base: fixture.sample.pageURL)
             try await installResponses(fixture, page: page)
             let extraction = try XCTUnwrap(rule.extract)
-            let output = try await WebScript.string(extraction.javascript, in: page.webView)
+            let output = try await WebScript.boundedString(extraction.javascript, in: page.webView)
             let text = try XCTUnwrap(output)
             let object = try JSONSerialization.jsonObject(with: Data(text.utf8), options: .fragmentsAllowed)
             try assertResult(object, fixture: fixture)
@@ -147,7 +147,7 @@ import UIKit
             let page = RegressionPage()
             try await page.load(bytes(fixture.sample.input, fixture: fixture), base: url)
             try await installResponses(fixture, page: page)
-            let extracted = try await WebScript.string(try XCTUnwrap(resultRule.extract).javascript, in: page.webView)
+            let extracted = try await WebScript.boundedString(try XCTUnwrap(resultRule.extract).javascript, in: page.webView)
             let output = try XCTUnwrap(extracted)
             let items = try JSONSerialization.jsonObject(with: Data(output.utf8))
             let resultParser = SiteParserRegistry.parser(definition: owner, rule: resultRule)
@@ -161,6 +161,14 @@ import UIKit
             responses[response.url.absoluteString] = try XCTUnwrap(String(data: bytes(response.file, fixture: fixture), encoding: .utf8))
         }
         _ = try await page.webView.callAsyncJavaScript(#"""
+        // Optional synthetic hydration: keep inline fixture scripts blocked by CSP.
+        const delayed = document.querySelector('template[data-fixture-delay-ms]');
+        if (delayed) {
+            const delay = Math.min(2000, Math.max(0, Number(delayed.dataset.fixtureDelayMs) || 0));
+            const html = delayed.innerHTML;
+            delayed.remove();
+            setTimeout(() => { document.body.innerHTML = html; }, delay);
+        }
         window.__fixtureRequests = [];
         window.fetch = async function(input) {
             const url = new URL(typeof input === 'string' ? input : input.url, document.baseURI).href;

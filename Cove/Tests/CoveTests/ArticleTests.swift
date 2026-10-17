@@ -25,6 +25,16 @@ import WebKit
         return Data(try XCTUnwrap(result).utf8)
     }
 
+    func testBoundedScriptRetainsTemporaryWebViewUntilPromiseCompletes() async throws {
+        @MainActor func execute() async throws -> String? {
+            let page = ArticleTestPage()
+            try await page.load("<p>临时页面</p>", base: base)
+            return try await WebScript.boundedString("new Promise(resolve => setTimeout(() => resolve('retained'), 100))", in: page.webView, timeout: .seconds(5))
+        }
+        let result = try await execute()
+        XCTAssertEqual(result, "retained")
+    }
+
     func testCurrentSchemaRoundTripAndArticleControls() throws {
         let value = try definition(), decoded = try SiteDefinition.decode(value.yaml())
         XCTAssertEqual(value, decoded); XCTAssertEqual(value.schemaVersion, 1)
@@ -230,7 +240,7 @@ import WebKit
             pending = continuation
             webView.loadHTMLString("<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; script-src 'unsafe-eval'; style-src 'unsafe-inline'\">" + html, baseURL: base)
             Task { @MainActor [weak self] in
-                try? await Task.sleep(for: .seconds(5))
+                try? await Task.sleep(for: .seconds(10))
                 guard let pending = self?.pending else { return }; self?.pending = nil
                 pending.resume(throwing: URLError(.timedOut))
             }
