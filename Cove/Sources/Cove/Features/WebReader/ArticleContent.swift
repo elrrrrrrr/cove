@@ -1,6 +1,6 @@
 import Foundation
 
-struct ArticleDocument: Equatable, Sendable {
+struct ArticleDocument: Hashable, Sendable, Codable {
     let title: String
     let author: String
     let publishedAt: String
@@ -8,9 +8,18 @@ struct ArticleDocument: Equatable, Sendable {
     let commentsURL: URL?
     let blocks: [ArticleBlock]
 
+    init(title: String, author: String, publishedAt: String, sourceURL: URL?, commentsURL: URL?, blocks: [ArticleBlock]) {
+        self.title = title; self.author = author; self.publishedAt = publishedAt
+        self.sourceURL = sourceURL; self.commentsURL = commentsURL; self.blocks = blocks
+    }
+
     static func decode(_ data: Data, base: URL, fallbackTitle: String) throws -> Self {
         guard data.count <= 2 * 1024 * 1024 else { throw SiteDefinitionError.invalid("图文内容超过大小限制") }
         let raw = try JSONDecoder().decode(RawArticle.self, from: data)
+        return try build(raw, base: base, fallbackTitle: fallbackTitle)
+    }
+
+    static func build(_ raw: RawArticle, base: URL, fallbackTitle: String) throws -> Self {
         guard raw.blocks.count <= 2000 else { throw SiteDefinitionError.invalid("图文块数量超过限制") }
         var characters = 0
         let blocks = try raw.blocks.enumerated().compactMap { index, block -> ArticleBlock? in
@@ -38,6 +47,27 @@ struct ArticleDocument: Equatable, Sendable {
             sourceURL: source, commentsURL: address(raw.commentsURL, base: base), blocks: blocks)
     }
 
+    init(from decoder: Decoder) throws {
+        let raw = try RawArticle(from: decoder)
+        self = try Self.build(raw, base: URL(string: "https://example.invalid")!, fallbackTitle: "图文")
+    }
+
+    func encode(to encoder: Encoder) throws {
+        try RawArticle(title: title, author: author, publishedAt: publishedAt,
+            sourceURL: sourceURL?.absoluteString, commentsURL: commentsURL?.absoluteString,
+            blocks: blocks.map { block in
+                RawArticleBlock(type: block.kind.rawValue, text: nil,
+                    runs: block.text.runs.map { ArticleRun(text: String(block.text[$0.range].characters), url: $0.link?.absoluteString) },
+                    url: block.url?.absoluteString, alt: block.alt, level: block.level, width: block.aspectRatio, height: 1)
+            }).encode(to: encoder)
+    }
+
+    func snapshotData() throws -> Data {
+        let data = try JSONEncoder().encode(self)
+        guard data.count <= 2 * 1024 * 1024 else { throw SiteDefinitionError.invalid("图文快照超过大小限制") }
+        return data
+    }
+
     static func address(_ value: String?, base: URL) -> URL? {
         guard let value, !value.isEmpty, value.utf8.count <= 32_768,
               let url = URL(string: value, relativeTo: base)?.absoluteURL,
@@ -47,7 +77,7 @@ struct ArticleDocument: Equatable, Sendable {
     }
 }
 
-struct ArticleBlock: Identifiable, Equatable, Sendable {
+struct ArticleBlock: Identifiable, Hashable, Sendable {
     enum Kind: String, Sendable { case paragraph, heading, image, quote, code, link }
     let id: String
     let kind: Kind
@@ -58,7 +88,7 @@ struct ArticleBlock: Identifiable, Equatable, Sendable {
     let aspectRatio: Double
 }
 
-private struct RawArticle: Decodable {
+struct RawArticle: Codable {
     let title: String?
     let author: String?
     let publishedAt: String?
@@ -66,7 +96,7 @@ private struct RawArticle: Decodable {
     let commentsURL: String?
     let blocks: [RawArticleBlock]
 }
-private struct RawArticleBlock: Decodable {
+struct RawArticleBlock: Codable {
     let type: String
     let text: String?
     let runs: [ArticleRun]?
@@ -76,7 +106,7 @@ private struct RawArticleBlock: Decodable {
     let width: Double?
     let height: Double?
 }
-private struct ArticleRun: Decodable { let text: String; let url: String? }
+struct ArticleRun: Codable { let text: String; let url: String? }
 
 /// Generic DOM-to-block conversion. Site selectors remain in configuration.
 enum ArticleDOM {

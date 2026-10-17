@@ -67,3 +67,41 @@ pagination:
 网站登录管理位于“设置 → 网站登录”，同域入口合并显示。打开的是共享持久化存储的专用登录网页，不创建阅读记录，也不隐藏导航栏。网页内完成登录后点击“完成”，再返回站点重试解析。“本地网站数据已保存”只说明存在 Cookie 或本地存储，不表示登录一定有效。
 
 “清除该站登录数据”须单独确认，只清除匹配网站数据域的 Cookie、LocalStorage、SessionStorage 和 IndexedDB，保留收藏、历史及其他网站的数据。同一父域共享的数据可能影响多个入口；已打开的网页需要重新加载。这不会撤销服务器上其他设备的会话。
+
+## 原生 Feed 与全局保存
+
+图文目录项可包含可选的 `article`，结构与单篇图文的提取结果一致。没有这个字段的目录继续按 URL 提取详情；带有字段时，卡片直接展示正文、媒体和引用，进入详情复用内容，无需为同一篇帖子再加载网页。规则与展示仍然分离，应用代码不包含站点域名或选择器。
+
+CSS 配置可以直接组合现有的嵌套 `fields` 和 `content`：
+
+```yaml
+schemaVersion: 1
+id: example.feed
+name: 图文 Feed
+match: {hosts: [journal.example]}
+entries:
+  - {id: home, name: 动态, path: /, category: news}
+rules:
+  - id: feed
+    role: catalog
+    contentType: article
+    presentation: {layout: bento}
+    extract:
+      items: .post
+      fields:
+        title: {selector: h2, text: true}
+        url: {selector: a.permalink, attribute: href}
+        article:
+          fields:
+            title: {selector: h2, text: true}
+            author: {selector: .author, text: true}
+            blocks: {selector: .body, content: true}
+```
+
+JavaScript 返回相同的目录项结构：`{title, url, article: {title, author, publishedAt, blocks}}`，正文块仍使用 `paragraph / heading / image / quote / code / link`。图片尺寸、链接和正文大小沿用图文内容校验。
+
+Bento 采用纵向帖子和帖内图片拼贴；列表提供紧凑文字浏览，竖版在手机上为双列紧凑卡片。卡片收藏按钮与正文入口独立，不会同时触发保存和跳转。平板 Bento 使用双列。
+
+图文收藏复用全局收藏及 Pin，不创建独立收藏库。收藏同时保存已提取正文快照，备份及文件夹同步保留快照和原有收藏标识，配置版本仍为 1。收藏中的正文可在站点不可用时打开；图片保存的是来源链接，未下载的图片仍依赖网络，这不等于完整离线媒体包。普通列表缓存仍有原有 TTL 与容量上限，不能替代收藏。
+
+同一资源 URL 的列表标识在分页、缩略图更新和缓存恢复时保持稳定。从详情返回不会自动重新加载目录。自动后台刷新保留已显示帖子的顺序并追加新帖子，避免阅读期间替换列表；用户下拉刷新或修改规则时完整替换目录。首屏磁盘快照最多保存 60 项。

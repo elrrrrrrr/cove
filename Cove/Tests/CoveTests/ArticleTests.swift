@@ -25,6 +25,75 @@ import WebKit
         return Data(try XCTUnwrap(result).utf8)
     }
 
+    func testAutomaticFeedRefreshKeepsVisibleRowsAndExplicitRefreshReplacesThem() async throws {
+        let server = try ArticleFixtureServer(routes: ["/": ("text/html", Data("<main><a href='/new'>新帖子</a></main>".utf8))])
+        defer { server.listener.cancel() }
+        let url = try XCTUnwrap(URL(string: server.url))
+        var definition = SiteDefinition.starter(name: "Feed", url: url)
+        definition.rules = [.init(id: "feed", role: "catalog", contentType: "article", load: .init(mode: "webView", waitSeconds: 0),
+            extract: .init(items: "main a", fields: ["title": .init(text: true), "url": .init(attribute: "href")]))]
+        let parser = SiteParserRegistry.parser(definition: definition, rule: definition.rules[0])
+        let old = ParsedItem(title: "正在阅读的旧帖子", pageURL: url.appendingPathComponent("old"), thumbnail: nil, duration: "", extra: "")
+        let loader = PageLoader(); loader.preload([old]); loader.load(url: url, parser: parser)
+        try await wait { if case .done(let items) = loader.state { return items.count == 2 }; return false }
+        if case .done(let items) = loader.state { XCTAssertEqual(items.first?.id, old.id) }
+        loader.load(url: url, parser: parser, forceRefresh: true)
+        try await wait { if case .done(let items) = loader.state { return items.count == 1 && items.first?.title == "新帖子" }; return false }
+    }
+
+    func testFeedDocumentRoundTripPreservesLinksMediaAndIdentity() throws {
+        let data = Data(#"{"title":"合成短帖","author":"演示作者","blocks":[{"type":"paragraph","runs":[{"text":"第一行\n第二行 "},{"text":"参考","url":"/guide"}]},{"type":"image","url":"/photo.png","width":600,"height":400},{"type":"quote","text":"引用内容"}]}"#.utf8)
+        let document = try ArticleDocument.decode(data, base: base, fallbackTitle: "")
+        let item = ParsedItem(title: "合成短帖", pageURL: base, thumbnail: nil, duration: "现在", extra: "作者", article: document)
+        let restored = try JSONDecoder().decode(ParsedItem.self, from: JSONEncoder().encode(item))
+        XCTAssertEqual(restored.article, document)
+        XCTAssertEqual(restored.id, item.id)
+        XCTAssertEqual(ParsedItem(title: "标题更新", pageURL: base, thumbnail: nil, duration: "", extra: "").id, item.id)
+        XCTAssertEqual(String(restored.article!.blocks[0].text.characters), "第一行\n第二行 参考")
+        XCTAssertEqual(restored.article?.blocks[1].url, URL(string: "https://news.example/photo.png"))
+    }
+
+    func testCSSCatalogCanEmbedTheSameArticleContractAsJavaScript() async throws {
+        let fields: [String: SiteField] = ["title": .init(selector: "h2", text: true), "url": .init(selector: "a", attribute: "href"),
+            "article": .init(fields: ["title": .init(selector: "h2", text: true), "author": .init(selector: ".author", text: true),
+                "blocks": .init(selector: ".body", content: true)])]
+        let result = try await execute(.init(items: ".post", fields: fields), html: "<article class='post'><h2>合成 Feed</h2><a href='/post'>详情</a><span class='author'>作者</span><div class='body'><p>完整正文</p><blockquote>引用</blockquote><img src='/pic.png'></div></article>")
+        let rows = try XCTUnwrap(JSONSerialization.jsonObject(with: result) as? [[String: Any]])
+        let data = try JSONSerialization.data(withJSONObject: XCTUnwrap(rows.first?["article"]))
+        let document = try ArticleDocument.decode(data, base: base, fallbackTitle: "")
+        XCTAssertEqual(document.author, "作者")
+        XCTAssertEqual(document.blocks.map(\.kind), [.paragraph, .quote, .image])
+    }
+
+    func testGlobalFavoriteSnapshotSurvivesExportImportAndDisplaysWithoutWebRequest() throws {
+        let document = try ArticleDocument.decode(Data(#"{"title":"离线合成正文","blocks":[{"type":"paragraph","text":"保存后可读"}]}"#.utf8), base: base, fallbackTitle: "")
+        let first = try model(), context = first.mainContext
+        let item = ParsedItem(title: document.title, pageURL: base, thumbnail: nil, duration: "", extra: "", article: document)
+        XCTAssertTrue(try ArticleReadingStore.toggleFavorite(item: item, title: item.title, definitionID: nil, in: context))
+        let favorite = try XCTUnwrap(ArticleReadingStore.favorite(for: base, in: context))
+        try FavoritePins.set(favorite, pinned: true, context: context)
+        let bytes = try FavoriteDataFile.export([favorite]).json()
+        let second = try model(); try FavoriteDataFile.decode(bytes).apply(to: second.mainContext)
+        let restored = try XCTUnwrap(ArticleReadingStore.favorite(for: base, in: second.mainContext))
+        XCTAssertEqual(restored.id, favorite.id); XCTAssertTrue(restored.isPinned)
+        let saved = try ArticleDocument.decode(XCTUnwrap(restored.articleSnapshot), base: base, fallbackTitle: "")
+        XCTAssertEqual(saved, document)
+        let backup = try ConfigBackup.captureAll(context: context)
+        restored.articleSnapshot = nil; try second.mainContext.save()
+        try ConfigBackup.decode(backup.json()).apply(to: second.mainContext)
+        XCTAssertEqual(try ArticleReadingStore.favorite(for: base, in: second.mainContext)?.articleSnapshot, favorite.articleSnapshot)
+        let loader = ArticleLoader(); loader.display(saved)
+        XCTAssertEqual(loader.state, .loaded(document)); XCTAssertNil(loader.request)
+    }
+
+    func testFavoriteSnapshotRejectsInvalidOrNonArticlePayload() throws {
+        var file = FavoriteDataFile(favorites: [.init(title: "测试", pageURL: base.absoluteString, isArticle: true, articleSnapshot: Data("invalid".utf8))])
+        XCTAssertThrowsError(try file.validate())
+        file.favorites[0].articleSnapshot = Data(#"{"blocks":[{"type":"paragraph","text":"正文"}]}"#.utf8)
+        file.favorites[0].isArticle = false
+        XCTAssertThrowsError(try file.validate())
+    }
+
     func testBoundedScriptRetainsTemporaryWebViewUntilPromiseCompletes() async throws {
         @MainActor func execute() async throws -> String? {
             let page = ArticleTestPage()

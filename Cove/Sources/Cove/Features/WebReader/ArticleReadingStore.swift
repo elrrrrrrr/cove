@@ -25,7 +25,7 @@ import Foundation
         return try context.fetch(FetchDescriptor<FavoriteVideo>(predicate: #Predicate { $0.pageURLString == key })).first
     }
 
-    @discardableResult static func toggleFavorite(item: ParsedItem, title: String, definitionID: String?, in context: ModelContext) throws -> Bool {
+    @discardableResult static func toggleFavorite(item: ParsedItem, title: String, definitionID: String?, document: ArticleDocument? = nil, in context: ModelContext) throws -> Bool {
         if let existing = try favorite(for: item.pageURL, in: context) {
             context.delete(existing); try context.save(); return false
         }
@@ -33,6 +33,7 @@ import Foundation
             thumbnailURLString: item.thumbnail?.absoluteString,
             siteName: SiteParserRegistry.definition(for: item.pageURL, id: definitionID)?.name ?? item.extra,
             isArticle: true, definitionID: definitionID)
+        if let document = document ?? item.article { value.articleSnapshot = try document.snapshotData() }
         context.insert(value); try context.save(); return true
     }
 }

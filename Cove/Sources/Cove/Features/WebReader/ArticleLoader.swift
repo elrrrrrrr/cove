@@ -36,6 +36,10 @@ import WebKit
         }
     }
 
+    func display(_ document: ArticleDocument) {
+        cancel(); state = .loaded(document)
+    }
+
     func cancel() {
         generation = UUID(); extraction?.cancel(); extraction = nil
         navigationID = nil

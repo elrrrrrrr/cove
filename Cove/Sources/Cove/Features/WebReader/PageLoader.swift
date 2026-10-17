@@ -491,7 +491,8 @@ final class PageLoader: NSObject {
                         pageURL: allItems[i].pageURL,
                         thumbnail: url,
                         duration: allItems[i].duration,
-                        extra: allItems[i].extra
+                        extra: allItems[i].extra,
+                        article: allItems[i].article
                     )
                     updated += 1
                 }
@@ -628,7 +629,9 @@ final class PageLoader: NSObject {
                 appendUnique(newItems)
                 currentPage += 1
             } else {
-                allItems = []
+                // An automatic article refresh must not replace posts the user is reading.
+                // Explicit refresh clears allItems in load(forceRefresh:), so it still replaces the feed.
+                if parser.itemKind != .article { allItems = [] }
                 appendUnique(newItems)
                 currentPage = 1
             }
@@ -636,7 +639,7 @@ final class PageLoader: NSObject {
 
             // Only cache first page to avoid storing huge accumulated data
             if let url = currentURL, !snapshot.isEmpty, currentPage <= 1 {
-                Task { await GalleryCache.save(snapshot, for: parser.cacheURL(for: url)) }
+                Task { await GalleryCache.save(Array(snapshot.prefix(60)), for: parser.cacheURL(for: url)) }
             }
             state         = .done(snapshot)
             isLoadingMore = false
@@ -691,6 +694,7 @@ extension PageLoader: WKNavigationDelegate {
 private struct RawItem: Decodable {
     let title: String; let url: String; let thumbnail: String?
     let duration: String?; let extra: String?
+    let article: RawArticle?
 }
 
 private extension ParsedItem {
@@ -702,7 +706,8 @@ private extension ParsedItem {
             pageURL: pageURL,
             thumbnail: raw.thumbnail.flatMap { $0.isEmpty ? nil : URL(string: $0, relativeTo: base)?.absoluteURL },
             duration: raw.duration ?? "",
-            extra: raw.extra ?? ""
+            extra: raw.extra ?? "",
+            article: raw.article.flatMap { try? ArticleDocument.build($0, base: pageURL, fallbackTitle: raw.title) }
         )
     }
 }

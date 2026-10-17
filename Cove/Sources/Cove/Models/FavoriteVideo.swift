@@ -12,6 +12,7 @@ final class FavoriteVideo {
     var definitionID: String?
     var isComic: Bool = false     // true → route to ComicDetailView
     var isArticle: Bool = false
+    @Attribute(.externalStorage) var articleSnapshot: Data?
     var addedAt: Date
     var isPinned: Bool = false
     var pinOrder: Int = 0
