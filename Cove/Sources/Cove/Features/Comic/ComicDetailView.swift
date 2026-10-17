@@ -37,7 +37,7 @@ final class ComicDetailLoader: NSObject {
 
     override init() {
         let cfg = WKWebViewConfiguration()
-        cfg.websiteDataStore = .default()
+        cfg.websiteDataStore = SiteWebSession.dataStore
         let prefs = WKWebpagePreferences()
         prefs.allowsContentJavaScript = true
         cfg.defaultWebpagePreferences = prefs

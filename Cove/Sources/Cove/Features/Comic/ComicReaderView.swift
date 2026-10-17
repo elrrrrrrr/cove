@@ -31,7 +31,7 @@ final class ChapterImageExtractor: NSObject {
 
     override init() {
         let cfg = WKWebViewConfiguration()
-        cfg.websiteDataStore = .default()
+        cfg.websiteDataStore = SiteWebSession.dataStore
         let prefs = WKWebpagePreferences()
         prefs.allowsContentJavaScript = true
         cfg.defaultWebpagePreferences = prefs

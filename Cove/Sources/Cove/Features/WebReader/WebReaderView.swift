@@ -272,7 +272,7 @@ final class WebCoordinator {
 
     let webView: WKWebView = {
         let config = WKWebViewConfiguration()
-        config.websiteDataStore              = .default()
+        config.websiteDataStore              = SiteWebSession.dataStore
         config.allowsInlineMediaPlayback     = true
         config.mediaTypesRequiringUserActionForPlayback = []
 

@@ -77,7 +77,7 @@ final class PageLoader: NSObject {
             wv.navigationDelegate = self
             _webView = wv
             // Host in off-screen UIWindow for navigation delegate + JS execution
-            let win = UIWindow(frame: CGRect(x: 0, y: 0, width: 1, height: 1))
+            let win = UIWindow(frame: Self.renderingFrame)
             win.windowLevel = .init(rawValue: -1)
             win.isHidden = false
             win.rootViewController = UIViewController()
@@ -108,14 +108,17 @@ final class PageLoader: NSObject {
     private static let mobileUserAgent =
         "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"
 
+    // A nonzero phone viewport lets responsive layouts and virtualized feeds render off-screen.
+    private static let renderingFrame = CGRect(x: 0, y: 0, width: 390, height: 844)
+
     private static func createWebView() -> WKWebView {
         let config = WKWebViewConfiguration()
-        config.websiteDataStore = .default()
+        config.websiteDataStore = SiteWebSession.dataStore
         config.allowsInlineMediaPlayback = true
         let prefs = WKWebpagePreferences()
         prefs.allowsContentJavaScript = true
         config.defaultWebpagePreferences = prefs
-        let wv = WKWebView(frame: CGRect(x: 0, y: 0, width: 1, height: 1), configuration: config)
+        let wv = WKWebView(frame: renderingFrame, configuration: config)
         wv.customUserAgent = mobileUserAgent
         return wv
     }
@@ -246,7 +249,7 @@ final class PageLoader: NSObject {
             startLoadTimeout()
         } catch {
             guard generation == loadID, !Task.isCancelled else { return }
-            log("fetchAndLoad: error \(error.localizedDescription) → fallback to WebView")
+            log("fetchAndLoad: error \(WebScript.message(for: error)) → fallback to WebView")
             fallbackToWebView(url: url)
         }
     }
@@ -297,6 +300,8 @@ final class PageLoader: NSObject {
             guard !Task.isCancelled else { return }
             // Still loading — force extraction attempt
             if case .loading = state {
+                // extract cancels pending watchdogs; do not let this fallback cancel itself.
+                loadTimeoutTask = nil
                 await extract()
             }
         }
@@ -402,20 +407,27 @@ final class PageLoader: NSObject {
             let decoded  = try JSONDecoder().decode([RawItem].self, from: data)
             let base     = webView.url ?? currentURL!
             let newItems = Array(decoded.compactMap { ParsedItem(from: $0, base: base) }.prefix(30))
+            let more = try await moreAvailable(default: true)
+            guard generation == loadID, !Task.isCancelled else { return }
             log("fetchAjaxPage: got \(newItems.count) items (raw=\(decoded.count))")
             if let first = newItems.first { log("fetchAjaxPage: first=\(first.pageURL.absoluteString)") }
             if let last = newItems.last { log("fetchAjaxPage: last=\(last.pageURL.absoluteString)") }
 
             if newItems.isEmpty {
+                if !more {
+                    hasNextPage = false; paginationFailed = false; isLoadingMore = false
+                    state = .done(allItems)
+                    return
+                }
                 log("fetchAjaxPage: 0 items — marking paginationFailed")
                 paginationFailed = true
                 isLoadingMore    = false
                 return
             }
 
-            hasNextPage = true
+            hasNextPage = more
             paginationFailed = false
-            allItems.append(contentsOf: newItems)
+            appendUnique(newItems)
             currentPage = page
 
             let snapshot = allItems
@@ -433,14 +445,26 @@ final class PageLoader: NSObject {
             }
         } catch {
             guard generation == loadID, !Task.isCancelled else { return }
-            log("fetchAjaxPage: ERROR \(error.localizedDescription)")
+            log("fetchAjaxPage: ERROR \(WebScript.message(for: error))")
             // Show error if we're in a loading state (covers goToPage + initial loads)
             if case .loading = state {
-                state = .failed("加载失败：\(error.localizedDescription)")
+                state = .failed("加载失败：\(WebScript.message(for: error))")
             }
             paginationFailed = true
             isLoadingMore = false
         }
+    }
+
+    private func moreAvailable(default fallback: Bool) async throws -> Bool {
+        guard let expression = parser?.hasMoreExpression else { return fallback }
+        let value = try await WebScript.boundedString(SiteScript.jsonExpression(expression), in: webView)
+        guard value == "true" || value == "false" else { throw SiteDefinitionError.invalid("hasMoreExpression 必须返回布尔值") }
+        return value == "true"
+    }
+
+    private func appendUnique(_ items: [ParsedItem]) {
+        var urls = Set(allItems.map(\.pageURL))
+        allItems.append(contentsOf: items.filter { urls.insert($0.pageURL).inserted })
     }
 
     /// Phase 2: run thumbnailJS, parse the url→dataURI map, update items in-place.
@@ -469,7 +493,8 @@ final class PageLoader: NSObject {
                         pageURL: allItems[i].pageURL,
                         thumbnail: url,
                         duration: allItems[i].duration,
-                        extra: allItems[i].extra
+                        extra: allItems[i].extra,
+                        article: allItems[i].article
                     )
                     updated += 1
                 }
@@ -480,7 +505,7 @@ final class PageLoader: NSObject {
             }
         } catch {
             guard generation == loadID, !Task.isCancelled else { return }
-            log("fetchThumbnails: ERROR \(error.localizedDescription)")
+            log("fetchThumbnails: ERROR \(WebScript.message(for: error))")
         }
     }
 
@@ -541,7 +566,7 @@ final class PageLoader: NSObject {
 
         // Auto-follow: if the parser defines a redirect JS, run it first.
         if let followJS = parser.preNavigateJS {
-            let href = try? await WebScript.evaluate(followJS, in: webView) as? String
+            let href = try? await WebScript.boundedString(followJS, in: webView)
             guard generation == loadID, !Task.isCancelled else { return }
             if let href, !href.isEmpty, let followURL = URL(string: href) {
                 log("extract: preNavigateJS → following \(followURL.absoluteString)")
@@ -554,9 +579,9 @@ final class PageLoader: NSObject {
         }
 
         do {
-            let value = try await WebScript.evaluate(parser.extractItemsJS, in: webView)
+            let value = try await WebScript.boundedString(parser.extractItemsJS, in: webView)
             guard generation == loadID, !Task.isCancelled else { return }
-            guard let jsonString = value as? String, let data = jsonString.data(using: .utf8) else {
+            guard let jsonString = value, let data = jsonString.data(using: .utf8) else {
                 log("extract: extractItemsJS returned nil/empty")
                 if !isMore { state = .done(allItems) }
                 isLoadingMore = false
@@ -579,14 +604,16 @@ final class PageLoader: NSObject {
                 hasNextPage = false
 
             case .webNavigation(let npJS):
-                let nextHref = try? await WebScript.evaluate(npJS, in: webView) as? String
+                let nextHref = try? await WebScript.boundedString(npJS, in: webView)
                 guard generation == loadID, !Task.isCancelled else { return }
                 nextPageURL  = nextHref.flatMap { URL(string: $0) }
                 hasNextPage  = false
 
             case .ajax:
+                let more = try await moreAvailable(default: !newItems.isEmpty)
+                guard generation == loadID, !Task.isCancelled else { return }
                 nextPageURL = nil
-                hasNextPage = !newItems.isEmpty
+                hasNextPage = more
             }
 
             // Initial load: replace (SWR refresh overwrites stale cache).
@@ -601,17 +628,20 @@ final class PageLoader: NSObject {
                     isExtracting     = false
                     return
                 }
-                allItems.append(contentsOf: newItems)
+                appendUnique(newItems)
                 currentPage += 1
             } else {
-                allItems = newItems
+                // An automatic article refresh must not replace posts the user is reading.
+                // Explicit refresh clears allItems in load(forceRefresh:), so it still replaces the feed.
+                if parser.itemKind != .article { allItems = [] }
+                appendUnique(newItems)
                 currentPage = 1
             }
             let snapshot = allItems
 
             // Only cache first page to avoid storing huge accumulated data
             if let url = currentURL, !snapshot.isEmpty, currentPage <= 1 {
-                Task { await GalleryCache.save(snapshot, for: parser.cacheURL(for: url)) }
+                Task { await GalleryCache.save(Array(snapshot.prefix(60)), for: parser.cacheURL(for: url)) }
             }
             state         = .done(snapshot)
             isLoadingMore = false
@@ -621,8 +651,8 @@ final class PageLoader: NSObject {
             guard generation == loadID, !Task.isCancelled else { return }
             isLoadingMore = false
             isExtracting  = false
-            log("extract: error \(error.localizedDescription)")
-            if !isMore { state = .failed("提取失败：\(error.localizedDescription)") }
+            log("extract: error \(WebScript.message(for: error))")
+            if !isMore { state = .failed("提取失败：\(WebScript.message(for: error))") }
         }
     }
 
@@ -649,14 +679,14 @@ extension PageLoader: WKNavigationDelegate {
         Task { @MainActor in
             guard (error as NSError).code != NSURLErrorCancelled else { return }
             self.isLoadingMore = false
-            if case .loading = self.state { self.state = .failed(error.localizedDescription) }
+            if case .loading = self.state { self.state = .failed(WebScript.message(for: error)) }
         }
     }
     nonisolated func webView(_ webView: WKWebView, didFailProvisionalNavigation _: WKNavigation!, withError error: Error) {
         Task { @MainActor in
             guard (error as NSError).code != NSURLErrorCancelled else { return }
             self.isLoadingMore = false
-            if case .loading = self.state { self.state = .failed(error.localizedDescription) }
+            if case .loading = self.state { self.state = .failed(WebScript.message(for: error)) }
         }
     }
 }
@@ -666,6 +696,7 @@ extension PageLoader: WKNavigationDelegate {
 private struct RawItem: Decodable {
     let title: String; let url: String; let thumbnail: String?
     let duration: String?; let extra: String?
+    let article: RawArticle?
 }
 
 private extension ParsedItem {
@@ -677,7 +708,8 @@ private extension ParsedItem {
             pageURL: pageURL,
             thumbnail: raw.thumbnail.flatMap { $0.isEmpty ? nil : URL(string: $0, relativeTo: base)?.absoluteURL },
             duration: raw.duration ?? "",
-            extra: raw.extra ?? ""
+            extra: raw.extra ?? "",
+            article: raw.article.flatMap { try? ArticleDocument.build($0, base: pageURL, fallbackTitle: raw.title) }
         )
     }
 }

@@ -18,11 +18,56 @@ import WebKit
         controller.view.addSubview(view); window.makeKeyAndVisible(); self.window = window
     }
     private func ready(_ web: WKWebView) async throws {
-        for _ in 0..<160 {
-            if !web.isLoading, (try? await web.evaluateJavaScript("document.readyState")) as? String == "complete" { return }
+        for _ in 0..<320 {
+            let value = try? await web.evaluateJavaScript("({href:location.href, ready:document.readyState})")
+            let page = value as? [String: String]
+            if !web.isLoading, let current = web.url?.absoluteString, !current.hasPrefix("about:"),
+               page?["href"] == current, page?["ready"] == "complete" { return }
             try await Task.sleep(for: .milliseconds(25))
         }
         XCTFail("Fixture did not finish loading")
+        throw URLError(.timedOut)
+    }
+
+    func testWebsiteSessionSurvivesWebViewRecreationAndContentCacheCleanup() async throws {
+        let store = SiteWebSession.dataStore
+        XCTAssertTrue(store.isPersistent)
+        let coordinator = WebCoordinator()
+        let catalog = PageLoader()
+        let article = ArticleLoader()
+        for view in [coordinator.webView, catalog.webView, article.webView] {
+            XCTAssertTrue(view.configuration.websiteDataStore === store)
+        }
+        let name = "cove_test_" + UUID().uuidString.replacingOccurrences(of: "-", with: "")
+        let cookie = try XCTUnwrap(HTTPCookie(properties: [
+            .domain: "127.0.0.1", .path: "/", .name: name, .value: "synthetic-session",
+            .expires: Date().addingTimeInterval(3600)
+        ]))
+        await store.httpCookieStore.setCookie(cookie)
+        let server = try ArticleFixtureServer(routes: ["/": ("text/html", Data("<p>Session fixture</p>".utf8))])
+        defer { server.listener.cancel() }
+        let url = try XCTUnwrap(URL(string: server.url))
+        let first = coordinator.webView
+        try host(first)
+        first.load(URLRequest(url: url)); try await ready(first)
+        _ = try await first.evaluateJavaScript("localStorage.setItem('\(name)', 'synthetic-storage')")
+        do {
+            await GalleryCache.clearAll()
+            await ImagePipeline.shared.clearAll()
+            let recreated = WebCoordinator().webView
+            try host(recreated)
+            recreated.load(URLRequest(url: url)); try await ready(recreated)
+            let value = try await recreated.evaluateJavaScript("localStorage.getItem('\(name)')") as? String
+            XCTAssertEqual(value, "synthetic-storage")
+            let cookies = await recreated.configuration.websiteDataStore.httpCookieStore.allCookies()
+            XCTAssertEqual(cookies.first { $0.name == name }?.value, "synthetic-session")
+            _ = try await recreated.evaluateJavaScript("localStorage.removeItem('\(name)')")
+        } catch {
+            _ = try? await first.evaluateJavaScript("localStorage.removeItem('\(name)')")
+            await store.httpCookieStore.deleteCookie(cookie)
+            throw error
+        }
+        await store.httpCookieStore.deleteCookie(cookie)
     }
 
     func testMovingLiveViewKeepsDocumentDelegateAndRestoresHiddenHost() async throws {

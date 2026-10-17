@@ -1,6 +1,12 @@
 import WebKit
 
 @MainActor enum WebScript {
+    static func message(for error: Error) -> String {
+        if let message = (error as NSError).userInfo["WKJavaScriptExceptionMessage"] as? String {
+            return String(message.prefix(1024))
+        }
+        return error.localizedDescription
+    }
     /// Execute expressions, including Promise-returning extraction hooks, in the page context.
     static func evaluate(_ expression: String, in webView: WKWebView) async throws -> Any? {
         try await webView.callAsyncJavaScript("return await (\(expression));", arguments: [:], in: nil, contentWorld: .page)
@@ -11,6 +17,8 @@ import WebKit
     }
 
     static func boundedString(_ expression: String, in webView: WKWebView, timeout: Duration = .seconds(12)) async throws -> String? {
+        // The callback API must keep its receiver alive while a Promise is pending.
+        defer { withExtendedLifetime(webView) {} }
         let call = ScriptStringCall()
         return try await withTaskCancellationHandler {
             try Task.checkCancellation()

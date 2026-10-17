@@ -169,6 +169,7 @@ extension ConfigBackup {
                     item.title = value.title; item.pageURLString = value.pageURL
                     item.thumbnailURLString = value.thumbnail; item.duration = value.duration ?? ""
                     item.siteName = value.siteName ?? ""; item.definitionID = value.definitionID
+                    item.articleSnapshot = value.articleSnapshot
                     item.isComic = value.isComic ?? false; item.isArticle = value.isArticle ?? false; item.isPinned = value.isPinned ?? false
                     item.pinOrder = value.pinOrder ?? 0; if let date = value.addedAt { item.addedAt = date }
                 }

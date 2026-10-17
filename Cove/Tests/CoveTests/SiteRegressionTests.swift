@@ -102,7 +102,7 @@ import UIKit
             try await page.load(bytes(fixture.sample.input, fixture: fixture), base: fixture.sample.pageURL)
             try await installResponses(fixture, page: page)
             let extraction = try XCTUnwrap(rule.extract)
-            let output = try await WebScript.string(extraction.javascript, in: page.webView)
+            let output = try await WebScript.boundedString(extraction.javascript, in: page.webView)
             let text = try XCTUnwrap(output)
             let object = try JSONSerialization.jsonObject(with: Data(text.utf8), options: .fragmentsAllowed)
             try assertResult(object, fixture: fixture)
@@ -147,7 +147,7 @@ import UIKit
             let page = RegressionPage()
             try await page.load(bytes(fixture.sample.input, fixture: fixture), base: url)
             try await installResponses(fixture, page: page)
-            let extracted = try await WebScript.string(try XCTUnwrap(resultRule.extract).javascript, in: page.webView)
+            let extracted = try await WebScript.boundedString(try XCTUnwrap(resultRule.extract).javascript, in: page.webView)
             let output = try XCTUnwrap(extracted)
             let items = try JSONSerialization.jsonObject(with: Data(output.utf8))
             let resultParser = SiteParserRegistry.parser(definition: owner, rule: resultRule)
@@ -161,6 +161,14 @@ import UIKit
             responses[response.url.absoluteString] = try XCTUnwrap(String(data: bytes(response.file, fixture: fixture), encoding: .utf8))
         }
         _ = try await page.webView.callAsyncJavaScript(#"""
+        // Optional synthetic hydration: keep inline fixture scripts blocked by CSP.
+        const delayed = document.querySelector('template[data-fixture-delay-ms]');
+        if (delayed) {
+            const delay = Math.min(2000, Math.max(0, Number(delayed.dataset.fixtureDelayMs) || 0));
+            const html = delayed.innerHTML;
+            delayed.remove();
+            setTimeout(() => { document.body.innerHTML = html; }, delay);
+        }
         window.__fixtureRequests = [];
         window.fetch = async function(input) {
             const url = new URL(typeof input === 'string' ? input : input.url, document.baseURI).href;
@@ -219,23 +227,25 @@ import UIKit
 @MainActor private final class RegressionPage: NSObject, WKNavigationDelegate {
     let webView: WKWebView
     private var continuation: CheckedContinuation<Void, Error>?
+    private var navigation: WKNavigation?
     private var timeout: Task<Void, Never>?
     override init() {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .nonPersistent()
-        webView = WKWebView(frame: .zero, configuration: config)
+        webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 390, height: 844), configuration: config)
         super.init()
         webView.navigationDelegate = self
     }
     func load(_ data: Data, base: URL) async throws {
+        defer { withExtendedLifetime(self) {} }
         let html = try XCTUnwrap(String(data: data, encoding: .utf8))
         // Keep data-bearing scripts in the DOM, but block page scripts and all network.
         let policy = #"<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-eval'">"#
         try await withCheckedThrowingContinuation { continuation in
             self.continuation = continuation
-            webView.loadHTMLString(policy + html, baseURL: base)
+            navigation = webView.loadHTMLString(policy + html, baseURL: base)
             timeout = Task { @MainActor [weak self] in
-                try? await Task.sleep(for: .seconds(8))
+                try? await Task.sleep(for: .seconds(30))
                 guard !Task.isCancelled else { return }
                 self?.finish(.failure(URLError(.timedOut)))
             }
@@ -246,6 +256,12 @@ import UIKit
         let pending = continuation; continuation = nil
         pending?.resume(with: result)
     }
-    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { finish(.success(())) }
-    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { finish(.failure(error)) }
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        guard let active = self.navigation, navigation === active else { return }
+        finish(.success(()))
+    }
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        guard let active = self.navigation, navigation === active else { return }
+        finish(.failure(error))
+    }
 }

@@ -31,6 +31,13 @@ struct SettingsView: View {
             Form {
                 // Site management
                 Section {
+                    NavigationLink {
+                        SiteLoginManagementView()
+                    } label: {
+                        Label("网站登录", systemImage: "person.crop.circle.badge.checkmark")
+                    }
+                    .accessibilityIdentifier("website-login-management")
+                    .accessibilityLabel("网站登录")
                     ForEach(sites) { site in
                         HStack {
                             if let data = site.faviconData {
@@ -50,6 +57,8 @@ struct SettingsView: View {
                     } label: {
                         Label("管理网站", systemImage: "pencil")
                     }
+                    .accessibilityIdentifier("website-management")
+                    .accessibilityLabel("管理网站")
                 } header: {
                     Text("网站")
                 } footer: {
@@ -132,7 +141,7 @@ struct SettingsView: View {
                         showClearConfirm = true
                     } label: {
                         HStack {
-                            Label("清除所有数据", systemImage: "trash")
+                            Label("清除内容与设置", systemImage: "trash")
                             if isClearing {
                                 Spacer()
                                 ProgressView()
@@ -143,7 +152,7 @@ struct SettingsView: View {
                 } header: {
                     Text("数据管理")
                 } footer: {
-                    Text("「清除所有数据」将删除所有阅读记录、收藏、站点、缓存及设置，恢复到初始状态。")
+                    Text("网站登录数据默认保留，不随内容缓存清理。清除内容与设置会删除阅读记录、收藏、站点、下载、缓存及设置，但保留网站 Cookie 和本地存储。登录是否失效由站点决定。")
                 }
 
                 // Diagnostics
@@ -182,8 +191,8 @@ struct SettingsView: View {
             .sheet(isPresented: $showAddNAS) {
                 NASSettingsView(config: nil)
             }
-            .confirmationDialog("确定要清除所有数据吗？此操作不可撤销。", isPresented: $showClearConfirm, titleVisibility: .visible) {
-                Button("清除所有数据", role: .destructive) {
+            .confirmationDialog("确定要清除内容与设置吗？网站登录数据将保留，此操作不可撤销。", isPresented: $showClearConfirm, titleVisibility: .visible) {
+                Button("清除内容与设置", role: .destructive) {
                     Task { await clearAllData() }
                 }
             }

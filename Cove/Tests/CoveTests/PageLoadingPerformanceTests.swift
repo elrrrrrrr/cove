@@ -63,4 +63,46 @@ import XCTest
         XCTAssertLessThanOrEqual(loader.parseLog.count, 200)
         XCTAssertTrue(loader.parseLog.last?.contains("first=") == true || loader.parseLog.last?.contains("last=") == true)
     }
+    func testVirtualizedFeedViewportOverlapAndExplicitEnd() async throws {
+        let server = try ImageFixtureServer { _ in Data("<html><h1>动态列表</h1></html>".utf8) }
+        defer { server.listener.cancel() }
+        var rule = parser(for: server.url, script: "return [{title:'首页',url:'/one'}];",
+            ajax: "if(page>2){window.__more=false;return [];}return [{title:'重复',url:'/one'},{title:'新帖',url:'/two'},{title:'重复新帖',url:'/two'}];")
+        rule.hasMoreExpression = "window.__more !== false"
+        let loader = PageLoader(); loader.load(url: server.url, parser: rule)
+        try await waitUntil { if case .done = loader.state { return true }; return false }
+        guard case .done(let initial) = loader.state else { return XCTFail("没有首页") }
+        let width = try await loader.webView.evaluateJavaScript("window.innerWidth") as? Int
+        let height = try await loader.webView.evaluateJavaScript("window.innerHeight") as? Int
+        XCTAssertGreaterThanOrEqual(width ?? 0, 320); XCTAssertGreaterThanOrEqual(height ?? 0, 600)
+        loader.loadMore(); try await waitUntil { !loader.isLoadingMore }
+        guard case .done(let merged) = loader.state else { return XCTFail("没有分页") }
+        XCTAssertEqual(merged.map(\.title), ["首页", "新帖"]); XCTAssertEqual(merged[0].id, initial[0].id)
+        loader.loadMore(); try await waitUntil { !loader.isLoadingMore }
+        XCTAssertFalse(loader.hasNextPage); XCTAssertFalse(loader.paginationFailed)
+        XCTAssertEqual(loader.currentPage, 2)
+        guard case .done(let final) = loader.state else { return XCTFail("末页丢失列表") }
+        XCTAssertEqual(final, merged)
+    }
+    func testEmptyPageWithoutEndSignalStillOffersRetry() async throws {
+        let server = try ImageFixtureServer { _ in Data("<html><h1>首页</h1></html>".utf8) }
+        defer { server.listener.cancel() }
+        let loader = PageLoader(); loader.load(url: server.url, parser: parser(for: server.url, ajax: "return [];"))
+        try await waitUntil { !loader.state.isActive }
+        loader.loadMore(); try await waitUntil { !loader.isLoadingMore }
+        XCTAssertTrue(loader.paginationFailed); XCTAssertTrue(loader.hasNextPage)
+        guard case .done(let items) = loader.state else { return XCTFail("重试丢失首页") }
+        XCTAssertEqual(items.first?.title, "首页")
+    }
+    func testHasMoreExpressionRoundTripAndValidation() throws {
+        var value = SiteDefinition.starter(name: "动态列表", url: URL(string: "https://social.example/profile")!)
+        value.rules[0].pagination = .init(mode: "ajax", script: "return [];", hasMoreExpression: "false")
+        XCTAssertEqual(try SiteDefinition.decode(value.yaml()), value)
+        let parser = SiteParserRegistry.parser(definition: value, rule: value.rules[0])
+        XCTAssertEqual(parser.hasMoreExpression, "false")
+        XCTAssertEqual(parser.applying(.init(waitSeconds: 1)).hasMoreExpression, "false")
+        if case .code = SiteFormSpec.kind("hasMoreExpression", type: "pagination") {} else { XCTFail("Expected JS editor") }
+        value.rules[0].pagination?.mode = "none"; XCTAssertThrowsError(try value.validate())
+        value.rules[0].pagination?.mode = "ajax"; value.rules[0].pagination?.hasMoreExpression = " "; XCTAssertThrowsError(try value.validate())
+    }
 }

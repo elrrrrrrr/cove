@@ -54,6 +54,7 @@ struct SiteGalleryView: View {
     /// Search
     @State private var searchText       = ""
     @State private var isSearchActive   = false
+    @State private var saveError: String?
     @State private var searchUnavailable = false
     @Environment(\.horizontalSizeClass) private var hSizeClass
     @Environment(\.modelContext) private var modelContext
@@ -117,12 +118,13 @@ struct SiteGalleryView: View {
     private var observedContent: some View {
         browserContent
         .task {
-            guard let url = siteURL else { return }
+            guard case .idle = loader.state, let url = siteURL else { return }
             // Async cache pre-warm (disk I/O runs on actor, not main thread)
             if case .idle = loader.state,
                let (cached, _) = await GalleryCache.load(for: parser.cacheURL(for: url)) {
                 loader.preload(cached)
             }
+            guard !Task.isCancelled else { return }
             loader.load(url: url, parser: parser)
         }
         // Keep favoriteURLCache in sync — avoids rebuilding a Set<String> on
@@ -166,6 +168,9 @@ struct SiteGalleryView: View {
     var body: some View {
         searchableContent
         .refreshable { await loader.reloadAsync() }
+        .alert("收藏失败", isPresented: Binding(get: { saveError != nil }, set: { if !$0 { saveError = nil } })) {
+            Button("好", role: .cancel) {}
+        } message: { Text(saveError ?? "") }
         .alert("跳转到页码", isPresented: $showPageInput) {
             TextField("页码", text: $pageInputText)
                 .keyboardType(.numberPad)
@@ -247,7 +252,9 @@ struct SiteGalleryView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 Color.clear.frame(height: 0).id("gallery-top")
-                if savedLayout.isEmpty && automaticImages {
+                if parser.itemKind == .article {
+                    articleFeed(items)
+                } else if savedLayout.isEmpty && automaticImages {
                     imageGalleryLayout(items)
                 } else {
                     switch layout {
@@ -262,9 +269,42 @@ struct SiteGalleryView: View {
             }
             .scrollPosition(id: $visibleItemID, anchor: .top)
             .onChange(of: layout) { _, _ in
-                if let visibleItemID { proxy.scrollTo(visibleItemID, anchor: .top) }
+                if let visibleItemID {
+                    if parser.itemKind == .article, let index = items.firstIndex(where: { $0.id == visibleItemID }) {
+                        let rowID = items[(index / articleColumns) * articleColumns].id
+                        self.visibleItemID = rowID
+                        proxy.scrollTo(rowID, anchor: .top)
+                    } else { proxy.scrollTo(visibleItemID, anchor: .top) }
+                }
             }
         }
+    }
+
+    private var articleColumns: Int {
+        layout == .portrait || (hSizeClass == .regular && layout == .bento) ? 2 : 1
+    }
+
+    private func articleFeed(_ items: [ParsedItem]) -> some View {
+        let count = articleColumns
+        return LazyVStack(spacing: 14) {
+            ForEach(0..<((items.count + count - 1) / count), id: \.self) { row in
+                HStack(alignment: .top, spacing: 14) {
+                    ForEach(0..<count, id: \.self) { column in
+                        let index = row * count + column
+                        if index < items.count {
+                            let item = items[index]
+                            ArticleFeedCard(item: item, definitionID: parser.definitionID, layout: layout,
+                                saved: isFavorited(item), open: { openItem(item) }, save: { toggleFavorite(item) })
+                                .contextMenu { itemMenu(for: item) }
+                        } else { Color.clear.frame(minWidth: 0, maxWidth: .infinity).frame(height: 1) }
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                // A full-width row avoids horizontal centering when restoring a grid position.
+                .id(items[row * count].id)
+            }
+            infiniteScrollFooter
+        }.padding(14).scrollTargetLayout()
     }
 
     // MARK: - Layout: Image gallery (full-width images, e.g. forum thread photos)
@@ -459,6 +499,14 @@ struct SiteGalleryView: View {
     }
 
     private func toggleFavorite(_ item: ParsedItem) {
+        if parser.itemKind == .article {
+            do {
+                let saved = try ArticleReadingStore.toggleFavorite(item: item, title: item.title, definitionID: parser.definitionID, in: modelContext)
+                if saved { favoriteURLCache.insert(item.pageURL.absoluteString) }
+                else { favoriteURLCache.remove(item.pageURL.absoluteString) }
+            } catch { saveError = error.localizedDescription }
+            return
+        }
         let key = item.pageURL.absoluteString
         if let existing = allFavorites.first(where: { $0.pageURLString == key }) {
             modelContext.delete(existing)

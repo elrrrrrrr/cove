@@ -19,6 +19,7 @@ struct FavoriteDataFile: Codable, Sendable {
         var addedAt: Date?
         var isPinned: Bool?
         var pinOrder: Int?
+        var articleSnapshot: Data? = nil
     }
 
     func validate() throws {
@@ -28,6 +29,10 @@ struct FavoriteDataFile: Codable, Sendable {
         for record in favorites {
             guard let url = URL(string: record.pageURL), ["https", "http"].contains(url.scheme ?? ""),
                   url.host() != nil, !record.title.isEmpty else { throw SiteDefinitionError.invalid("收藏标题或地址无效：\(record.title)") }
+            if let snapshot = record.articleSnapshot {
+                guard record.isArticle == true else { throw SiteDefinitionError.invalid("仅图文收藏可保存正文") }
+                _ = try ArticleDocument.decode(snapshot, base: url, fallbackTitle: record.title)
+            }
             guard record.pinOrder.map({ $0 >= 0 }) ?? true else { throw SiteDefinitionError.invalid("收藏置顶顺序不能为负数") }
             guard !(record.isComic == true && record.isArticle == true) else { throw SiteDefinitionError.invalid("收藏不能同时是漫画和图文") }
         }
@@ -51,6 +56,7 @@ struct FavoriteDataFile: Codable, Sendable {
                 definitionID: record.definitionID ?? URL(string: record.pageURL).flatMap { SiteParserRegistry.definition(for: $0)?.id })
             if let id = record.id { value.id = id }
             if let date = record.addedAt { value.addedAt = date }
+            value.articleSnapshot = record.articleSnapshot
             value.isPinned = record.isPinned ?? false
             value.pinOrder = record.pinOrder ?? 0
             if value.isPinned { newPins.append((value, position)) }
@@ -71,7 +77,7 @@ struct FavoriteDataFile: Codable, Sendable {
         FavoriteDataFile(favorites: values.map {
             FavoriteRecord(id: $0.id, title: $0.title, pageURL: $0.pageURLString,
                 thumbnail: $0.thumbnailURLString, duration: $0.duration, siteName: $0.siteName,
-                isComic: $0.isComic, isArticle: $0.isArticle, definitionID: $0.definitionID, addedAt: $0.addedAt, isPinned: $0.isPinned, pinOrder: $0.pinOrder)
+                isComic: $0.isComic, isArticle: $0.isArticle, definitionID: $0.definitionID, addedAt: $0.addedAt, isPinned: $0.isPinned, pinOrder: $0.pinOrder, articleSnapshot: $0.articleSnapshot)
         })
     }
 

@@ -25,6 +25,126 @@ import WebKit
         return Data(try XCTUnwrap(result).utf8)
     }
 
+    func testSlowSubresourceStillPublishesFeedFromLoadingWatchdog() async throws {
+        let root = try XCTUnwrap(Bundle(for: Self.self).resourceURL)
+        let png = try Data(contentsOf: root.appendingPathComponent("Articles/article-diagram.png"))
+        let html = Data("<main><a href='/post'>slow resource</a><img src='/slow.png'></main>".utf8)
+        let server = try ArticleFixtureServer(routes: ["/": ("text/html; charset=utf-8", html), "/slow.png": ("image/png", png)], delays: ["/slow.png": 60])
+        defer { server.listener.cancel() }
+        let url = try XCTUnwrap(URL(string: server.url))
+        var definition = SiteDefinition.starter(name: "慢资源 Feed", url: url)
+        definition.rules = [.init(id: "feed", role: "catalog", contentType: "article", load: .init(mode: "webView", waitSeconds: 0),
+            extract: .init(items: "main a", fields: ["title": .init(text: true), "url": .init(attribute: "href")]))]
+        let loader = PageLoader()
+        defer { loader.webView.stopLoading() }
+        loader.load(url: url, parser: SiteParserRegistry.parser(definition: definition, rule: definition.rules[0]))
+        try await wait { if case .done(let items) = loader.state { return items.first?.title == "slow resource" }; return false }
+        XCTAssertTrue(loader.webView.isLoading, "慢图片仍未完成时，兜底解析就应发布可读内容")
+    }
+
+    func testAutomaticFeedRefreshKeepsVisibleRowsAndExplicitRefreshReplacesThem() async throws {
+        let server = try ArticleFixtureServer(routes: ["/": ("text/html; charset=utf-8", Data("<main><a href='/new'>新帖子</a></main>".utf8))])
+        defer { server.listener.cancel() }
+        let url = try XCTUnwrap(URL(string: server.url))
+        var definition = SiteDefinition.starter(name: "Feed", url: url)
+        definition.rules = [.init(id: "feed", role: "catalog", contentType: "article", load: .init(mode: "webView", waitSeconds: 0),
+            extract: .init(items: "main a", fields: ["title": .init(text: true), "url": .init(attribute: "href")]))]
+        let parser = SiteParserRegistry.parser(definition: definition, rule: definition.rules[0])
+        let old = ParsedItem(title: "正在阅读的旧帖子", pageURL: url.appendingPathComponent("old"), thumbnail: nil, duration: "", extra: "")
+        let loader = PageLoader(); loader.preload([old]); loader.load(url: url, parser: parser)
+        try await wait(iterations: 1000) { if case .done(let items) = loader.state { return items.count == 2 }; return false }
+        if case .done(let items) = loader.state { XCTAssertEqual(items.first?.id, old.id) }
+        loader.load(url: url, parser: parser, forceRefresh: true)
+        try await wait(iterations: 1000) { if case .done(let items) = loader.state { return items.count == 1 && items.first?.title == "新帖子" }; return false }
+    }
+
+    func testFeedDocumentRoundTripPreservesLinksMediaAndIdentity() throws {
+        let data = Data(#"{"title":"合成短帖","author":"演示作者","blocks":[{"type":"paragraph","runs":[{"text":"第一行\n第二行 "},{"text":"参考","url":"/guide"}]},{"type":"image","url":"/photo.png","width":600,"height":400},{"type":"quote","text":"引用内容"}]}"#.utf8)
+        let document = try ArticleDocument.decode(data, base: base, fallbackTitle: "")
+        let item = ParsedItem(title: "合成短帖", pageURL: base, thumbnail: nil, duration: "现在", extra: "作者", article: document)
+        let restored = try JSONDecoder().decode(ParsedItem.self, from: JSONEncoder().encode(item))
+        XCTAssertEqual(restored.article, document)
+        XCTAssertEqual(restored.id, item.id)
+        XCTAssertEqual(ParsedItem(title: "标题更新", pageURL: base, thumbnail: nil, duration: "", extra: "").id, item.id)
+        XCTAssertEqual(String(restored.article!.blocks[0].text.characters), "第一行\n第二行 参考")
+        XCTAssertEqual(restored.article?.blocks[1].url, URL(string: "https://news.example/photo.png"))
+    }
+
+    func testCachedPreviewPreservesSavedSnapshotAndOtherResourceKinds() throws {
+        let container = try model(), context = container.mainContext
+        let full = try ArticleDocument.decode(Data(#"{"title":"保存全文","blocks":[{"type":"paragraph","text":"已保存的完整正文"}]}"#.utf8), base: base, fallbackTitle: "")
+        let preview = try ArticleDocument.decode(Data(#"{"title":"旧预览","blocks":[{"type":"paragraph","text":"截断内容"}]}"#.utf8), base: base, fallbackTitle: "")
+        let record = FavoriteVideo(title: "保存全文", pageURLString: base.absoluteString, isArticle: true)
+        record.isPinned = true; record.pinOrder = 2
+        context.insert(record); try context.save()
+        let id = record.id, date = record.addedAt
+        try ArticleReadingStore.captureSnapshot(for: base, document: full, in: context)
+        let saved = try XCTUnwrap(record.articleSnapshot)
+        try ArticleReadingStore.captureSnapshot(for: base, document: preview, in: context)
+        XCTAssertEqual(record.articleSnapshot, saved)
+        XCTAssertEqual(record.id, id); XCTAssertEqual(record.addedAt, date)
+        XCTAssertTrue(record.isPinned); XCTAssertEqual(record.pinOrder, 2)
+        try ArticleReadingStore.captureSnapshot(for: base, document: preview, replacing: true, in: context)
+        XCTAssertEqual(try ArticleDocument.decode(XCTUnwrap(record.articleSnapshot), base: base, fallbackTitle: ""), preview)
+        let videoURL = base.appendingPathComponent("video")
+        let video = FavoriteVideo(title: "视频", pageURLString: videoURL.absoluteString)
+        context.insert(video); try context.save()
+        try ArticleReadingStore.captureSnapshot(for: videoURL, document: full, in: context)
+        XCTAssertNil(video.articleSnapshot)
+        try FavoriteDataFile.export([record, video]).validate()
+    }
+
+    func testCSSCatalogCanEmbedTheSameArticleContractAsJavaScript() async throws {
+        let fields: [String: SiteField] = ["title": .init(selector: "h2", text: true), "url": .init(selector: "a", attribute: "href"),
+            "article": .init(fields: ["title": .init(selector: "h2", text: true), "author": .init(selector: ".author", text: true),
+                "blocks": .init(selector: ".body", content: true)])]
+        let result = try await execute(.init(items: ".post", fields: fields), html: "<article class='post'><h2>合成 Feed</h2><a href='/post'>详情</a><span class='author'>作者</span><div class='body'><p>完整正文</p><blockquote>引用</blockquote><img src='/pic.png'></div></article>")
+        let rows = try XCTUnwrap(JSONSerialization.jsonObject(with: result) as? [[String: Any]])
+        let data = try JSONSerialization.data(withJSONObject: XCTUnwrap(rows.first?["article"]))
+        let document = try ArticleDocument.decode(data, base: base, fallbackTitle: "")
+        XCTAssertEqual(document.author, "作者")
+        XCTAssertEqual(document.blocks.map(\.kind), [.paragraph, .quote, .image])
+    }
+
+    func testGlobalFavoriteSnapshotSurvivesExportImportAndDisplaysWithoutWebRequest() throws {
+        let document = try ArticleDocument.decode(Data(#"{"title":"离线合成正文","blocks":[{"type":"paragraph","text":"保存后可读"}]}"#.utf8), base: base, fallbackTitle: "")
+        let first = try model(), context = first.mainContext
+        let item = ParsedItem(title: document.title, pageURL: base, thumbnail: nil, duration: "", extra: "", article: document)
+        XCTAssertTrue(try ArticleReadingStore.toggleFavorite(item: item, title: item.title, definitionID: nil, in: context))
+        let favorite = try XCTUnwrap(ArticleReadingStore.favorite(for: base, in: context))
+        try FavoritePins.set(favorite, pinned: true, context: context)
+        let bytes = try FavoriteDataFile.export([favorite]).json()
+        let second = try model(); try FavoriteDataFile.decode(bytes).apply(to: second.mainContext)
+        let restored = try XCTUnwrap(ArticleReadingStore.favorite(for: base, in: second.mainContext))
+        XCTAssertEqual(restored.id, favorite.id); XCTAssertTrue(restored.isPinned)
+        let saved = try ArticleDocument.decode(XCTUnwrap(restored.articleSnapshot), base: base, fallbackTitle: "")
+        XCTAssertEqual(saved, document)
+        let backup = try ConfigBackup.captureAll(context: context)
+        restored.articleSnapshot = nil; try second.mainContext.save()
+        try ConfigBackup.decode(backup.json()).apply(to: second.mainContext)
+        XCTAssertEqual(try ArticleReadingStore.favorite(for: base, in: second.mainContext)?.articleSnapshot, favorite.articleSnapshot)
+        let loader = ArticleLoader(); loader.display(saved)
+        XCTAssertEqual(loader.state, .loaded(document)); XCTAssertNil(loader.request)
+    }
+
+    func testFavoriteSnapshotRejectsInvalidOrNonArticlePayload() throws {
+        var file = FavoriteDataFile(favorites: [.init(title: "测试", pageURL: base.absoluteString, isArticle: true, articleSnapshot: Data("invalid".utf8))])
+        XCTAssertThrowsError(try file.validate())
+        file.favorites[0].articleSnapshot = Data(#"{"blocks":[{"type":"paragraph","text":"正文"}]}"#.utf8)
+        file.favorites[0].isArticle = false
+        XCTAssertThrowsError(try file.validate())
+    }
+
+    func testBoundedScriptRetainsTemporaryWebViewUntilPromiseCompletes() async throws {
+        @MainActor func execute() async throws -> String? {
+            let page = ArticleTestPage()
+            try await page.load("<p>临时页面</p>", base: base)
+            return try await WebScript.boundedString("new Promise(resolve => setTimeout(() => resolve('retained'), 100))", in: page.webView, timeout: .seconds(5))
+        }
+        let result = try await execute()
+        XCTAssertEqual(result, "retained")
+    }
+
     func testCurrentSchemaRoundTripAndArticleControls() throws {
         let value = try definition(), decoded = try SiteDefinition.decode(value.yaml())
         XCTAssertEqual(value, decoded); XCTAssertEqual(value.schemaVersion, 1)
@@ -60,6 +180,40 @@ import WebKit
         let css = try await execute(.init(fields: ["title": .init(selector: "h1", text: true), "author": .init(value: "作者"), "blocks": .init(selector: "main", content: true)]), html: "<h1>标题</h1><main><p>正文</p></main>")
         let js = try await execute(.init(script: "return {title:'标题',author:'作者',blocks:[{type:'paragraph',text:'正文'}]};"), html: "<main></main>")
         XCTAssertEqual(try ArticleDocument.decode(css, base: base, fallbackTitle: ""), try ArticleDocument.decode(js, base: base, fallbackTitle: ""))
+    }
+    func testScriptContentHelperPreservesPostWhitespaceAndSafeLinks() async throws {
+        let html = "<main style='white-space:pre-wrap'>第一行\n第二行 <a href='/reference'>链接</a><script>secret()</script></main>"
+        let script = "return {title:'短帖',blocks:readArticleContent(document.querySelector('main'))};"
+        let result = try await execute(.init(script: script), html: html)
+        let expression = try await execute(.init(expression: "({title:'短帖',blocks:readArticleContent(document.querySelector('main'))})"), html: html)
+        let value = try ArticleDocument.decode(result, base: base, fallbackTitle: "")
+        XCTAssertEqual(value, try ArticleDocument.decode(expression, base: base, fallbackTitle: ""))
+        XCTAssertEqual(String(value.blocks[0].text.characters), "第一行\n第二行 链接")
+        XCTAssertTrue(value.blocks[0].text.runs.contains { $0.link == URL(string: "https://news.example/reference") })
+    }
+    func testSameOriginLoginRedirectKeepsConfiguredDiagnostics() async throws {
+        let html = Data("<main><p>这里需要登录</p><form><input type='password'></form></main>".utf8)
+        let server = try ArticleFixtureServer(routes: ["/login":("text/html; charset=utf-8", html)], redirects: ["/post":"/login"])
+        var value = SiteDefinition.starter(name: "动态文章", url: URL(string: server.url)!)
+        value.rules = [.init(id: "post", role: "article", match: .init(pathPrefix: "/post"), extract: .init(script: "throw new Error('请在原始网页登录后重新解析');"))]
+        let previous = SiteParserRegistry.definitions; defer { SiteParserRegistry.replaceDefinitions(previous) }
+        SiteParserRegistry.replaceDefinitions([value])
+        let loader = ArticleLoader(); loader.load(url: URL(string: server.url + "/post")!, title: "帖子", definitionID: value.id)
+        try await wait { if case .failed = loader.state { return true }; return false }
+        if case .failed(let message) = loader.state { XCTAssertTrue(message.contains("登录后重新解析"), message) }
+        XCTAssertEqual(loader.webView.url?.path, "/login")
+        XCTAssertEqual(loader.request?.url?.path, "/post")
+    }
+    func testCrossOriginRedirectCannotReuseOriginalExtractor() async throws {
+        let destination = try ArticleFixtureServer(routes: ["/article":("text/html; charset=utf-8", Data("<main><p>外站普通正文</p></main>".utf8))])
+        let source = try ArticleFixtureServer(routes: [:], redirects: ["/post":destination.url + "/article"])
+        var value = SiteDefinition.starter(name: "动态文章", url: URL(string: source.url)!)
+        value.rules = [.init(id: "post", role: "article", match: .init(pathPrefix: "/post"), extract: .init(script: "throw new Error('原站规则不应在外站执行');"))]
+        let previous = SiteParserRegistry.definitions; defer { SiteParserRegistry.replaceDefinitions(previous) }
+        SiteParserRegistry.replaceDefinitions([value])
+        let loader = ArticleLoader(); loader.load(url: URL(string: source.url + "/post")!, title: "外站", definitionID: value.id)
+        try await wait { if case .loaded = loader.state { return true }; return false }
+        if case .loaded(let document) = loader.state { XCTAssertEqual(String(document.blocks[0].text.characters), "外站普通正文") }
     }
     func testMissingUnsafeAndOversizedContentReportsError() throws {
         XCTAssertThrowsError(try ArticleDocument.decode(Data(#"{"blocks":[]}"#.utf8), base: base, fallbackTitle: ""))
@@ -181,27 +335,35 @@ import WebKit
         try await wait { if case .failed = loader.state { return true }; return false }
         if case .failed(let message) = loader.state { XCTAssertTrue(message.contains("404"), message) }
     }
-    private func wait(_ condition: @MainActor () -> Bool) async throws {
-        for _ in 0..<250 { if condition() { return }; try await Task.sleep(for: .milliseconds(20)) }
+    private func wait(iterations: Int = 1000, _ condition: @MainActor () -> Bool) async throws {
+        for _ in 0..<iterations { if condition() { return }; try await Task.sleep(for: .milliseconds(20)) }
         XCTFail("Timed out"); throw URLError(.timedOut)
     }
 }
 
 @MainActor private final class ArticleTestPage: NSObject, WKNavigationDelegate {
-    let webView = WKWebView()
+    let webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+    private var navigation: WKNavigation?
     private var pending: CheckedContinuation<Void, Error>?
     func load(_ html: String, base: URL) async throws {
+        defer { withExtendedLifetime(self) {} }
         webView.navigationDelegate = self
         try await withCheckedThrowingContinuation { continuation in
             pending = continuation
-            webView.loadHTMLString("<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; script-src 'unsafe-eval'\">" + html, baseURL: base)
+            navigation = webView.loadHTMLString("<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; script-src 'unsafe-eval'; style-src 'unsafe-inline'\">" + html, baseURL: base)
             Task { @MainActor [weak self] in
-                try? await Task.sleep(for: .seconds(5))
+                try? await Task.sleep(for: .seconds(30))
                 guard let pending = self?.pending else { return }; self?.pending = nil
                 pending.resume(throwing: URLError(.timedOut))
             }
         }
     }
-    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { pending?.resume(); pending = nil }
-    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { pending?.resume(throwing: error); pending = nil }
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        guard let active = self.navigation, navigation === active else { return }
+        pending?.resume(); pending = nil
+    }
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        guard let active = self.navigation, navigation === active else { return }
+        pending?.resume(throwing: error); pending = nil
+    }
 }

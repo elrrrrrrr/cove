@@ -4,19 +4,21 @@ import CryptoKit
 // MARK: - ParsedItem
 
 struct ParsedItem: Identifiable, Hashable, Sendable, Codable {
-    var id        : UUID = UUID()
+    var id        : UUID
     let title     : String
     let pageURL   : URL
     let thumbnail : URL?
     let duration  : String
     let extra     : String
     let extraTags : [String]
+    let article: ArticleDocument?
 
     enum CodingKeys: String, CodingKey {
-        case title, pageURL, thumbnail, duration, extra
+        case title, pageURL, thumbnail, duration, extra, article
     }
-    init(title: String, pageURL: URL, thumbnail: URL?, duration: String, extra: String) {
-        self.title = title; self.pageURL = pageURL
+    init(title: String, pageURL: URL, thumbnail: URL?, duration: String, extra: String, article: ArticleDocument? = nil) {
+        self.title = title; self.pageURL = pageURL; self.article = article
+        id = Self.identity(for: pageURL)
         self.thumbnail = thumbnail; self.duration = duration; self.extra = extra; self.extraTags = ItemTags.parse(extra)
     }
     init(from decoder: Decoder) throws {
@@ -27,6 +29,12 @@ struct ParsedItem: Identifiable, Hashable, Sendable, Codable {
         duration  = try c.decode(String.self, forKey: .duration)
         extra     = try c.decode(String.self, forKey: .extra)
         extraTags = ItemTags.parse(extra)
+        article = try c.decodeIfPresent(ArticleDocument.self, forKey: .article)
+        id = Self.identity(for: pageURL)
+    }
+    private static func identity(for url: URL) -> UUID {
+        let bytes = Array(SHA256.hash(data: Data(url.absoluteString.utf8)).prefix(16))
+        return UUID(uuid: (bytes[0],bytes[1],bytes[2],bytes[3],bytes[4],bytes[5],bytes[6],bytes[7],bytes[8],bytes[9],bytes[10],bytes[11],bytes[12],bytes[13],bytes[14],bytes[15]))
     }
 }
 
@@ -135,6 +143,7 @@ struct SiteParser: Sendable {
 
     // ── Phase 4 ──────────────────────────────────────────────────────────
     let paginationMode: PaginationMode
+    var hasMoreExpression: String?
 
     // ── Optional: sub-categories for gallery picker ──────────────────────
     let categories    : [SiteParserCategory]
@@ -257,6 +266,7 @@ final class SiteParserRegistry: @unchecked Sendable {
         parser.transformScript = rule.load?.transformScript
         parser.requestHeaders = rule.load?.headers ?? [:]
         parser.presentation = rule.presentation ?? .init()
+        parser.hasMoreExpression = rule.pagination?.hasMoreExpression
         return parser
     }
 }
@@ -378,6 +388,7 @@ extension SiteParser {
         result.transformScript = transformScript
         result.requestHeaders = requestHeaders
         result.presentation = presentation
+        result.hasMoreExpression = hasMoreExpression
         return result
     }
 

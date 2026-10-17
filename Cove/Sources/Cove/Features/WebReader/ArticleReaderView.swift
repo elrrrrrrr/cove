@@ -47,10 +47,12 @@ struct ArticleReaderView: View {
         .foregroundStyle(theme.textColor)
         .background(theme.backgroundColor.ignoresSafeArea())
         .background {
-            GeometryReader { geometry in
-                HiddenWebView(webView: loader.webView)
-                    .frame(width: max(320, geometry.size.width), height: max(600, geometry.size.height))
-                    .opacity(0).allowsHitTesting(false).accessibilityHidden(true)
+            if loader.request != nil {
+                GeometryReader { geometry in
+                    HiddenWebView(webView: loader.webView)
+                        .frame(width: max(320, geometry.size.width), height: max(600, geometry.size.height))
+                        .opacity(0).allowsHitTesting(false).accessibilityHidden(true)
+                }
             }
         }
         .navigationTitle("图文阅读")
@@ -58,7 +60,7 @@ struct ArticleReaderView: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button(favorited ? "取消收藏" : "收藏", systemImage: favorited ? "heart.fill" : "heart") {
-                    do { favorited = try ArticleReadingStore.toggleFavorite(item: item, title: title, definitionID: definitionID, in: context) }
+                    do { favorited = try ArticleReadingStore.toggleFavorite(item: item, title: title, definitionID: definitionID, document: document, in: context) }
                     catch { self.error = error.localizedDescription }
                 }.foregroundColor(.accentColor).accessibilityIdentifier("article-favorite")
             }
@@ -93,7 +95,19 @@ struct ArticleReaderView: View {
                 else { history = try ArticleReadingStore.history(for: item.pageURL, in: context) }
                 favorited = try ArticleReadingStore.favorite(for: item.pageURL, in: context) != nil
             } catch { self.error = error.localizedDescription }
-            if case .idle = loader.state { reload() }
+            if case .idle = loader.state {
+                if let document = item.article { loader.display(document) }
+                else if let data = try? ArticleReadingStore.favorite(for: item.pageURL, in: context)?.articleSnapshot,
+                        let document = try? ArticleDocument.decode(data, base: item.pageURL, fallbackTitle: item.title) { loader.display(document) }
+                else { reload() }
+            }
+        }
+        .onChange(of: loader.state) { _, state in
+            guard case .loaded(let document) = state else { return }
+            do {
+                try ArticleReadingStore.captureSnapshot(for: item.pageURL, document: document,
+                    replacing: loader.request != nil, in: context)
+            } catch { self.error = error.localizedDescription }
         }
         .onReceive(NotificationCenter.default.publisher(for: ModelContext.didSave)) { _ in
             do { favorited = try ArticleReadingStore.favorite(for: item.pageURL, in: context) != nil }
@@ -106,6 +120,9 @@ struct ArticleReaderView: View {
         } message: { Text(error ?? "") }
     }
 
+    private var document: ArticleDocument? {
+        if case .loaded(let document) = loader.state { return document }; return nil
+    }
     private var title: String {
         if case .loaded(let document) = loader.state { return document.title }
         return item.title
@@ -128,9 +145,15 @@ struct ArticleReaderView: View {
     private func reading(_ document: ArticleDocument) -> some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 18) {
-                Text(document.title).font(.system(size: fontSize + 10, weight: .bold))
-                    .accessibilityIdentifier("article-title")
-                let metadata = [document.author, document.publishedAt].filter { !$0.isEmpty }.joined(separator: " · ")
+                let firstParagraph = document.blocks.first { $0.kind == .paragraph }.map { String($0.text.characters) } ?? ""
+                if !firstParagraph.hasPrefix(document.title) {
+                    Text(document.title).font(.system(size: fontSize + 10, weight: .bold))
+                        .accessibilityIdentifier("article-title")
+                }
+                let date = (try? Date(document.publishedAt, strategy: Date.ISO8601FormatStyle(includingFractionalSeconds: true)))
+                    ?? (try? Date(document.publishedAt, strategy: .iso8601))
+                let published = date?.formatted(date: .abbreviated, time: .shortened) ?? document.publishedAt
+                let metadata = [document.author, published].filter { !$0.isEmpty }.joined(separator: " · ")
                 if !metadata.isEmpty { Text(metadata).font(.subheadline).foregroundStyle(.secondary) }
                 if let source = document.sourceURL, source != item.pageURL {
                     NavigationLink {
