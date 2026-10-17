@@ -31,6 +31,12 @@ struct SettingsView: View {
             Form {
                 // Site management
                 Section {
+                    NavigationLink {
+                        SiteLoginManagementView()
+                    } label: {
+                        Label("网站登录", systemImage: "person.crop.circle.badge.checkmark")
+                    }
+                    .accessibilityIdentifier("website-login-management")
                     ForEach(sites) { site in
                         HStack {
                             if let data = site.faviconData {
