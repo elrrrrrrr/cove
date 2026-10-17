@@ -227,23 +227,25 @@ import UIKit
 @MainActor private final class RegressionPage: NSObject, WKNavigationDelegate {
     let webView: WKWebView
     private var continuation: CheckedContinuation<Void, Error>?
+    private var navigation: WKNavigation?
     private var timeout: Task<Void, Never>?
     override init() {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .nonPersistent()
-        webView = WKWebView(frame: .zero, configuration: config)
+        webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 390, height: 844), configuration: config)
         super.init()
         webView.navigationDelegate = self
     }
     func load(_ data: Data, base: URL) async throws {
+        defer { withExtendedLifetime(self) {} }
         let html = try XCTUnwrap(String(data: data, encoding: .utf8))
         // Keep data-bearing scripts in the DOM, but block page scripts and all network.
         let policy = #"<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-eval'">"#
         try await withCheckedThrowingContinuation { continuation in
             self.continuation = continuation
-            webView.loadHTMLString(policy + html, baseURL: base)
+            navigation = webView.loadHTMLString(policy + html, baseURL: base)
             timeout = Task { @MainActor [weak self] in
-                try? await Task.sleep(for: .seconds(8))
+                try? await Task.sleep(for: .seconds(30))
                 guard !Task.isCancelled else { return }
                 self?.finish(.failure(URLError(.timedOut)))
             }
@@ -254,6 +256,12 @@ import UIKit
         let pending = continuation; continuation = nil
         pending?.resume(with: result)
     }
-    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { finish(.success(())) }
-    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { finish(.failure(error)) }
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        guard let active = self.navigation, navigation === active else { return }
+        finish(.success(()))
+    }
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        guard let active = self.navigation, navigation === active else { return }
+        finish(.failure(error))
+    }
 }

@@ -105,10 +105,8 @@ struct ArticleReaderView: View {
         .onChange(of: loader.state) { _, state in
             guard case .loaded(let document) = state else { return }
             do {
-                if let favorite = try ArticleReadingStore.favorite(for: item.pageURL, in: context) {
-                    favorite.articleSnapshot = try document.snapshotData()
-                    try context.save()
-                }
+                try ArticleReadingStore.captureSnapshot(for: item.pageURL, document: document,
+                    replacing: loader.request != nil, in: context)
             } catch { self.error = error.localizedDescription }
         }
         .onReceive(NotificationCenter.default.publisher(for: ModelContext.didSave)) { _ in

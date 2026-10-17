@@ -1,4 +1,5 @@
 import XCTest
+import UIKit
 
 @MainActor final class ArticleFeedUITests: XCTestCase {
     func testBentoFeedSaveDetailReturnAndOfflineFavorite() throws {
@@ -53,7 +54,21 @@ import XCTest
         XCTAssertTrue(site.waitForExistence(timeout: 5)); site.tap()
         let open = app.buttons.matching(identifier: "article-feed-open").firstMatch
         XCTAssertTrue(open.waitForExistence(timeout: 30))
-        XCTAssertTrue(app.staticTexts["第一行正文\n\n第二行正文"].exists)
+        XCTAssertTrue(open.label.contains("第一行正文"))
+        XCTAssertTrue(open.label.contains("第二行正文"))
+        for layout in ["列表", "竖版", "Bento"] {
+            app.buttons["browser-layout-menu"].tap(); app.buttons[layout].tap()
+            XCTAssertTrue(open.waitForExistence(timeout: 5))
+            for card in app.buttons.matching(identifier: "article-feed-open").allElementsBoundByIndex where card.isHittable {
+                XCTAssertGreaterThanOrEqual(card.frame.minX, app.frame.minX + 12)
+                XCTAssertLessThanOrEqual(card.frame.maxX, app.frame.maxX - 12, "卡片内容不能超出屏幕边距")
+            }
+            snapshot("native-feed-" + layout, app)
+        }
+        let mediaReady = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            self.hasDiagramPixels(app.screenshot().image)
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [mediaReady], timeout: 15), .completed, "Bento 必须显示实际图片")
         snapshot("native-bento-feed", app)
         let save = app.buttons.matching(identifier: "article-feed-save").firstMatch
         save.tap(); XCTAssertEqual(save.label, "已收藏")
@@ -69,6 +84,19 @@ import XCTest
         app.staticTexts["合成 Feed 一"].firstMatch.tap()
         XCTAssertTrue(app.staticTexts["第一行正文"].waitForExistence(timeout: 8))
         snapshot("native-saved-feed-offline", app)
+    }
+    private func hasDiagramPixels(_ image: UIImage) -> Bool {
+        guard let cg = image.cgImage else { return false }
+        let width = cg.width, height = cg.height
+        var bytes = [UInt8](repeating: 0, count: width * height * 4)
+        guard let context = CGContext(data: &bytes, width: width, height: height, bitsPerComponent: 8,
+            bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGBitmapInfo.byteOrder32Big.rawValue | CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
+        context.draw(cg, in: CGRect(x: 0, y: 0, width: width, height: height))
+        var count = 0
+        for index in stride(from: 0, to: bytes.count, by: 16) {
+            if (20...100).contains(bytes[index]), (70...150).contains(bytes[index+1]), bytes[index+2] > 180 { count += 1 }
+        }
+        return count > 1250
     }
     private func snapshot(_ name: String, _ app: XCUIApplication) {
         let shot = XCTAttachment(screenshot: app.screenshot()); shot.name = name; shot.lifetime = .keepAlways; add(shot)

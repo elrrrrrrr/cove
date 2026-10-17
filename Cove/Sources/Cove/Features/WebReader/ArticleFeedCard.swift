@@ -9,7 +9,7 @@ struct ArticleFeedCard: View {
     let saved: Bool
     let open: () -> Void
     let save: () -> Void
-    @State private var width: CGFloat = 320
+    @State private var width: CGFloat = 0
     private var images: [ArticleBlock] { Array((item.article?.blocks ?? []).filter { $0.kind == .image }.prefix(4)) }
     private var paragraphs: [ArticleBlock] { (item.article?.blocks ?? []).filter { $0.kind == .paragraph || $0.kind == .heading } }
     private var quote: ArticleBlock? { item.article?.blocks.first { $0.kind == .quote } }
@@ -27,6 +27,11 @@ struct ArticleFeedCard: View {
                             if !item.duration.isEmpty { Text(item.duration).font(.caption).foregroundStyle(.secondary) }
                         }
                         Spacer(minLength: 0)
+                        if layout == .list, let url = images.first?.url ?? item.thumbnail {
+                            ArticleImage(url: url, referer: item.pageURL, definitionID: definitionID, width: 64, aspectRatio: 1)
+                                .clipShape(RoundedRectangle(cornerRadius: 8))
+                                .accessibilityLabel("帖子缩略图")
+                        }
                     }
                     if let document = item.article, let first = paragraphs.first,
                        !String(first.text.characters).hasPrefix(document.title) {
@@ -40,7 +45,7 @@ struct ArticleFeedCard: View {
                             .font(.body).lineSpacing(5).lineLimit(compact ? 8 : 16)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    if layout != .list { media }
+                    if layout != .list && width > 0 { media }
                     if let quote {
                         Text(String(quote.text.characters)).font(.subheadline).lineLimit(5)
                             .padding(12).frame(maxWidth: .infinity, alignment: .leading)
@@ -55,13 +60,15 @@ struct ArticleFeedCard: View {
                 Spacer()
                 Button(action: save) {
                     Label(saved ? "已收藏" : "收藏", systemImage: saved ? "heart.fill" : "heart").font(.subheadline)
+                        .frame(minWidth: 72, minHeight: 44).contentShape(Rectangle())
                 }.foregroundColor(.accentColor).accessibilityIdentifier("article-feed-save")
             }
         }
-        .padding(16).frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16).frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
         .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20))
+        .clipShape(RoundedRectangle(cornerRadius: 20))
         .overlay(RoundedRectangle(cornerRadius: 20).stroke(.quaternary, lineWidth: 0.5))
-        .onGeometryChange(for: CGFloat.self) { max(180, $0.size.width - 32) } action: { width = $0 }
+        .onGeometryChange(for: CGFloat.self) { max(1, $0.size.width - 32) } action: { width = $0 }
     }
     @ViewBuilder private var media: some View {
         if images.count == 1, let image = images.first, let url = image.url {

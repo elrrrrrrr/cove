@@ -113,12 +113,14 @@ extract:
 
 | `role` | 结果契约 |
 | --- | --- |
-| `catalog` | 数组；每项必需 `title / url`，可选 `thumbnail / duration / extra` |
+| `catalog` | 数组；每项必需 `title / url`，可选 `thumbnail / duration / extra / article` |
 | `video` | 对象；必需 `url`，可选 `type`（hls/mp4）、`headers`、`title`、`nextPageURL`、`episodeNumber`、`episodeCount` |
 | `comic` | 对象；必需 `chapters` 数组（每项 `url`，可选 `id / title`）；可选 `title / author / status / tags / desc / cover` |
 | `chapter` | 对象；必需 `images` 数组；可选 `bookId / chapterId / bookName / chapterName / prevChapter / nextChapter` |
 | `tags` | 标签文本数组，或带 `tags` 数组的对象 |
 | `article` | 对象；必需 `blocks`，可选 `title / author / publishedAt / sourceURL / commentsURL` |
+
+`catalog` 的可选 `article` 与单篇图文使用同一内容合同；可用嵌套 `fields` 和 `content: true` 直接生成正文预览，详情复用提取结果。CSS 和 JavaScript 示例见[动态图文与 Feed](dynamic-articles.md)。
 
 列表 `contentType` 为 `video / comic / navLink / article`；分别进入视频、漫画、目录子页面、原生图文阅读。`navLink` 用于继续浏览目录，图文正文使用 `article`。混合列表仍可通过长按查看网页详情。电子书、TXT、PDF、压缩漫画、图片和音乐继续使用本地/SMB 阅读播放能力。
 
@@ -159,3 +161,5 @@ pagination:
 预置收藏示例见 `examples/data/favorites.json`。`schemaVersion` 为 `1`，`favorites` 数组每项必需 `title / pageURL`，可选 `id / thumbnail / duration / siteName / isComic / isArticle / definitionID / addedAt / isPinned / pinOrder`。日期使用 ISO 8601。`isArticle: true` 表示图文收藏，`isComic: true` 表示漫画，两者不可同时为真；均省略或为假时为视频。已有收藏省略 `isArticle` 默认不是图文，格式仍为 `schemaVersion: 1`。`isPinned` 为置顶开关，`pinOrder` 为非负顺序值；省略时默认不置顶。收藏页长按可置顶/取消置顶，右上角“管理置顶”可拖动排序。合并导入保留已有收藏的置顶选择和顺序，新导入的置顶项目按文件顺序追加（优先 `pinOrder`），取消置顶不删除收藏。App 收藏页可导出这种格式，然后保存到私有 `data/favorites.json`。
 
 配置备份同样使用 `schemaVersion: 1`，包含阅读设置、站点定义、入口身份、单站解析覆盖和 NAS UUID；不包含密码。配置备份的“导入并替换”与单站点导入分开；单站点导入不替换其他配置，收藏导入以合并为准。
+
+图文收藏可带可选 `articleSnapshot`，由 App 生成的 Base64 JSON 正文快照，继续使用 `schemaVersion: 1`。导入会校验图文类型、内容大小和正文块；备份与同步保留快照。它不包含 Cookie，图片仍为来源链接，不能替代完整离线媒体包。

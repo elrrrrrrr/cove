@@ -300,6 +300,8 @@ final class PageLoader: NSObject {
             guard !Task.isCancelled else { return }
             // Still loading — force extraction attempt
             if case .loading = state {
+                // extract cancels pending watchdogs; do not let this fallback cancel itself.
+                loadTimeoutTask = nil
                 await extract()
             }
         }
@@ -564,7 +566,7 @@ final class PageLoader: NSObject {
 
         // Auto-follow: if the parser defines a redirect JS, run it first.
         if let followJS = parser.preNavigateJS {
-            let href = try? await WebScript.evaluate(followJS, in: webView) as? String
+            let href = try? await WebScript.boundedString(followJS, in: webView)
             guard generation == loadID, !Task.isCancelled else { return }
             if let href, !href.isEmpty, let followURL = URL(string: href) {
                 log("extract: preNavigateJS → following \(followURL.absoluteString)")
@@ -577,9 +579,9 @@ final class PageLoader: NSObject {
         }
 
         do {
-            let value = try await WebScript.evaluate(parser.extractItemsJS, in: webView)
+            let value = try await WebScript.boundedString(parser.extractItemsJS, in: webView)
             guard generation == loadID, !Task.isCancelled else { return }
-            guard let jsonString = value as? String, let data = jsonString.data(using: .utf8) else {
+            guard let jsonString = value, let data = jsonString.data(using: .utf8) else {
                 log("extract: extractItemsJS returned nil/empty")
                 if !isMore { state = .done(allItems) }
                 isLoadingMore = false
@@ -602,7 +604,7 @@ final class PageLoader: NSObject {
                 hasNextPage = false
 
             case .webNavigation(let npJS):
-                let nextHref = try? await WebScript.evaluate(npJS, in: webView) as? String
+                let nextHref = try? await WebScript.boundedString(npJS, in: webView)
                 guard generation == loadID, !Task.isCancelled else { return }
                 nextPageURL  = nextHref.flatMap { URL(string: $0) }
                 hasNextPage  = false

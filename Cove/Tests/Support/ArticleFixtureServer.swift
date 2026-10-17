@@ -4,7 +4,7 @@ import Network
 final class ArticleFixtureServer: @unchecked Sendable {
     let listener: NWListener
     let url: String
-    init(routes: [String: (String, Data)], redirects: [String: String] = [:]) throws {
+    init(routes: [String: (String, Data)], redirects: [String: String] = [:], delays: [String: TimeInterval] = [:]) throws {
         let listener = try NWListener(using: .tcp, on: .any)
         self.listener = listener
         let ready = DispatchSemaphore(value: 0)
@@ -22,7 +22,14 @@ final class ArticleFixtureServer: @unchecked Sendable {
                 }
                 let body = response?.1 ?? Data("Not found".utf8)
                 let header = "HTTP/1.1 \(response == nil ? "404 Not Found" : "200 OK")\r\nContent-Type: \(response?.0 ?? "text/html")\r\nContent-Length: \(body.count)\r\nConnection: close\r\n\r\n"
-                connection.send(content: Data(header.utf8) + body, completion: .contentProcessed { _ in connection.cancel() })
+                let payload = Data(header.utf8) + body
+                if let delay = delays[path], delay > 0 {
+                    DispatchQueue.global().asyncAfter(deadline: .now() + delay) {
+                        connection.send(content: payload, completion: .contentProcessed { _ in connection.cancel() })
+                    }
+                } else {
+                    connection.send(content: payload, completion: .contentProcessed { _ in connection.cancel() })
+                }
             }
         }
         listener.start(queue: .global())

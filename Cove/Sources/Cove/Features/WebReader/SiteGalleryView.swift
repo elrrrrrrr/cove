@@ -269,20 +269,41 @@ struct SiteGalleryView: View {
             }
             .scrollPosition(id: $visibleItemID, anchor: .top)
             .onChange(of: layout) { _, _ in
-                if let visibleItemID { proxy.scrollTo(visibleItemID, anchor: .top) }
+                if let visibleItemID {
+                    if parser.itemKind == .article, let index = items.firstIndex(where: { $0.id == visibleItemID }) {
+                        let rowID = items[(index / articleColumns) * articleColumns].id
+                        self.visibleItemID = rowID
+                        proxy.scrollTo(rowID, anchor: .top)
+                    } else { proxy.scrollTo(visibleItemID, anchor: .top) }
+                }
             }
         }
     }
 
+    private var articleColumns: Int {
+        layout == .portrait || (hSizeClass == .regular && layout == .bento) ? 2 : 1
+    }
+
     private func articleFeed(_ items: [ParsedItem]) -> some View {
-        let count = layout == .portrait || (hSizeClass == .regular && layout == .bento) ? 2 : 1
-        return LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 14), count: count), spacing: 14) {
-            ForEach(items) { item in
-                ArticleFeedCard(item: item, definitionID: parser.definitionID, layout: layout,
-                    saved: isFavorited(item), open: { openItem(item) }, save: { toggleFavorite(item) })
-                    .id(item.id).contextMenu { itemMenu(for: item) }
+        let count = articleColumns
+        return LazyVStack(spacing: 14) {
+            ForEach(0..<((items.count + count - 1) / count), id: \.self) { row in
+                HStack(alignment: .top, spacing: 14) {
+                    ForEach(0..<count, id: \.self) { column in
+                        let index = row * count + column
+                        if index < items.count {
+                            let item = items[index]
+                            ArticleFeedCard(item: item, definitionID: parser.definitionID, layout: layout,
+                                saved: isFavorited(item), open: { openItem(item) }, save: { toggleFavorite(item) })
+                                .contextMenu { itemMenu(for: item) }
+                        } else { Color.clear.frame(minWidth: 0, maxWidth: .infinity).frame(height: 1) }
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                // A full-width row avoids horizontal centering when restoring a grid position.
+                .id(items[row * count].id)
             }
-            infiniteScrollFooter.gridCellColumns(count)
+            infiniteScrollFooter
         }.padding(14).scrollTargetLayout()
     }
 
