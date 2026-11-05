@@ -17,6 +17,7 @@ struct VideoDetailView: View {
     @State private var isAdvancingEpisode = false
     @State private var loadingScrollable = false
     @State private var showParsingWeb = false
+    @State private var startedLoading = false
     // Pre-populate from L0 synchronous cache — no blank frame when re-entering
     @State private var thumbImage      : UIImage?
     @Environment(\.dismiss) private var dismiss
@@ -69,21 +70,21 @@ struct VideoDetailView: View {
 
                 case .notFound:
                     if !showParsingWeb {
-                    WebReaderView(url: currentPageURL)
-                        .transition(.opacity)
-                        .overlay(alignment: .topTrailing) {
-                            Button {
-                                extractor.retry()
-                            } label: {
-                                Label("重试解析", systemImage: "arrow.clockwise")
-                                    .font(.caption.weight(.semibold))
-                                    .padding(.horizontal, 12).padding(.vertical, 7)
-                                    .background(.blue.opacity(0.9), in: Capsule())
-                                    .foregroundStyle(.white)
+                        VStack(spacing: 0) {
+                            HStack {
+                                Button { dismiss() } label: { Label("返回", systemImage: "chevron.left") }
+                                Spacer()
+                                Button { extractor.retry() } label: { Label("重试解析", systemImage: "arrow.clockwise") }
                             }
-                            .padding(.trailing, 16)
-                            .padding(.top, 52)
+                            .foregroundColor(.accentColor)
+                            .padding(.horizontal, 16).frame(minHeight: 44)
+                            ParsingWebPageContent(webView: extractor.webView, fallbackURL: currentPageURL,
+                                status: "点击网页播放，正文就绪后自动切换原生播放。", isFullPage: true)
+                                .accessibilityIdentifier("video-live-fallback")
                         }
+                        .background(Color(.systemBackground))
+                        .task { await extractor.observePreparedSource() }
+                        .transition(.opacity)
                     }
                 }
 
@@ -104,10 +105,13 @@ struct VideoDetailView: View {
         .sheet(isPresented: $showParsingWeb) {
             ParsingWebViewSheet(webView: extractor.webView,
                 request: extractor.originalPageRequest ?? URLRequest(url: currentPageURL),
-                status: extractor.state == .loading ? "解析视频地址中…" : "视频解析已结束")
+                status: extractor.state == .loading ? "解析视频地址中…" : "点击网页播放，正文就绪后自动提取",
+                reloadInPlace: true)
+                .task { await extractor.observePreparedSource() }
         }
         .onAppear {
-            guard player == nil else { return }
+            guard !startedLoading else { return }
+            startedLoading = true
             // Restore saved progress before starting extraction (must run first for cache hits)
             let urlString = currentPageURL.absoluteString
             let descriptor = FetchDescriptor<ReadingHistory>(
@@ -134,6 +138,7 @@ struct VideoDetailView: View {
         }
         .onChange(of: extractor.state) { _, state in
             if case .found(let result) = state {
+                showParsingWeb = false
                 isAdvancingEpisode = false
                 saveHistory(result: result)
             } else if case .notFound = state {
@@ -141,6 +146,7 @@ struct VideoDetailView: View {
             }
         }
         .onDisappear {
+            extractor.cancel()
             player?.pause()
             saveProgress()
         }

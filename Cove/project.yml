@@ -44,6 +44,7 @@ targets:
       - path: Tests/CoveUITests
       - path: Tests/Support
       - {path: Tests/Fixtures/Articles, type: folder, buildPhase: resources}
+      - {path: Tests/Fixtures/Video, type: folder, buildPhase: resources}
       - {path: ../examples, type: folder, buildPhase: resources}
     dependencies:
       - target: Cove
@@ -60,6 +61,7 @@ targets:
       - path: Tests/CoveTests
       - path: Tests/Support
       - {path: Tests/Fixtures/Articles, type: folder, buildPhase: resources}
+      - {path: Tests/Fixtures/Video, type: folder, buildPhase: resources}
       - path: Tests/Fixtures/Sites
         type: folder
         buildPhase: resources
