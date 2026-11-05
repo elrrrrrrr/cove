@@ -81,6 +81,7 @@ struct ParsingWebViewSheet: View {
     let webView: WKWebView
     let request: URLRequest
     let status: String
+    var reloadInPlace = false
     @State private var fullPage: WKWebView?
     @Environment(\.dismiss) private var dismiss
 
@@ -107,6 +108,10 @@ struct ParsingWebViewSheet: View {
         .presentationDragIndicator(.visible)
     }
     private func openFullPage() {
+        if reloadInPlace {
+            webView.load(request)
+            return
+        }
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = webView.configuration.websiteDataStore
         configuration.allowsInlineMediaPlayback = true
@@ -118,7 +123,7 @@ struct ParsingWebViewSheet: View {
     }
 }
 
-private struct ParsingWebPageContent: View {
+struct ParsingWebPageContent: View {
     let webView: WKWebView
     let fallbackURL: URL?
     let status: String

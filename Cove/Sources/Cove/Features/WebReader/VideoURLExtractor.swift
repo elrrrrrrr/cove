@@ -69,6 +69,7 @@ final class VideoURLExtractor: NSObject {
     /// Non-nil after a failed extraction — describes what was found on the page.
     var diagnostic: String? = nil
     let webView: WKWebView
+    private var loadID = UUID()
     private var targetURL: URL?
     var originalPageRequest: URLRequest? { targetURL.map { pageRequest(url: $0) } }
     private var definitionID: String?
@@ -85,6 +86,7 @@ final class VideoURLExtractor: NSObject {
 
     override init() {
         let cfg = WKWebViewConfiguration()
+        cfg.allowsInlineMediaPlayback = true
         cfg.websiteDataStore = .default()
         let prefs = WKWebpagePreferences()
         prefs.allowsContentJavaScript = true
@@ -115,11 +117,47 @@ final class VideoURLExtractor: NSObject {
 
     /// Stop any in-flight extraction and WebView navigation.
     func cancel() {
+        loadID = UUID()
         extractTask?.cancel()
         extractTask = nil
         loadTimeoutTask?.cancel()
         loadTimeoutTask = nil
         webView.stopLoading()
+    }
+
+    /// Continue watching the same rendered document while the user can interact with it.
+    /// The view task owns cancellation; never reload a page that has just passed a playback gate.
+    func observePreparedSource() async {
+        guard let url = targetURL else { return }
+        let generation = loadID
+        let js = DetailParserRegistry.js(for: url, definitionID: definitionID)
+        while !Task.isCancelled, generation == loadID {
+            if case .found = state { return }
+            if case .notFound = state, samePage(webView.url, url),
+               let result = await parseResult(from: js) {
+                guard !Task.isCancelled, generation == loadID, samePage(webView.url, url) else { return }
+                await pauseWebPlayback()
+                guard !Task.isCancelled, generation == loadID else { return }
+                Self.cache[cacheKey] = result
+                diagnostic = nil
+                state = .found(result)
+                return
+            }
+            do { try await Task.sleep(for: .milliseconds(500)) } catch { return }
+        }
+    }
+
+    private func samePage(_ current: URL?, _ target: URL) -> Bool {
+        guard var current = current.flatMap({ URLComponents(url: $0, resolvingAgainstBaseURL: true) }),
+              var target = URLComponents(url: target, resolvingAgainstBaseURL: true) else { return false }
+        current.fragment = nil; target.fragment = nil
+        return current.url == target.url
+    }
+
+    private func pauseWebPlayback() async {
+        _ = try? await WebScript.boundedString(
+            "(function(){document.querySelectorAll('video,audio').forEach(v=>v.pause());return 'paused';})()",
+            in: webView, timeout: .seconds(1))
     }
 
     /// Retry: reload the page from scratch.
@@ -146,6 +184,7 @@ final class VideoURLExtractor: NSObject {
     }
 
     private func startExtraction() {
+        if case .found = state { return }
         loadTimeoutTask?.cancel()
         extractTask?.cancel()
         extractTask = Task { await extract() }
@@ -153,6 +192,7 @@ final class VideoURLExtractor: NSObject {
 
     private func extract() async {
         guard let url = targetURL else { return }
+        let generation = loadID
         if let wait = SiteParserRegistry.rule(for: url, role: "video", definitionID: definitionID)?.load?.waitSeconds, wait > 0 {
             try? await Task.sleep(for: .seconds(wait))
             guard !Task.isCancelled else { return }
@@ -176,15 +216,17 @@ final class VideoURLExtractor: NSObject {
             }
             if Task.isCancelled { return }
             if let result = await parseResult(from: js) {
-                guard !Task.isCancelled, targetURL == url else { return }
+                guard !Task.isCancelled, generation == loadID, targetURL == url else { return }
+                await pauseWebPlayback()
+                guard !Task.isCancelled, generation == loadID else { return }
                 Self.cache[cacheKey] = result
                 state = .found(result)
                 return
             }
         }
-        guard !Task.isCancelled, targetURL == url else { return }
+        guard !Task.isCancelled, generation == loadID, targetURL == url else { return }
         await runDiagnostic()
-        guard !Task.isCancelled, targetURL == url else { return }
+        guard !Task.isCancelled, generation == loadID, targetURL == url else { return }
         state = .notFound
     }
 
@@ -255,7 +297,7 @@ final class VideoURLExtractor: NSObject {
     }
 
     private func parseResult(from js: String) async -> VideoResult? {
-        guard let raw = try? await WebScript.evaluate(js, in: webView) as? String,
+        guard let raw = try? await WebScript.boundedString(js, in: webView),
               raw != "null",
               let data = raw.data(using: .utf8),
               let obj  = try? JSONDecoder().decode(RawVideo.self, from: data),
