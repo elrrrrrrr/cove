@@ -184,6 +184,7 @@ final class VideoURLExtractor: NSObject {
     }
 
     private func startExtraction() {
+        if case .found = state { return }
         loadTimeoutTask?.cancel()
         extractTask?.cancel()
         extractTask = Task { await extract() }

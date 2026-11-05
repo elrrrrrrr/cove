@@ -106,6 +106,10 @@ import AVKit
         XCTAssertEqual(token, "same-loaded-page")
         let pauses = try await WebScript.evaluate("window.pauseCount", in: page) as? Int
         XCTAssertGreaterThanOrEqual(pauses ?? 0, 2, "原生接管前停止网页音视频，避免重复播放")
+        _ = try await WebScript.evaluate("(function(){document.querySelector('[data-role=content]').removeAttribute('data-source');return 'cleared';})()", in: page)
+        extractor.webView(page, didFinish: nil)
+        try await Task.sleep(for: .seconds(5))
+        XCTAssertEqual(extractor.state, .found(result), "迟到的页面完成回调不能把原生播放退回解析失败")
     }
     func testCancellingObservationKeepsThePageAndAllowsResumingAfterInteraction() async throws {
         let server = try fixture("<video data-role='content'></video>")
