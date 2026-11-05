@@ -86,6 +86,7 @@ final class VideoURLExtractor: NSObject {
 
     override init() {
         let cfg = WKWebViewConfiguration()
+        cfg.allowsInlineMediaPlayback = true
         cfg.websiteDataStore = .default()
         let prefs = WKWebpagePreferences()
         prefs.allowsContentJavaScript = true
