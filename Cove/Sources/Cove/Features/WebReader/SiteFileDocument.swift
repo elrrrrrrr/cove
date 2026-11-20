@@ -61,7 +61,7 @@ struct SiteImportSheet: View {
             .appSurface()
             .navigationTitle("导入 .site")
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } } }
-            .sheet(isPresented: $showEditor) { SiteSetupWizard(imported: definition, onSaved: { dismiss() }) }
+            .sheet(isPresented: $showEditor) { SiteConfigEditor(imported: definition, onSaved: { dismiss() }) }
         }
     }
     private func save(copy: Bool) {

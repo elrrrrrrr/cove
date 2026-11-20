@@ -36,13 +36,7 @@ final class ComicDetailLoader: NSObject {
     private var extractTask: Task<Void, Never>?
 
     override init() {
-        let cfg = WKWebViewConfiguration()
-        cfg.websiteDataStore = .default()
-        let prefs = WKWebpagePreferences()
-        prefs.allowsContentJavaScript = true
-        cfg.defaultWebpagePreferences = prefs
-        let wv = WKWebView(frame: .zero, configuration: cfg)
-        wv.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"
+        let wv = WebScript.makeWebView()
         self.webView = wv
         super.init()
         wv.navigationDelegate = self
@@ -82,25 +76,11 @@ final class ComicDetailLoader: NSObject {
                 webView.load(URLRequest(url: url))
                 return
             }
-            let stripped = Self.stripResourceTags(html)
+            let stripped = WebScript.stripResourceTags(html)
             webView.loadHTMLString(stripped, baseURL: url)
         } catch {
             webView.load(URLRequest(url: url))
         }
-    }
-
-    private static func stripResourceTags(_ html: String) -> String {
-        var result = html
-        result = result.replacingOccurrences(
-            of: #"<script\b[^>]*>[\s\S]*?</script>"#,
-            with: "", options: .regularExpression)
-        result = result.replacingOccurrences(
-            of: #"<script\b[^/]*/>"#,
-            with: "", options: .regularExpression)
-        result = result.replacingOccurrences(
-            of: #"<link\b[^>]*>"#,
-            with: "", options: .regularExpression)
-        return result
     }
 
     private func extract() {

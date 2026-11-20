@@ -12,8 +12,7 @@ struct SiteListView: View {
     @State private var showImport = false
     @State private var operationError: String?
     @State private var showAddSheet    = false
-    @State private var editTarget: BookmarkSite?   // nil = add, non-nil = edit
-    @State private var ruleTarget: BookmarkSite?
+    @State private var editTarget: BookmarkSite?
     @State private var configurationTarget: BookmarkSite?
     @State private var editMode: EditMode = .inactive
     @State private var filterCategory: SiteCategory? = nil
@@ -53,7 +52,7 @@ struct SiteListView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
-                        Button("创建站点规则", systemImage: "wand.and.stars") { editTarget = nil; showAddSheet = true }
+                        Button("创建站点规则", systemImage: "wand.and.stars") { showAddSheet = true }
                         Button("导入 .site", systemImage: "square.and.arrow.down") { showImport = true }
                     } label: { Image(systemName: "plus") }
                         .accessibilityLabel("添加或导入站点")
@@ -66,14 +65,13 @@ struct SiteListView: View {
             }
             .environment(\.editMode, $editMode)
             .sheet(isPresented: $showAddSheet) {
-                if let editTarget { SiteEditSheet(existing: editTarget) }
-                else { SiteSetupWizard() }
+                SiteConfigEditor()
             }
-            .sheet(item: $ruleTarget) { site in
-                SiteSetupWizard(existing: site)
+            .sheet(item: $editTarget) { site in
+                SiteEditSheet(existing: site)
             }
             .sheet(item: $configurationTarget) { site in
-                SiteSetupWizard(existing: site, opensConfiguration: true)
+                SiteConfigEditor(existing: site)
             }
             .sheet(item: $library.pendingImport) { SiteImportSheet(definition: $0) }
             .fileImporter(isPresented: $showImport, allowedContentTypes: [.coveSite, .plainText, .data]) { result in
@@ -155,14 +153,8 @@ struct SiteListView: View {
                     Button("查看配置", systemImage: "doc.text") { configurationTarget = site }
                     Button {
                         editTarget = site
-                        showAddSheet = true
                     } label: {
                         Label("编辑", systemImage: "pencil")
-                    }
-                    Button {
-                        ruleTarget = site
-                    } label: {
-                        Label("解析规则", systemImage: "chevron.left.forwardslash.chevron.right")
                     }
                     Button(role: .destructive) {
                         context.delete(site)
@@ -172,14 +164,13 @@ struct SiteListView: View {
                 }
                 .swipeActions(edge: .leading) {
                     Button {
-                        ruleTarget = site
+                        configurationTarget = site
                     } label: {
                         Label("解析规则", systemImage: "chevron.left.forwardslash.chevron.right")
                     }
                     .tint(.blue)
                     Button {
                         editTarget = site
-                        showAddSheet = true
                     } label: {
                         Label("编辑", systemImage: "pencil")
                     }
@@ -213,7 +204,6 @@ struct SiteListView: View {
             Text("点击右上角 + 添加站点")
         } actions: {
             Button("添加站点") {
-                editTarget = nil
                 showAddSheet = true
             }
             .buttonStyle(.borderedProminent)
@@ -288,22 +278,18 @@ struct SiteRow: View {
     }
 }
 
-// MARK: - Add / Edit sheet
+// MARK: - Edit sheet
 
 struct SiteEditSheet: View {
-    /// nil means "add new", non-nil means "edit existing"
-    let existing: BookmarkSite?
+    let existing: BookmarkSite
 
-    @Environment(\.modelContext) private var context
-    @Environment(\.dismiss)      private var dismiss
+    @Environment(\.dismiss) private var dismiss
 
     @State private var name      = ""
     @State private var urlString = "https://"
     @State private var category: SiteCategory = .other
     @State private var note      = ""
-    @State private var isFetching = false
 
-    private var isNew: Bool { existing == nil }
     private var isValid: Bool {
         !name.isEmpty && URL(string: urlString) != nil && urlString.hasPrefix("http")
     }
@@ -313,18 +299,10 @@ struct SiteEditSheet: View {
             Form {
                 Section("基本信息") {
                     TextField("站点名称", text: $name)
-
-                    HStack {
-                        TextField("入口地址 (https://...)", text: $urlString)
-                            .keyboardType(.URL)
-                            .autocorrectionDisabled()
-                            .textInputAutocapitalization(.never)
-                        if isFetching {
-                            ProgressView().scaleEffect(0.8)
-                        }
-                    }
-
-                    // URL preview chip
+                    TextField("入口地址 (https://...)", text: $urlString)
+                        .keyboardType(.URL)
+                        .autocorrectionDisabled()
+                        .textInputAutocapitalization(.never)
                     if let url = URL(string: urlString), urlString != "https://" {
                         Text(url.absoluteString)
                             .font(.caption)
@@ -346,10 +324,9 @@ struct SiteEditSheet: View {
                     TextField("例如：需要梯子、每日更新…", text: $note, axis: .vertical)
                         .lineLimit(3)
                 }
-
             }
             .appSurface()
-            .navigationTitle(isNew ? "添加站点" : "编辑站点")
+            .navigationTitle("编辑站点")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -364,47 +341,18 @@ struct SiteEditSheet: View {
         }
     }
 
-    // MARK: - Actions
-
     private func loadExisting() {
-        guard let site = existing else { return }
-        name      = site.name
-        urlString = site.urlString
-        category  = site.category
-        note      = site.note
+        name      = existing.name
+        urlString = existing.urlString
+        category  = existing.category
+        note      = existing.note
     }
 
     private func save() {
-        if let site = existing {
-            site.name      = name
-            site.urlString = urlString
-            site.category  = category
-            site.note      = note
-        } else {
-            let site = BookmarkSite(
-                name: name,
-                urlString: urlString,
-                category: category,
-                note: note
-            )
-            context.insert(site)
-            // Async favicon fetch
-            Task { await fetchFavicon(for: site) }
-        }
+        existing.name      = name
+        existing.urlString = urlString
+        existing.category  = category
+        existing.note      = note
         dismiss()
     }
-
-    private func fetchFavicon(for site: BookmarkSite) async {
-        guard let host = URL(string: site.urlString)?.host() else { return }
-        let faviconURL = URL(string: "https://\(host)/favicon.ico")!
-        guard let (data, _) = try? await URLSession.shared.data(from: faviconURL),
-              UIImage(data: data) != nil else { return }
-        await MainActor.run { site.faviconData = data }
-    }
-}
-
-// Compatibility entry point for gallery configuration sheets.
-struct SiteConfigSheet: View {
-    let site: BookmarkSite
-    var body: some View { SiteSetupWizard(existing: site) }
 }

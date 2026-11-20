@@ -431,15 +431,6 @@ struct OfflineItemRow: View {
     }
 }
 
-// MARK: - Section header (shared)
-
-struct SectionHeader: View {
-    let title: String
-    var body: some View {
-        Text(title).font(.title2.bold()).padding(.horizontal)
-    }
-}
-
 // MARK: - Active downloads section (isolates DownloadManager observation)
 
 /// Only this view re-evaluates when download progress changes — not the entire HomeView.

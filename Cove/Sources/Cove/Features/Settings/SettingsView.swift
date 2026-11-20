@@ -90,11 +90,12 @@ struct SettingsView: View {
                 }
 
                 // Ad blocking
-                Section("广告拦截") {
+                Section {
                     Toggle("启用内容拦截", isOn: $blockerEnabled)
-                    NavigationLink("管理拦截规则") {
-                        BlockerRulesView()
-                    }
+                } header: {
+                    Text("广告拦截")
+                } footer: {
+                    Text("内置 EasyList 精简规则")
                 }
 
                 Section("云端同步") {
@@ -319,17 +320,6 @@ struct NASConfigRow: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
-    }
-}
-
-struct BlockerRulesView: View {
-    var body: some View {
-        List {
-            Text("内置 EasyList 精简规则（已加载）")
-                .foregroundStyle(.secondary)
-        }
-        .appSurface()
-        .navigationTitle("拦截规则")
     }
 }
 

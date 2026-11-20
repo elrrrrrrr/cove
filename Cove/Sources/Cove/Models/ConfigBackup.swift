@@ -28,7 +28,6 @@ struct SiteBackup: Codable {
     var category: String
     var note: String
     var sortOrder: Int
-    var parserConfig: SiteParserOverrides?
     var definitionID: String?
     var entryID: String?
     var createdAt: Date?
@@ -51,7 +50,7 @@ extension ConfigBackup {
         ConfigBackup(exportDate: Date(),
             settings: SettingsBackup(readerFontSize: fontSize, readerTheme: theme.rawValue, contentBlockerEnabled: blockerEnabled, novelReadingMode: readingMode.rawValue),
             sites: sites.map { SiteBackup(id: $0.id, name: $0.name, urlString: $0.urlString, category: $0.category.rawValue,
-                note: $0.note, sortOrder: $0.sortOrder, parserConfig: $0.parserOverrides, definitionID: $0.definitionID, entryID: $0.entryID, createdAt: $0.createdAt, faviconData: $0.faviconData) },
+                note: $0.note, sortOrder: $0.sortOrder, definitionID: $0.definitionID, entryID: $0.entryID, createdAt: $0.createdAt, faviconData: $0.faviconData) },
             nasConfigs: nasConfigs.map { NASConfigBackup(id: $0.id, name: $0.name, host: $0.host, port: $0.port,
                 username: $0.username, shareName: $0.shareName, isActive: $0.isActive) },
             siteDefinitions: SiteDefinitionStore.shared.definitions)

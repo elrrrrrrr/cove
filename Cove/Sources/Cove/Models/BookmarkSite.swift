@@ -14,19 +14,6 @@ final class BookmarkSite {
     var definitionID: String?
     var entryID: String?
 
-    // ── 解析规则覆盖 ──────────────────────────────────────────────────────
-    /// JSON-encoded SiteParserOverrides — all overridable parser fields in one blob.
-    var customParserConfig: Data?
-
-    var parserOverrides: SiteParserOverrides? {
-        get { customParserConfig.flatMap { try? JSONDecoder().decode(SiteParserOverrides.self, from: $0) } }
-        set {
-            customParserConfig = newValue.flatMap { value in
-                value.isEmpty ? nil : try? JSONEncoder().encode(value)
-            }
-        }
-    }
-
     var url: URL? { URL(string: urlString) }
 
     init(

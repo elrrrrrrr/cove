@@ -261,124 +261,86 @@ final class SiteParserRegistry: @unchecked Sendable {
     }
 }
 
-// MARK: - SiteParserOverrides (Codable user overrides)
-
-/// All-optional override struct stored as JSON in BookmarkSite.customParserConfig.
-/// nil fields = use built-in default. Adding new fields requires no SwiftData migration.
-struct SiteParserOverrides: Codable, Sendable, Equatable {
-    var itemKind:       String?   // "video" | "navLink" | "comic"
-    var preNavigateJS:  String?   // "" = 禁用; nil = 用默认
-    var waitSeconds:    Double?
-    var extractItemsJS: String?
-    var paginationJS:   String?   // AJAX 或 webNavigation 的 JS 内容
-    var paginationType: String?   // "none" | "ajax" | "webNavigation"
-    var categories:     [CategoryOverride]?
-    var needsJS:        Bool?
-    var portalURL:      String?   // "" = 禁用; nil = 用默认
-    var galleryLayout:  String?   // "bento" | "portrait" | "list"
-
-    struct CategoryOverride: Codable, Sendable, Equatable {
-        var name: String
-        var path: String
-    }
-
-    /// True when every field is nil (no overrides applied).
-    var isEmpty: Bool {
-        itemKind == nil && preNavigateJS == nil && waitSeconds == nil
-        && extractItemsJS == nil && paginationJS == nil && paginationType == nil
-        && categories == nil && needsJS == nil && portalURL == nil
-        && galleryLayout == nil
-    }
-}
-
-// MARK: - Override application
+// MARK: - Generic catch-all heuristic
 
 extension SiteParser {
-    /// Returns a copy of this parser with non-nil overrides applied.
-    func applying(_ overrides: SiteParserOverrides?) -> SiteParser {
-        guard let o = overrides, !o.isEmpty else { return self }
+    static let generic = SiteParser(
+        hostPattern: "",
+        itemKind: .video,
+        preNavigateJS: nil,
+        waitSeconds: 2.0,
+        extractItemsJS: SiteParser.genericExtractItemsJS,
+        paginationMode: .webNavigation(nextPageJS: SiteParser.genericNextPageJS)
+    )
 
-        // itemKind
-        let resolvedItemKind = o.itemKind.flatMap { ItemKind(string: $0) } ?? itemKind
-
-        // preNavigateJS: "" = disable, nil = keep default
-        let resolvedPreNav: String?
-        if let override = o.preNavigateJS {
-            resolvedPreNav = override.isEmpty ? nil : override
-        } else {
-            resolvedPreNav = preNavigateJS
+    static let genericNextPageJS = """
+    (function() {
+        const rel = document.querySelector('link[rel="next"]');
+        if (rel?.href) return rel.href;
+        const kw = [/\\bnext\\b/i, /下一页/, /›|»/];
+        const links = [...document.querySelectorAll('a[href]')];
+        for (const k of kw) {
+            const a = links.find(el => k.test(el.textContent.trim()) && !el.href.match(/#$/));
+            if (a) return a.href;
         }
+        const cur = parseInt(
+            document.querySelector('.pagination .active a, .page-item.active a, .current-page')
+                    ?.textContent?.trim(), 10);
+        if (!isNaN(cur)) {
+            const a = links.find(el => parseInt(el.textContent.trim(), 10) === cur + 1);
+            if (a) return a.href;
+        }
+        return null;
+    })()
+    """
 
-        // extractItemsJS
-        let resolvedExtract = o.extractItemsJS.flatMap { $0.isEmpty ? nil : $0 } ?? extractItemsJS
+    static let genericExtractItemsJS = """
+    (function() {
+        const selectors = [
+            '.post-card-container',
+            '.video-list-item', '.video-item', '.video-card', '.thumb-item',
+            '.col-6', '.col-4', '.col-3', '.col-sm-4', '.col-lg-3',
+            'article', '.item', '.card', '.media-item', '.post-item'
+        ];
 
-        // paginationMode
-        let resolvedPagination: PaginationMode
-        if let pType = o.paginationType {
-            switch pType {
-            case "none":
-                resolvedPagination = .none
-            case "ajax":
-                resolvedPagination = .ajax(js: o.paginationJS ?? (paginationMode.js ?? ""))
-            case "webNavigation":
-                resolvedPagination = .webNavigation(nextPageJS: o.paginationJS ?? (paginationMode.js ?? ""))
-            default:
-                resolvedPagination = paginationMode
+        let best = [], bestScore = 0;
+        for (const sel of selectors) {
+            const els = [...document.querySelectorAll(sel)];
+            const score = els.filter(el => el.querySelector('a') && el.querySelector('img')).length;
+            if (score > bestScore) { bestScore = score; best = els; }
+        }
+        if (bestScore === 0) return JSON.stringify([]);
+
+        const items = [];
+        best.forEach(el => {
+            const a     = el.querySelector('a[href]');
+            const img   = el.querySelector('img');
+            const title = el.querySelector('h1,h2,h3,h4,h5,h6,[class*="title"],[class*="name"]');
+            const dur   = el.querySelector('[class*="duration"],[class*="time"],[class*="label"],.badge');
+
+            const url  = a?.href || '';
+            const text = (title?.textContent || img?.alt || a?.title || '').trim();
+
+            let thumb = img?.dataset?.src || img?.dataset?.lazySrc
+                      || img?.dataset?.original || img?.dataset?.echo || img?.src || '';
+            if (!thumb) {
+                const bgEl  = el.querySelector('[style*="background-image"]');
+                const bgStr = bgEl?.style?.backgroundImage || '';
+                if (bgStr.includes('url(')) {
+                    thumb = bgStr.split('(')[1].split(')')[0].replace(/"/g, '');
+                }
             }
-        } else if let pJS = o.paginationJS {
-            // JS changed but type not specified → keep current type with new JS
-            switch paginationMode {
-            case .none:            resolvedPagination = .none
-            case .ajax:            resolvedPagination = .ajax(js: pJS)
-            case .webNavigation:   resolvedPagination = .webNavigation(nextPageJS: pJS)
+
+            if (url && text && !url.match(/^(#|javascript)/)) {
+                items.push({ title: text, url, thumbnail: thumb,
+                             duration: (dur?.textContent || '').trim(), extra: '' });
             }
-        } else {
-            resolvedPagination = paginationMode
-        }
+        });
 
-        // categories
-        let resolvedCategories: [SiteParserCategory]
-        if let cats = o.categories {
-            resolvedCategories = cats.map { SiteParserCategory(name: $0.name, urlString: $0.path) }
-        } else {
-            resolvedCategories = categories
-        }
-
-        // portalURL: "" = disable, nil = keep default
-        let resolvedPortal: String?
-        if let override = o.portalURL {
-            resolvedPortal = override.isEmpty ? nil : override
-        } else {
-            resolvedPortal = portalURL
-        }
-
-        // galleryLayout
-        let resolvedLayout = o.galleryLayout.flatMap { BrowserLayout(rawValue: $0) } ?? galleryLayout
-
-        var result = SiteParser(
-            hostPattern:    hostPattern,
-            itemKind:       resolvedItemKind,
-            preNavigateJS:  resolvedPreNav,
-            waitSeconds:    o.waitSeconds ?? waitSeconds,
-            extractItemsJS: resolvedExtract,
-            paginationMode: resolvedPagination,
-            categories:     resolvedCategories,
-            needsJS:        o.needsJS ?? needsJS,
-            portalURL:      resolvedPortal,
-            galleryLayout:  resolvedLayout,
-            searchURLTemplate: searchURLTemplate
-        )
-        result.definitionID = definitionID
-        result.ruleID = ruleID
-        if let resolvedPortal {
-            var configuration = portal ?? SitePortal(url: resolvedPortal)
-            configuration.url = resolvedPortal
-            result.portal = configuration
-        } else { result.portal = nil }
-        result.transformScript = transformScript
-        result.requestHeaders = requestHeaders
-        result.presentation = presentation
-        return result
-    }
-
+        const seen = new Set();
+        return JSON.stringify(
+            items.filter(i => seen.has(i.url) ? false : (seen.add(i.url), true)).slice(0, 100)
+        );
+    })()
+    """
 }

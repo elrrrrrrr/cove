@@ -6,7 +6,7 @@ struct SiteGalleryView: View {
     let definitionID: String?
     let siteName      : String
     let siteURLString : String
-    /// Non-nil when launched from BookmarkSite — used to apply custom JS overrides.
+    /// Non-nil when launched from BookmarkSite — used to open site configuration.
     let bookmarkSite  : BookmarkSite?
     init(site: BookmarkSite) {
         definitionID = site.definitionID
@@ -14,7 +14,7 @@ struct SiteGalleryView: View {
         siteURLString   = site.urlString
         bookmarkSite    = site
         _loader         = State(wrappedValue: Self.makeLoader())
-        _parser = State(initialValue: SiteParserRegistry.parser(for: site.urlString, definitionID: site.definitionID).applying(site.parserOverrides))
+        _parser = State(initialValue: SiteParserRegistry.parser(for: site.urlString, definitionID: site.definitionID))
         _navigation = State(initialValue: SiteCatalogNavigation(entryURLString: site.urlString))
         _savedLayout = AppStorage(wrappedValue: "", BrowserLayout.preferenceKey(source: "web", location: site.id.uuidString))
     }
@@ -70,7 +70,7 @@ struct SiteGalleryView: View {
         Binding(get: { layout }, set: { savedLayout = $0.rawValue })
     }
     private func refreshParser() {
-        parser = navigation.parser(definitionID: bookmarkSite?.definitionID ?? definitionID, overrides: bookmarkSite?.parserOverrides)
+        parser = navigation.parser(definitionID: bookmarkSite?.definitionID ?? definitionID)
         guard let url = siteURL else { return }
         loader.load(url: url, parser: parser, forceRefresh: true)
     }
@@ -133,7 +133,6 @@ struct SiteGalleryView: View {
         .onChange(of: library.definitions) { _, _ in
             refreshParser()
         }
-        .onChange(of: bookmarkSite?.customParserConfig) { _, _ in refreshParser() }
         .onChange(of: bookmarkSite?.definitionID) { _, _ in refreshParser() }
         .onChange(of: loader.state, initial: true) { _, state in
             if case .done(let items) = state { automaticImages = isImageContent(items) }
@@ -1303,7 +1302,7 @@ private struct GalleryNavigationModifier: ViewModifier {
         content
             .sheet(isPresented: $showJSConfig) {
                 if let site = bookmarkSite {
-                    SiteConfigSheet(site: site)
+                    SiteConfigEditor(existing: site)
                 }
             }
             .navigationDestination(item: $extraNavTarget) { target in
