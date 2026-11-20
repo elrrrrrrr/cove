@@ -105,12 +105,6 @@ enum AppTab: String, CaseIterable, Identifiable {
     }
 }
 
-struct ContentPlaceholderView: View {
-    var body: some View {
-        ContentUnavailableView("选择内容", systemImage: "book.closed", description: Text("从左侧选择一个项目开始阅读"))
-    }
-}
-
 /// Observes pendingSave / pendingPersist and persists to SwiftData.
 /// Isolated from the root view so download progress doesn't trigger full tab re-evaluation.
 private struct PersistenceObserver: View {

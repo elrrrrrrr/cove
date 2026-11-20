@@ -15,10 +15,6 @@ import XCTest
         let management = app.buttons["管理网站"]
         for _ in 0..<6 { if management.isHittable { break }; app.swipeUp() }
         management.tap(); app.buttons["添加或导入站点"].tap(); app.buttons["创建站点规则"].tap()
-        app.textFields["站点名称"].tap(); app.textFields["站点名称"].typeText(name)
-        let address = app.textFields["入口 URL"]
-        address.tap(); address.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 8)); address.typeText(server.url)
-        app.buttons["创建配置并打开页面"].tap(); app.segmentedControls.buttons["高级"].tap()
         let editor = app.textViews["完整站点 YAML"]
         XCTAssertTrue(editor.waitForExistence(timeout: 5)); editor.tap(); editor.press(forDuration: 1)
         let selectAll = app.menuItems["Select All"].exists ? app.menuItems["Select All"] : app.menuItems["全选"]

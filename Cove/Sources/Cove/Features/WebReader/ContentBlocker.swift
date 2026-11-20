@@ -4,6 +4,11 @@ import WebKit
 actor ContentBlocker {
     static let shared = ContentBlocker()
 
+    static var isEnabled: Bool {
+        UserDefaults.standard.object(forKey: "contentBlockerEnabled") == nil
+            || UserDefaults.standard.bool(forKey: "contentBlockerEnabled")
+    }
+
     private var cachedList: WKContentRuleList?
 
     func ruleList() async throws -> WKContentRuleList {

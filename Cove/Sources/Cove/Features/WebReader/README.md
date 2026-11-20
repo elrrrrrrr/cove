@@ -4,7 +4,7 @@
 
 - `SiteDefinition.swift`：模型、校验、CSS 提取编译和 JavaScript 契约。
 - `SiteDefinitionStore.swift`：本地保存、首次导入与已有配置关联。
-- `SiteSetupWizard.swift` / `SiteElementPicker.swift`：点选、高级编辑与预览。
+- `SiteConfigEditor.swift`：完整 `.site` YAML 编辑、校验与导出。
 - `PageLoader.swift`：加载、提取和分页。
 - `VideoURLExtractor.swift`：配置驱动的视频详情提取和通用兜底。
 - `SiteTransforms.swift`：通用门户、图片转换能力。

@@ -142,7 +142,7 @@ extension ConfigBackup {
                 if item.modelContext == nil { item.id = value.id; context.insert(item) }
                 item.name = value.name; item.urlString = value.urlString
                 item.category = SiteCategory(rawValue: value.category) ?? .other
-                item.note = value.note; item.sortOrder = value.sortOrder; item.parserOverrides = value.parserConfig
+                item.note = value.note; item.sortOrder = value.sortOrder
                 item.definitionID = value.definitionID; item.entryID = value.entryID
                 if let date = value.createdAt { item.createdAt = date }; item.faviconData = value.faviconData
             }

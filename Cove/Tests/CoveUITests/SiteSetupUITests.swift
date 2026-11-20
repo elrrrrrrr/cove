@@ -11,11 +11,6 @@ import Network
         let management = app.buttons["管理网站"]
         reveal(management, in: app); management.tap()
         app.buttons["添加或导入站点"].tap(); app.buttons["创建站点规则"].tap()
-        let name = app.textFields["站点名称"]
-        XCTAssertTrue(name.waitForExistence(timeout: 5)); name.tap(); name.typeText(title)
-        let address = app.textFields["入口 URL"]
-        address.tap(); address.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 8)); address.typeText(server.url)
-        app.buttons["创建配置并打开页面"].tap(); app.segmentedControls.buttons["高级"].tap()
         let yaml = app.textViews["完整站点 YAML"]
         XCTAssertTrue(yaml.waitForExistence(timeout: 5))
         replaceCode(yaml, with: """
@@ -58,58 +53,15 @@ import Network
         XCTAssertTrue(app.navigationBars["网站"].waitForExistence(timeout: 5))
         let cell = app.cells.containing(.staticText, identifier: title).firstMatch
         reveal(cell, in: app)
-        let screenshot = XCTAttachment(screenshot: app.screenshot())
-        screenshot.name = "management-configuration-button"; screenshot.lifetime = .keepAlways; add(screenshot)
         let requests = server.requestCount.value
         cell.buttons["site-configuration-button"].tap()
         XCTAssertTrue(app.navigationBars["站点配置"].waitForExistence(timeout: 5))
-        XCTAssertEqual(app.segmentedControls.count, 0, "Configuration must show a single editor without wizard tabs")
-        XCTAssertEqual(app.buttons["site-configuration-tools"].value as? String, "表单")
-        let formName = app.descendants(matching: .any).matching(identifier: "schema-form-name").firstMatch
-        XCTAssertTrue(formName.waitForExistence(timeout: 5))
-        let formTitle = title + " 表单编辑"
-        replaceCode(formName, with: formTitle, in: app)
-        app.buttons["schema-form-entries"].tap()
-        app.buttons["schema-form-entries.0"].tap()
-        let entryPath = app.descendants(matching: .any).matching(identifier: "schema-form-entries.0.path").firstMatch
-        XCTAssertTrue(entryPath.waitForExistence(timeout: 5))
-        replaceCode(entryPath, with: server.url + "/updated", in: app)
-        app.navigationBars[title].buttons.firstMatch.tap()
-        app.navigationBars["入口"].buttons.firstMatch.tap()
-        app.buttons["schema-form-rules"].tap()
-        app.buttons["schema-form-rules.0"].tap()
-        app.buttons["schema-form-rules.0.load"].tap()
-        let wait = app.descendants(matching: .any).matching(identifier: "schema-form-rules.0.load.waitSeconds").firstMatch
-        XCTAssertTrue(wait.waitForExistence(timeout: 5))
-        replaceCode(wait, with: "0.75", in: app)
-        XCTAssertEqual(wait.value as? String, "0.75")
-        app.navigationBars["加载方式"].buttons.firstMatch.tap()
-        app.navigationBars["catalog"].buttons.firstMatch.tap()
-        app.navigationBars["解析规则"].buttons.firstMatch.tap()
-        let formScreenshot = XCTAttachment(screenshot: app.screenshot())
-        formScreenshot.name = "interactive-schema-form"; formScreenshot.lifetime = .keepAlways; add(formScreenshot)
-        chooseConfigurationTool("查看源码", in: app)
         XCTAssertTrue(yaml.waitForExistence(timeout: 5))
-        XCTAssertTrue((yaml.value as? String)?.contains(formTitle) == true)
-        let waitLine = (yaml.value as? String)?.components(separatedBy: .newlines).first { $0.contains("waitSeconds:") }
-        let waitValue = waitLine?.split(separator: ":", maxSplits: 1).last.map { String($0).trimmingCharacters(in: .whitespaces) }
-        XCTAssertEqual(waitValue.flatMap(Double.init), 0.75)
-        XCTAssertTrue((yaml.value as? String)?.contains("/updated") == true)
-        chooseConfigurationTool("表单编辑", in: app)
-        XCTAssertEqual(formName.value as? String, formTitle)
-        app.buttons["保存"].tap()
-        XCTAssertTrue(app.navigationBars["网站"].waitForExistence(timeout: 5))
-        cell.buttons["site-configuration-button"].tap()
-        XCTAssertTrue(app.navigationBars["站点配置"].waitForExistence(timeout: 5))
-        XCTAssertEqual(formName.value as? String, formTitle)
-        chooseConfigurationTool("查看源码", in: app)
         let original = try XCTUnwrap(yaml.value as? String)
         for field in ["schemaVersion: 1", "entries:", "rules:", "portal:", "images:", "id: detail", "id: books"] {
             XCTAssertTrue(original.contains(field), "Complete configuration must include \(field)")
         }
         XCTAssertEqual(server.requestCount.value, requests, "Viewing configuration must not request the site")
-        let codeScreenshot = XCTAttachment(screenshot: app.screenshot())
-        codeScreenshot.name = "complete-site-configuration"; codeScreenshot.lifetime = .keepAlways; add(codeScreenshot)
 
         let renamed = title + " 已编辑"
         replaceCode(yaml, with: original.replacingOccurrences(of: title, with: renamed), in: app)
@@ -117,8 +69,14 @@ import Network
         XCTAssertTrue(app.navigationBars["网站"].waitForExistence(timeout: 5))
         cell.buttons["site-configuration-button"].tap()
         XCTAssertTrue(app.navigationBars["站点配置"].waitForExistence(timeout: 5))
-        chooseConfigurationTool("查看源码", in: app)
         XCTAssertEqual(yaml.value as? String, original, "Cancel must preserve the stored configuration")
+
+        let invalid = original + "\nunknownOption: true\n"
+        replaceCode(yaml, with: invalid, in: app)
+        app.buttons["保存"].tap()
+        XCTAssertTrue(yaml.exists, "Invalid source must remain open for repair")
+        XCTAssertEqual(yaml.value as? String, invalid)
+
         replaceCode(yaml, with: original.replacingOccurrences(of: title, with: renamed), in: app)
         app.buttons["保存"].tap()
         XCTAssertTrue(app.navigationBars["网站"].waitForExistence(timeout: 5))
@@ -126,34 +84,16 @@ import Network
         reveal(renamedCell, in: app)
         renamedCell.buttons["site-configuration-button"].tap()
         XCTAssertTrue(app.navigationBars["站点配置"].waitForExistence(timeout: 5))
-        chooseConfigurationTool("查看源码", in: app)
         let saved = try XCTUnwrap(yaml.value as? String)
-        let savedName = saved.components(separatedBy: .newlines).first { $0.hasPrefix("name:") }
-        XCTAssertTrue(savedName?.contains(renamed) == true, "Direct YAML save must retain the edited schema name")
+        XCTAssertTrue(saved.contains(renamed))
         XCTAssertTrue(saved.contains("portal:")); XCTAssertTrue(saved.contains("images:"))
-        let invalid = saved + "\nunknownOption: true\n"
-        replaceCode(yaml, with: invalid, in: app)
-        chooseConfigurationTool("表单编辑", in: app)
-        XCTAssertEqual(app.buttons["site-configuration-tools"].value as? String, "源码", "Invalid source must remain available for repair")
-        XCTAssertEqual(yaml.value as? String, invalid)
-        chooseConfigurationTool("基本设置", in: app)
-        XCTAssertTrue(yaml.exists, "Invalid source must also prevent leaving the editor through tools")
         XCTAssertEqual(server.requestCount.value, requests)
-        replaceCode(yaml, with: saved, in: app)
-        chooseConfigurationTool("基本设置", in: app)
-        XCTAssertTrue(app.textFields["站点名称"].waitForExistence(timeout: 5))
-        XCTAssertEqual(app.segmentedControls.count, 0)
-        chooseConfigurationTool("表单编辑", in: app)
-        XCTAssertTrue(formName.waitForExistence(timeout: 5))
-        chooseConfigurationTool("解析预览", in: app)
-        XCTAssertTrue(app.buttons["运行解析预览"].waitForExistence(timeout: 5))
-        chooseConfigurationTool("表单编辑", in: app)
-        XCTAssertEqual(formName.value as? String, renamed + " 表单编辑")
     }
 
     func testCreateCSSConfigurationAndEditCustomJavaScript() throws {
         let app = XCUIApplication()
         let title = "测试配置-" + String(UUID().uuidString.prefix(6))
+        let siteID = "ui.script." + UUID().uuidString.lowercased()
         app.launch()
         app.tabBars.buttons["设置"].tap()
         let management = app.buttons["管理网站"]
@@ -162,20 +102,31 @@ import Network
         management.tap()
         app.buttons["添加或导入站点"].tap()
         app.buttons["创建站点规则"].tap()
-        let name = app.textFields["站点名称"]
-        XCTAssertTrue(name.waitForExistence(timeout: 5))
-        name.tap(); name.typeText(title)
-        let address = app.textFields["入口 URL"]
-        address.tap()
-        address.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 8))
-        address.typeText("https://media.example/latest/")
-        app.buttons["创建配置并打开页面"].tap()
-        app.segmentedControls.buttons["高级"].tap()
-        XCTAssertEqual(app.segmentedControls.count, 1, "The guide must have only one row of steps")
         let yaml = app.textViews["完整站点 YAML"]
         XCTAssertTrue(yaml.waitForExistence(timeout: 5))
-        let cssText = try XCTUnwrap(yaml.value as? String)
-        XCTAssertTrue(cssText.contains("selector:"))
+        let starter = try XCTUnwrap(yaml.value as? String)
+        XCTAssertTrue(starter.contains("selector:"))
+        replaceCode(yaml, with: """
+        schemaVersion: 1
+        id: \(siteID)
+        name: \(title)
+        match:
+          hosts: [media.example]
+        entries:
+          - id: main
+            name: \(title)
+            path: https://media.example/latest/
+            category: video
+        rules:
+          - id: catalog
+            role: catalog
+            contentType: video
+            extract:
+              items: .card
+              fields:
+                title: {selector: .title, text: true}
+                url: {selector: a, attribute: href}
+        """, in: app)
         app.buttons["保存"].tap()
         XCTAssertTrue(app.navigationBars["网站"].waitForExistence(timeout: 5))
         let cell = app.cells.containing(.staticText, identifier: title).firstMatch
@@ -183,25 +134,34 @@ import Network
         XCTAssertTrue(cell.waitForExistence(timeout: 5))
         cell.swipeRight()
         app.buttons["解析规则"].tap()
-        app.segmentedControls.buttons["高级"].tap()
-        chooseConfigurationTool("JavaScript", in: app)
-        app.buttons["清空脚本"].tap()
-        let script = app.textViews["自定义 JavaScript"]
-        script.tap()
-        script.typeText("return [{title:'自定义内容',url:'https://media.example/watch/1'}];")
-        XCTAssertTrue((script.value as? String)?.contains("自定义内容") == true)
+        XCTAssertTrue(yaml.waitForExistence(timeout: 5))
+        replaceCode(yaml, with: """
+        schemaVersion: 1
+        id: \(siteID)
+        name: \(title)
+        match:
+          hosts: [media.example]
+        entries:
+          - id: main
+            name: \(title)
+            path: https://media.example/latest/
+            category: video
+        rules:
+          - id: catalog
+            role: catalog
+            contentType: video
+            extract:
+              script: |
+                return [{title:'自定义内容',url:'https://media.example/watch/1'}];
+        """, in: app)
         app.buttons["保存"].tap()
         XCTAssertTrue(app.navigationBars["网站"].waitForExistence(timeout: 5))
         reveal(cell, in: app)
         cell.swipeRight()
         app.buttons["解析规则"].tap()
-        app.segmentedControls.buttons["高级"].tap()
         let persisted = try XCTUnwrap(app.textViews["完整站点 YAML"].value as? String)
         XCTAssertTrue(persisted.contains("自定义内容"))
         XCTAssertTrue(persisted.contains("script:"))
-        let screenshot = XCTAttachment(screenshot: app.screenshot())
-        screenshot.lifetime = .keepAlways
-        add(screenshot)
     }
     func testVideoTagSearchDoesNotAlsoPresentPlayer() throws {
         let server = try LocalPageServer()
@@ -216,23 +176,9 @@ import Network
         management.tap()
         app.buttons["添加或导入站点"].tap()
         app.buttons["创建站点规则"].tap()
-        let name = app.textFields["站点名称"]
-        XCTAssertTrue(name.waitForExistence(timeout: 5))
-        name.tap(); name.typeText(title)
-        let address = app.textFields["入口 URL"]
-        address.tap()
-        address.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 8))
-        address.typeText(server.url)
-        app.buttons["创建配置并打开页面"].tap()
-        app.segmentedControls.buttons["高级"].tap()
-        XCTAssertEqual(app.segmentedControls.count, 1, "The guide must have only one row of steps")
         let yaml = app.textViews["完整站点 YAML"]
         XCTAssertTrue(yaml.waitForExistence(timeout: 5))
-        yaml.tap(); yaml.press(forDuration: 1)
-        let selectAll = app.menuItems["Select All"].exists ? app.menuItems["Select All"] : app.menuItems["全选"]
-        XCTAssertTrue(selectAll.waitForExistence(timeout: 3))
-        selectAll.tap()
-        yaml.typeText("""
+        replaceCode(yaml, with: """
         schemaVersion: 1
         id: ui.tags.\(UUID().uuidString)
         name: \(title)
@@ -251,7 +197,7 @@ import Network
             extract:
               script: |
                 return [{title:'交互视频',url:'/watch/1',extra:'交互标签'}];
-        """)
+        """, in: app)
         app.buttons["保存"].tap()
         let cell = app.cells.containing(.staticText, identifier: title).firstMatch
         reveal(cell, in: app)
@@ -263,9 +209,6 @@ import Network
         let search = app.navigationBars["交互标签"]
         XCTAssertTrue(search.waitForExistence(timeout: 5))
         XCTAssertTrue(search.isHittable, "Tag search must remain visible without a player covering it")
-        let screenshot = XCTAttachment(screenshot: app.screenshot())
-        screenshot.lifetime = .keepAlways
-        add(screenshot)
         search.buttons.firstMatch.tap()
         let gallery = app.navigationBars[title]
         XCTAssertTrue(gallery.waitForExistence(timeout: 5))
@@ -283,8 +226,6 @@ import Network
                 search.buttons.firstMatch.tap()
                 XCTAssertTrue(gallery.waitForExistence(timeout: 5))
             }
-            let attachment = XCTAttachment(screenshot: app.screenshot())
-            attachment.name = "web-" + layout; attachment.lifetime = .keepAlways; add(attachment)
         }
         app.staticTexts["交互视频"].tap()
         let presented = XCTNSPredicateExpectation(predicate: NSPredicate(format: "isHittable == false"), object: gallery)
@@ -300,16 +241,9 @@ import Network
         let management = app.buttons["管理网站"]
         reveal(management, in: app); management.tap()
         app.buttons["添加或导入站点"].tap(); app.buttons["创建站点规则"].tap()
-        let name = app.textFields["站点名称"]
-        XCTAssertTrue(name.waitForExistence(timeout: 5)); name.tap(); name.typeText(title)
-        let address = app.textFields["入口 URL"]
-        address.tap(); address.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 8)); address.typeText(server.url)
-        app.buttons["创建配置并打开页面"].tap(); app.segmentedControls.buttons["高级"].tap()
         let yaml = app.textViews["完整站点 YAML"]
-        XCTAssertTrue(yaml.waitForExistence(timeout: 5)); yaml.tap(); yaml.press(forDuration: 1)
-        let selectAll = app.menuItems["Select All"].exists ? app.menuItems["Select All"] : app.menuItems["全选"]
-        XCTAssertTrue(selectAll.waitForExistence(timeout: 3)); selectAll.tap()
-        yaml.typeText("""
+        XCTAssertTrue(yaml.waitForExistence(timeout: 5))
+        replaceCode(yaml, with: """
         schemaVersion: 1
         id: ui.directories.\(UUID().uuidString)
         name: \(title)
@@ -327,7 +261,7 @@ import Network
             extract:
               script: |
                 return [{title:'子目录',url:'/sub'}];
-        """)
+        """, in: app)
         app.buttons["保存"].tap()
         XCTAssertTrue(app.navigationBars["网站"].waitForExistence(timeout: 5))
         let cell = app.cells.containing(.staticText, identifier: title).firstMatch
@@ -343,13 +277,6 @@ import Network
         reveal(management, in: app); management.tap(); reveal(cell, in: app); cell.tap()
         XCTAssertTrue(app.buttons["browser-layout-menu"].waitForExistence(timeout: 5))
         XCTAssertEqual(app.buttons["browser-layout-menu"].value as? String, "Bento")
-    }
-
-    private func chooseConfigurationTool(_ title: String, in app: XCUIApplication) {
-        let menu = app.buttons["site-configuration-tools"]
-        XCTAssertTrue(menu.waitForExistence(timeout: 5)); menu.tap()
-        let action = app.buttons[title]
-        XCTAssertTrue(action.waitForExistence(timeout: 3)); action.tap()
     }
 
     private func replaceCode(_ editor: XCUIElement, with text: String, in app: XCUIApplication) {

@@ -32,7 +32,6 @@ import WebKit
         XCTAssertEqual(parser.itemKind.stringValue, "article"); XCTAssertEqual(parser.galleryLayout, .list)
         XCTAssertNotNil(value.rule(for: URL(string: "https://news.ycombinator.com/item?id=1")!, role: "article"))
         XCTAssertNil(value.rule(for: URL(string: "https://articles.example/item?id=1")!, role: "article"))
-        if case .bool = SiteFormSpec.kind("content", type: "field") {} else { XCTFail("Content must have a Boolean form control") }
         var invalid = value; invalid.rules[1].extract = .init(fields: ["title": .init(text: true)])
         XCTAssertThrowsError(try invalid.validate())
         XCTAssertThrowsError(try SiteField(selector: "main", attribute: "src", content: true).validate())
