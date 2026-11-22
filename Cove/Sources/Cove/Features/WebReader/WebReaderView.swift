@@ -270,28 +270,19 @@ struct WebViewRepresentable: UIViewRepresentable {
 @MainActor
 final class WebCoordinator {
 
-    let webView: WKWebView = {
-        let config = WKWebViewConfiguration()
-        config.websiteDataStore              = .default()
-        config.allowsInlineMediaPlayback     = true
-        config.mediaTypesRequiringUserActionForPlayback = []
-
-        let prefs = WKWebpagePreferences()
-        prefs.allowsContentJavaScript = true
-        config.defaultWebpagePreferences = prefs
-
-        let wv = WKWebView(frame: .zero, configuration: config)
-        wv.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"
-        wv.allowsBackForwardNavigationGestures = true
-        return wv
-    }()
+    let webView: WKWebView = WebScript.makeWebView(
+        allowsInlineMediaPlayback: true,
+        mediaTypesRequiringUserActionForPlayback: [],
+        allowsBackForwardNavigationGestures: true
+    )
 
     var currentURL: URL? { webView.url }
 
     func loadBlocker() async {
+        webView.configuration.userContentController.removeAllContentRuleLists()
+        guard ContentBlocker.isEnabled else { return }
         do {
             let list = try await ContentBlocker.shared.ruleList()
-            webView.configuration.userContentController.removeAllContentRuleLists()
             webView.configuration.userContentController.add(list)
         } catch {
             print("Content blocker failed: \(error)")

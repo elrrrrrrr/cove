@@ -29,8 +29,7 @@ struct SiteCatalogNavigation {
         keyword = ""
     }
 
-    func parser(definitionID: String?, overrides: SiteParserOverrides? = nil) -> SiteParser {
+    func parser(definitionID: String?) -> SiteParser {
         SiteParserRegistry.parser(for: currentURL?.absoluteString ?? entryURLString, definitionID: definitionID)
-            .applying(overrides)
     }
 }

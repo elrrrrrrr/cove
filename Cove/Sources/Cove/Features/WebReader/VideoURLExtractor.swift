@@ -34,10 +34,6 @@ enum DetailParserRegistry {
     static func js(for url: URL, definitionID: String? = nil) -> String {
         SiteParserRegistry.rule(for: url, role: "video", definitionID: definitionID)?.extract?.javascript ?? genericJS
     }
-    static func tagsJS(for url: URL, definitionID: String? = nil) -> String? {
-        guard let script = SiteParserRegistry.rule(for: url, role: "tags", definitionID: definitionID)?.extract?.javascript else { return nil }
-        return "(async function(){ const raw = await (\(script)); const value = typeof raw === 'string' ? JSON.parse(raw) : raw; return JSON.stringify(Array.isArray(value) ? value : value?.tags || []); })()"
-    }
     private static let genericJS = #"""
     (function() {
         const video = document.querySelector('video');
@@ -64,8 +60,6 @@ final class VideoURLExtractor: NSObject {
     enum State: Equatable { case loading, found(VideoResult), notFound }
 
     var state: State = .loading
-    /// Tags extracted by the configured detail-page rule.
-    var detailTags: [String] = []
     /// Non-nil after a failed extraction — describes what was found on the page.
     var diagnostic: String? = nil
     let webView: WKWebView
@@ -84,13 +78,7 @@ final class VideoURLExtractor: NSObject {
     }
 
     override init() {
-        let cfg = WKWebViewConfiguration()
-        cfg.websiteDataStore = .default()
-        let prefs = WKWebpagePreferences()
-        prefs.allowsContentJavaScript = true
-        cfg.defaultWebpagePreferences = prefs
-        let wv = WKWebView(frame: .zero, configuration: cfg)
-        wv.customUserAgent = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"
+        let wv = WebScript.makeWebView()
         self.webView = wv
         super.init()
         wv.navigationDelegate = self
@@ -159,11 +147,6 @@ final class VideoURLExtractor: NSObject {
         }
         let js = DetailParserRegistry.js(for: url, definitionID: definitionID)
 
-        // Extract configured detail-page tags on the first pass
-        if let tagsJS = DetailParserRegistry.tagsJS(for: url, definitionID: definitionID) {
-            await extractTags(js: tagsJS)
-        }
-
         // Try immediately first — media URLs may be embedded in an
         // inline <script> that's fully parsed by the time didFinish fires.
         // Only poll if the first attempt misses (e.g. JS-driven lazy player init).
@@ -194,13 +177,6 @@ final class VideoURLExtractor: NSObject {
             request.setValue(value, forHTTPHeaderField: key)
         }
         return request
-    }
-
-    private func extractTags(js: String) async {
-        guard let raw = try? await WebScript.evaluate(js, in: webView) as? String,
-              let data = raw.data(using: .utf8),
-              let tags = try? JSONDecoder().decode([String].self, from: data) else { return }
-        detailTags = tags
     }
 
     // MARK: - Diagnostic (runs after extraction fails)

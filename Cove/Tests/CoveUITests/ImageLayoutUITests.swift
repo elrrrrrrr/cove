@@ -14,11 +14,6 @@ import UIKit
         app.launch(); app.tabBars.buttons["设置"].tap()
         let management = app.buttons["管理网站"]; reveal(management, in: app); management.tap()
         app.buttons["添加或导入站点"].tap(); app.buttons["创建站点规则"].tap()
-        let name = app.textFields["站点名称"]
-        XCTAssertTrue(name.waitForExistence(timeout: 5)); name.tap(); name.typeText(title)
-        let address = app.textFields["入口 URL"]
-        address.tap(); address.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 8)); address.typeText(server.url)
-        app.buttons["创建配置并打开页面"].tap(); app.segmentedControls.buttons["高级"].tap()
         let editor = app.textViews["完整站点 YAML"]
         XCTAssertTrue(editor.waitForExistence(timeout: 5)); editor.tap(); editor.press(forDuration: 1)
         let all = app.menuItems["Select All"].exists ? app.menuItems["Select All"] : app.menuItems["全选"]

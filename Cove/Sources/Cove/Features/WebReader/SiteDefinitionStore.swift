@@ -64,7 +64,7 @@ final class SiteDefinitionStore {
                     bookmark.category = SiteCategory(configurationValue: next.category) ?? bookmark.category
                 }
             }
-            existing.definitionID = value.id; existing.parserOverrides = nil
+            existing.definitionID = value.id
             var additions = value
             additions.entries = value.entries.filter { entry in
                 if let previous { return !previous.entries.contains { $0.id == entry.id } }

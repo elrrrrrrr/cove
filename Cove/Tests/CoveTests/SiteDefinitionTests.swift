@@ -104,7 +104,6 @@ import SwiftData
         defer { SiteParserRegistry.replaceDefinitions(saved) }
         let library = store(), context = try context()
         let bookmark = BookmarkSite(name: "我的入口", urlString: "https://media.example/latest/")
-        bookmark.parserOverrides = SiteParserOverrides(extractItemsJS: "JSON.stringify([])")
         let favorite = FavoriteVideo(title: "旧收藏", pageURLString: "https://media.example/watch/1")
         let history = ReadingHistory(title: "旧历史", url: "https://media.example/watch/1", fileType: .video)
         context.insert(bookmark); context.insert(favorite); context.insert(history); try context.save()
@@ -113,7 +112,6 @@ import SwiftData
         XCTAssertEqual(bookmark.definitionID, "example.media")
         XCTAssertEqual(favorite.definitionID, "example.media")
         XCTAssertEqual(history.definitionID, "example.media")
-        XCTAssertEqual(bookmark.parserOverrides?.extractItemsJS, "JSON.stringify([])")
     }
 
     func testImportReplaceAndCopyPreserveEntryIdentity() throws {
@@ -170,15 +168,14 @@ import SwiftData
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<NASConfig>()), 1)
     }
 
-    func testBackupRoundTripUsesOnlyCurrentSchemaAndKeepsOverrides() throws {
+    func testBackupRoundTripUsesOnlyCurrentSchemaAndIgnoresLegacyParserConfig() throws {
         let context = try context()
         let site = BookmarkSite(name: "测试", urlString: "https://media.example/latest/", note: "说明", sortOrder: 4)
-        site.parserOverrides = SiteParserOverrides(extractItemsJS: "return []; ")
         context.insert(site); try context.save()
         let backup = ConfigBackup.export(sites: [site], nasConfigs: [], fontSize: 18, theme: .dark, blockerEnabled: true, readingMode: .scroll)
         let file = try backup.writeToTempFile()
         defer { try? FileManager.default.removeItem(at: file) }
-        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
         XCTAssertEqual(json["schemaVersion"] as? Int, 1); XCTAssertNil(json["version"])
         let loaded = try ConfigBackup.read(from: file)
         XCTAssertEqual(loaded.settings.novelReadingMode, "scroll")
@@ -186,7 +183,13 @@ import SwiftData
         XCTAssertThrowsError(try invalid.validate())
         XCTAssertEqual(loaded.sites.first?.id, site.id)
         XCTAssertEqual(loaded.sites.first?.note, "说明")
-        XCTAssertEqual(loaded.sites.first?.parserConfig?.extractItemsJS, "return []; ")
+        // Legacy backups carrying removed parserConfig remain readable under schemaVersion 1.
+        var sitesJSON = try XCTUnwrap(json["sites"] as? [[String: Any]])
+        sitesJSON[0]["parserConfig"] = ["extractItemsJS": "return [];"]
+        json["sites"] = sitesJSON
+        let legacyBytes = try JSONSerialization.data(withJSONObject: json)
+        let decodedLegacy = try ConfigBackup.decode(legacyBytes)
+        XCTAssertEqual(decodedLegacy.sites.first?.id, site.id)
     }
 
     func testSingleSchemaExportsHaveNoExtraVersionField() throws {

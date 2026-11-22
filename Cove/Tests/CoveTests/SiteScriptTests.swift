@@ -89,32 +89,6 @@ import WebKit
             }
         }
     }
-
-    func testPagePointSelectionProducesReusableRelativeSelectors() async throws {
-        let picker = SiteElementPicker()
-        let page = FixturePage(webView: picker.webView)
-        try await page.load(#"<article class="card"><span class="title">第一项</span><a href="/watch/1">打开</a></article><article class="card"><span class="title">第二项</span></article>"#)
-        _ = try await picker.webView.callAsyncJavaScript("window.__covePickField='items'; document.querySelector('.title').click();", arguments: [:], in: nil, contentWorld: .page)
-        for _ in 0..<100 {
-            if picker.selection != nil { break }
-            try await Task.sleep(for: .milliseconds(10))
-        }
-        let card = try XCTUnwrap(picker.selection)
-        XCTAssertEqual(card.field, "items")
-        let count = try await picker.webView.callAsyncJavaScript("return document.querySelectorAll(selector).length;", arguments: ["selector": card.selector], in: nil, contentWorld: .page)
-        XCTAssertEqual(count as? Int, 2)
-        picker.selection = nil
-        _ = try await picker.webView.callAsyncJavaScript("window.__covePickField='title'; window.__covePickItems=items; document.querySelector('.title').click();", arguments: ["items": card.selector], in: nil, contentWorld: .page)
-        for _ in 0..<100 {
-            if picker.selection != nil { break }
-            try await Task.sleep(for: .milliseconds(10))
-        }
-        let title = try XCTUnwrap(picker.selection)
-        XCTAssertEqual(title.field, "title")
-        XCTAssertEqual(title.value, "第一项")
-        let relative = try await picker.webView.callAsyncJavaScript("return document.querySelector(items).querySelector(selector).textContent;", arguments: ["items": card.selector, "selector": title.selector], in: nil, contentWorld: .page)
-        XCTAssertEqual(relative as? String, "第一项")
-    }
 }
 
 @MainActor private final class FixturePage: NSObject, WKNavigationDelegate {

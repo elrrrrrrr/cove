@@ -76,7 +76,7 @@ actor ImagePipeline {
             let config = URLSessionConfiguration.default
             config.urlCache = nil; config.requestCachePolicy = .reloadIgnoringLocalCacheData
             config.httpAdditionalHeaders = [
-                "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1",
+                "User-Agent": WebScript.mobileUserAgent,
                 "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8"
             ]
             self.session = URLSession(configuration: config)
