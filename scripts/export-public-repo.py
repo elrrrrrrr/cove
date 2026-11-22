@@ -7,7 +7,7 @@ import shutil
 import subprocess
 
 PRIVATE_ROOTS = {"sites", "data", "config", "public-export"}
-GENERATED = {".git", "DerivedData", "build", ".build", ".swiftpm", ".claude", "__pycache__"}
+GENERATED = {".git", "DerivedData", "build", ".build", ".swiftpm", ".claude", ".agents", "__pycache__"}
 SECRET_EXTENSIONS = {".pem", ".key", ".p8", ".p12", ".pfx", ".keystore", ".mobileprovision"}
 SECRET_NAMES = {"id_rsa", "id_ed25519", "credentials.json", ".credentials", ".netrc"}
 TOKEN_PATTERNS = [

@@ -12,8 +12,9 @@ build/
 *.swp
 *~
 
-# Claude
+# Local AI agents
 .claude/
+.agents/
 
 # Local content/configuration, excluded from public distribution
 /sites/

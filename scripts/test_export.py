@@ -14,7 +14,8 @@ class ExportPolicyTests(unittest.TestCase):
                      "config/site-tests/cases.json", "config/site-tests/source/cover.bin",
                      "Nested/.env", ".env.production", "keys/signing.p8", "cert.p12",
                      "Nested/id_ed25519", ".netrc", "Nested/credentials.json",
-                     "Other/Cove.xcodeproj/project.pbxproj", "private-copy.site", "Nested/PRIVATE.SITE"]:
+                     "Other/Cove.xcodeproj/project.pbxproj", "private-copy.site", "Nested/PRIVATE.SITE",
+                     ".agents/skills/local/SKILL.md"]:
             with self.subTest(path=path):
                 self.assertFalse(module.allowed_path(Path(path)))
 
