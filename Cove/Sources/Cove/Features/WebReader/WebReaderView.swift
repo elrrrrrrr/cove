@@ -279,17 +279,15 @@ final class WebCoordinator {
     var currentURL: URL? { webView.url }
 
     func loadBlocker() async {
-        webView.configuration.userContentController.removeAllContentRuleLists()
-        guard ContentBlocker.isEnabled else { return }
-        do {
-            let list = try await ContentBlocker.shared.ruleList()
-            webView.configuration.userContentController.add(list)
-        } catch {
-            print("Content blocker failed: \(error)")
-        }
+        await ContentBlocker.sync(to: webView)
     }
 
-    func reload()     { webView.reload() }
+    func reload() {
+        Task {
+            await loadBlocker()
+            webView.reload()
+        }
+    }
     func goBack()     { webView.goBack() }
     func goForward()  { webView.goForward() }
 }

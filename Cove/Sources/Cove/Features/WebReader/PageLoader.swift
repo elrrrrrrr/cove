@@ -78,14 +78,7 @@ final class PageLoader: NSObject {
             win.rootViewController = UIViewController()
             win.rootViewController?.view.addSubview(wv)
             _backgroundWindow = win
-            // Apply content blocker asynchronously when enabled
-            if ContentBlocker.isEnabled {
-                Task { [weak wv] in
-                    if let list = try? await ContentBlocker.shared.ruleList() {
-                        wv?.configuration.userContentController.add(list)
-                    }
-                }
-            }
+            syncBlocker(for: wv)
             return wv
         }
         set { _webView = newValue }
@@ -95,6 +88,7 @@ final class PageLoader: NSObject {
     private var allItems : [ParsedItem] = []
     private var ajaxTask: Task<Void, Never>?
     private var loadTask: Task<Void, Never>?
+    private var blockerTask: Task<Void, Never>?
     private var loadID = UUID()
     private var refreshWaiters: [UUID: CheckedContinuation<Void, Never>] = [:]
     private var loadTimeoutTask: Task<Void, Never>?
@@ -132,6 +126,7 @@ final class PageLoader: NSObject {
         finishRefreshes()
         loadID = UUID()
         _webView?.stopLoading()
+        if let wv = _webView { syncBlocker(for: wv) }
         if forceRefresh || self.parser?.portal != parser.portal { resolvedHost = nil }
         self.parser     = parser
         self.currentURL = url
@@ -289,6 +284,16 @@ final class PageLoader: NSObject {
             guard state.isActive, !Task.isCancelled else { return }
             await withCheckedContinuation { refreshWaiters[id] = $0 }
         } onCancel: { Task { @MainActor in self.refreshWaiters.removeValue(forKey: id)?.resume() } }
+    }
+
+    private func syncBlocker(for wv: WKWebView) {
+        blockerTask?.cancel()
+        wv.configuration.userContentController.removeAllContentRuleLists()
+        guard ContentBlocker.isEnabled else { return }
+        blockerTask = Task { [weak wv] in
+            guard let wv else { return }
+            await ContentBlocker.sync(to: wv)
+        }
     }
 
     private func finishRefreshes() {

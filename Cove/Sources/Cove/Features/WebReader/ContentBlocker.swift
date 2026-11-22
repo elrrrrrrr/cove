@@ -4,9 +4,20 @@ import WebKit
 actor ContentBlocker {
     static let shared = ContentBlocker()
 
-    static var isEnabled: Bool {
-        UserDefaults.standard.object(forKey: "contentBlockerEnabled") == nil
-            || UserDefaults.standard.bool(forKey: "contentBlockerEnabled")
+    static var isEnabled: Bool { isEnabled(in: .standard) }
+
+    static func isEnabled(in defaults: UserDefaults) -> Bool {
+        defaults.object(forKey: "contentBlockerEnabled") == nil
+            || defaults.bool(forKey: "contentBlockerEnabled")
+    }
+
+    @MainActor static func sync(to webView: WKWebView, defaults: UserDefaults = .standard) async {
+        let controller = webView.configuration.userContentController
+        controller.removeAllContentRuleLists()
+        guard isEnabled(in: defaults) else { return }
+        guard let list = try? await shared.ruleList(), !Task.isCancelled, isEnabled(in: defaults) else { return }
+        controller.removeAllContentRuleLists()
+        controller.add(list)
     }
 
     private var cachedList: WKContentRuleList?
