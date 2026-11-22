@@ -37,12 +37,44 @@
     }
   },
   {
-    "trigger": {
-      "url-filter": "(ads|advertisement|banner|popup|tracker|tracking|analytics|pixel|beacon|telemetry)\\."
-    },
-    "action": {
-      "type": "block"
-    }
+    "trigger": { "url-filter": "ads\\." },
+    "action": { "type": "block" }
+  },
+  {
+    "trigger": { "url-filter": "advertisement\\." },
+    "action": { "type": "block" }
+  },
+  {
+    "trigger": { "url-filter": "banner\\." },
+    "action": { "type": "block" }
+  },
+  {
+    "trigger": { "url-filter": "popup\\." },
+    "action": { "type": "block" }
+  },
+  {
+    "trigger": { "url-filter": "tracker\\." },
+    "action": { "type": "block" }
+  },
+  {
+    "trigger": { "url-filter": "tracking\\." },
+    "action": { "type": "block" }
+  },
+  {
+    "trigger": { "url-filter": "analytics\\." },
+    "action": { "type": "block" }
+  },
+  {
+    "trigger": { "url-filter": "pixel\\." },
+    "action": { "type": "block" }
+  },
+  {
+    "trigger": { "url-filter": "beacon\\." },
+    "action": { "type": "block" }
+  },
+  {
+    "trigger": { "url-filter": "telemetry\\." },
+    "action": { "type": "block" }
   },
   {
     "trigger": {

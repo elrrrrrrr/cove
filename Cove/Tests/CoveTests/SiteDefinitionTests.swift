@@ -230,4 +230,18 @@ import SwiftData
         config.host = "nas.example"; config.port = 445; config.shareName = "media"
         XCTAssertFalse(config.requiresSMBSetup)
     }
+
+    func testContentBlockerPreferenceFollowsDefaults() async throws {
+        let list = try await ContentBlocker.shared.ruleList()
+        XCTAssertEqual(list.identifier, "CoveBlocker")
+        let prefs = defaults()
+        XCTAssertTrue(ContentBlocker.isEnabled(in: prefs))
+        prefs.set(false, forKey: "contentBlockerEnabled")
+        XCTAssertFalse(ContentBlocker.isEnabled(in: prefs))
+        let webView = WebScript.makeWebView()
+        await ContentBlocker.sync(to: webView, defaults: prefs)
+        prefs.set(true, forKey: "contentBlockerEnabled")
+        XCTAssertTrue(ContentBlocker.isEnabled(in: prefs))
+        await ContentBlocker.sync(to: webView, defaults: prefs)
+    }
 }
