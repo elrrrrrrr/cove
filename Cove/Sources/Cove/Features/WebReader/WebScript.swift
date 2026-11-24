@@ -26,9 +26,9 @@ import WebKit
     }
 
     nonisolated static func stripResourceTags(_ html: String) -> String {
-        html.replacingOccurrences(of: #"<script\b[^>]*>[\s\S]*?</script>"#, with: "", options: .regularExpression)
-            .replacingOccurrences(of: #"<script\b[^/]*/>"#, with: "", options: .regularExpression)
-            .replacingOccurrences(of: #"<link\b[^>]*>"#, with: "", options: .regularExpression)
+        html.replacingOccurrences(of: #"<script\b[^>]*>[\s\S]*?</script>"#, with: "", options: [.regularExpression, .caseInsensitive])
+            .replacingOccurrences(of: #"<script\b[^/]*/>"#, with: "", options: [.regularExpression, .caseInsensitive])
+            .replacingOccurrences(of: #"<link\b(?![^>]*\brel\s*=\s*["']?(?:next|prev)\b)[^>]*>"#, with: "", options: [.regularExpression, .caseInsensitive])
     }
 
     /// Execute expressions, including Promise-returning extraction hooks, in the page context.
