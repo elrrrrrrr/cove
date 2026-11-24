@@ -260,11 +260,14 @@ final class PageLoader: NSObject {
 
     /// If didFinish hasn't fired within 15 seconds, try extracting from whatever is loaded.
     private func startLoadTimeout() {
+        loadTimeoutTask?.cancel()
         loadTimeoutTask = Task {
             try? await Task.sleep(for: .seconds(15))
             guard !Task.isCancelled else { return }
             // Still loading — force extraction attempt
             if case .loading = state {
+                await extract()
+            } else if isLoadingMore {
                 await extract()
             }
         }
@@ -318,7 +321,15 @@ final class PageLoader: NSObject {
             ajaxTask = Task { await fetchAjaxPage(nextPage, js: js, thumbnailJS: thumbnailJS) }
         case .webNavigation:
             if let next = nextPageURL {
-                webView.load(URLRequest(url: next))
+                loadTask?.cancel()
+                loadTimeoutTask?.cancel()
+                isExtracting = false
+                log("loadMore: webNavigation → \(next.absoluteString)")
+                if p.needsJS {
+                    fallbackToWebView(url: next)
+                } else {
+                    loadTask = Task { await fetchAndLoad(url: next) }
+                }
             } else {
                 // Construct URL for next page by reloading at page N
                 goToPage(nextPage, parser: p)
@@ -365,7 +376,7 @@ final class PageLoader: NSObject {
             }
             let decoded  = try JSONDecoder().decode([RawItem].self, from: data)
             let base     = webView.url ?? currentURL!
-            let newItems = Array(decoded.compactMap { ParsedItem(from: $0, base: base) }.prefix(30))
+            let newItems = Array(decoded.compactMap { ParsedItem(from: $0, base: base) }.prefix(100))
             log("fetchAjaxPage: got \(newItems.count) items (raw=\(decoded.count))")
             if let first = newItems.first { log("fetchAjaxPage: first=\(first.pageURL.absoluteString)") }
             if let last = newItems.last { log("fetchAjaxPage: last=\(last.pageURL.absoluteString)") }
@@ -489,7 +500,8 @@ final class PageLoader: NSObject {
             guard generation == loadID, !Task.isCancelled else { return }
             guard let jsonString = value as? String, let data = jsonString.data(using: .utf8) else {
                 log("extract: extractItemsJS returned nil/empty")
-                if !isMore { state = .done(allItems) }
+                if isMore { paginationFailed = true }
+                else { state = .done(allItems) }
                 isLoadingMore = false
                 isExtracting = false
                 return
@@ -497,35 +509,18 @@ final class PageLoader: NSObject {
             guard generation == loadID, !Task.isCancelled else { return }
             let raw      = try JSONDecoder().decode([RawItem].self, from: data)
             let base     = webView.url ?? currentURL!
-            let newItems = Array(raw.compactMap { ParsedItem(from: $0, base: base) }.prefix(30))
+            let newItems = Array(raw.compactMap { ParsedItem(from: $0, base: base) }.prefix(100))
             log("extract: got \(newItems.count) items (raw=\(raw.count))")
             if let first = newItems.first {
                 log("extract: first item: title=\(first.title), thumb=\(first.thumbnail?.absoluteString ?? "nil")")
-            }
-
-            // Pagination detection
-            switch parser.paginationMode {
-            case .none:
-                nextPageURL = nil
-                hasNextPage = false
-
-            case .webNavigation(let npJS):
-                let nextHref = try? await WebScript.evaluate(npJS, in: webView) as? String
-                guard generation == loadID, !Task.isCancelled else { return }
-                nextPageURL  = nextHref.flatMap { URL(string: $0) }
-                hasNextPage  = false
-
-            case .ajax:
-                nextPageURL = nil
-                hasNextPage = !newItems.isEmpty
             }
 
             // Initial load: replace (SWR refresh overwrites stale cache).
             // loadMore: append for infinite scroll.
             if isMore {
                 if newItems.isEmpty {
-                    // Page loaded but extracted nothing — treat as pagination failure
-                    // so the retry button appears instead of silently disappearing.
+                    // Page loaded but extracted nothing — preserve nextPageURL and mark
+                    // paginationFailed so the retry button retries the same page.
                     log("extract: isMore=true but 0 items — marking paginationFailed")
                     paginationFailed = true
                     isLoadingMore    = false
@@ -538,6 +533,26 @@ final class PageLoader: NSObject {
                 allItems = newItems
                 currentPage = 1
             }
+
+            // Pagination detection (only advance nextPageURL after extracting valid items)
+            switch parser.paginationMode {
+            case .none:
+                nextPageURL = nil
+                hasNextPage = false
+
+            case .webNavigation(let npJS):
+                let loadedURL = webView.url ?? currentURL
+                let nextHref = try? await WebScript.evaluate(npJS, in: webView) as? String
+                guard generation == loadID, !Task.isCancelled else { return }
+                let resolvedNext = nextHref.flatMap { URL(string: $0, relativeTo: loadedURL)?.absoluteURL }
+                nextPageURL  = (resolvedNext != nil && resolvedNext != loadedURL) ? resolvedNext : nil
+                hasNextPage  = false
+
+            case .ajax:
+                nextPageURL = nil
+                hasNextPage = !newItems.isEmpty
+            }
+
             let snapshot = allItems
 
             // Only cache first page to avoid storing huge accumulated data
@@ -553,7 +568,8 @@ final class PageLoader: NSObject {
             isLoadingMore = false
             isExtracting  = false
             log("extract: error \(error.localizedDescription)")
-            if !isMore { state = .failed("提取失败：\(error.localizedDescription)") }
+            if isMore { paginationFailed = true }
+            else { state = .failed("提取失败：\(error.localizedDescription)") }
         }
     }
 
@@ -568,14 +584,22 @@ extension PageLoader: WKNavigationDelegate {
     nonisolated func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
         Task { @MainActor in
             guard (error as NSError).code != NSURLErrorCancelled else { return }
-            self.isLoadingMore = false
+            self.loadTimeoutTask?.cancel()
+            if self.isLoadingMore {
+                self.paginationFailed = true
+                self.isLoadingMore = false
+            }
             if case .loading = self.state { self.state = .failed(error.localizedDescription) }
         }
     }
     nonisolated func webView(_ webView: WKWebView, didFailProvisionalNavigation _: WKNavigation!, withError error: Error) {
         Task { @MainActor in
             guard (error as NSError).code != NSURLErrorCancelled else { return }
-            self.isLoadingMore = false
+            self.loadTimeoutTask?.cancel()
+            if self.isLoadingMore {
+                self.paginationFailed = true
+                self.isLoadingMore = false
+            }
             if case .loading = self.state { self.state = .failed(error.localizedDescription) }
         }
     }

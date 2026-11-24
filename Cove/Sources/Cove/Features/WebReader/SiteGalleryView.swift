@@ -296,16 +296,17 @@ struct SiteGalleryView: View {
 
     private func portraitLayout(_ items: [ParsedItem]) -> some View {
         let cols = Array(repeating: GridItem(.flexible(), spacing: 10), count: columns)
-        return Group {
-            LazyVGrid(columns: cols, spacing: 12) {
+        return LazyVGrid(columns: cols, spacing: 12) {
+            Section {
                 ForEach(items) { item in
                     portraitCard(for: item)
                 }
+            } footer: {
+                infiniteScrollFooter
             }
-            .scrollTargetLayout()
-            .padding(.horizontal, 12)
-            infiniteScrollFooter
         }
+        .scrollTargetLayout()
+        .padding(.horizontal, 12)
     }
 
     @ViewBuilder
@@ -522,10 +523,11 @@ struct SiteGalleryView: View {
             .frame(maxWidth: .infinity, minHeight: 60)
         } else if loader.canLoadMore || loader.isLoadingMore {
             // Show footer while loading OR when more pages are available.
-            // Keeping it visible during loading prevents the remove/re-add cycle
-            // that would cause onAppear to fire repeatedly (infinite loop).
+            // Keying on currentPage keeps identity stable during a load (preventing
+            // remove/re-add loops) while letting short pages re-trigger after appending.
             ProgressView()
                 .frame(maxWidth: .infinity, minHeight: 60)
+                .id("infinite-footer-page-\(loader.currentPage)")
                 .onAppear {
                     guard !loader.isLoadingMore else { return }
                     loader.loadMore()

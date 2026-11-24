@@ -2,11 +2,12 @@ import XCTest
 @testable import Cove
 
 @MainActor final class PageLoadingPerformanceTests: XCTestCase {
-    private func parser(for url: URL, script: String? = nil, ajax: String? = nil) -> SiteParser {
+    private func parser(for url: URL, script: String? = nil, ajax: String? = nil, nextLinkSelector: String? = nil) -> SiteParser {
         var definition = SiteDefinition.starter(name: "页面性能夹具", url: url)
         definition.rules[0].load = .init(mode: "auto", waitSeconds: 0)
         definition.rules[0].extract = .init(script: script ?? "return [{title:document.querySelector('h1').textContent,url:'/item'}];")
         if let ajax { definition.rules[0].pagination = .init(mode: "ajax", script: ajax) }
+        else if let nextLinkSelector { definition.rules[0].pagination = .init(mode: "webNavigation", selector: nextLinkSelector) }
         return SiteParserRegistry.parser(definition: definition, rule: definition.rules[0])
     }
     private func waitUntil(_ condition: () -> Bool) async throws {
@@ -63,4 +64,84 @@ import XCTest
         XCTAssertLessThanOrEqual(loader.parseLog.count, 200)
         XCTAssertTrue(loader.parseLog.last?.contains("first=") == true || loader.parseLog.last?.contains("last=") == true)
     }
+    func testStripResourceTagsPreservesPaginationLinksOnly() {
+        let html = """
+        <head>
+          <link rel="stylesheet" href="/app.css">
+          <link rel="next" href="/list/2/">
+          <LINK REL='prev' HREF='/list/1/'>
+          <script src="/app.js"></script>
+        </head>
+        """
+        let stripped = WebScript.stripResourceTags(html)
+        XCTAssertFalse(stripped.contains("stylesheet"))
+        XCTAssertFalse(stripped.contains("<script"))
+        XCTAssertTrue(stripped.contains(#"rel="next""#))
+        XCTAssertTrue(stripped.contains(#"REL='prev'"#))
+    }
+    func testWebNavigationPaginationLoadsMultiplePagesAndRetriesFailedPage() async throws {
+        let page2Attempts = LockedCounter()
+        let server = try ImageFixtureServer { request in
+            if request.contains("GET /p1 ") {
+                return Data(#"<html><head><link rel="stylesheet" href="/bad.css"><link rel="next" href="/p2"></head><body><h1>第1页</h1></body></html>"#.utf8)
+            }
+            if request.contains("GET /p2 ") {
+                if page2Attempts.next() == 1 {
+                    return Data("<html><body></body></html>".utf8)
+                }
+                return Data(#"<html><head><link rel="next" href="/p3"></head><body><h1>第2页</h1></body></html>"#.utf8)
+            }
+            return Data(#"<html><head><link rel="next" href="/p3"></head><body><h1>第3页</h1></body></html>"#.utf8)
+        }
+        defer { server.listener.cancel() }
+        let base = server.url.deletingLastPathComponent()
+        let p1 = base.appendingPathComponent("p1")
+        let p2 = base.appendingPathComponent("p2")
+        let p3 = base.appendingPathComponent("p3")
+        let rule = parser(
+            for: p1,
+            script: "const h = document.querySelector('h1'); return h ? [{title: h.textContent, url: location.pathname}] : [];",
+            nextLinkSelector: #"link[rel="next"]"#
+        )
+        let loader = PageLoader()
+        loader.load(url: p1, parser: rule)
+        try await waitUntil { !loader.state.isActive }
+        guard case .done(let page1Items) = loader.state else { return XCTFail("缺少第1页") }
+        XCTAssertEqual(page1Items.map(\.title), ["第1页"])
+        XCTAssertEqual(loader.nextPageURL, p2)
+        XCTAssertTrue(loader.canLoadMore)
+
+        // First attempt at page 2 returns empty DOM -> paginationFailed without losing p2 URL
+        loader.loadMore()
+        try await waitUntil { !loader.isLoadingMore }
+        XCTAssertTrue(loader.paginationFailed)
+        XCTAssertEqual(loader.nextPageURL, p2)
+        XCTAssertEqual(loader.currentPage, 1)
+
+        // Retry loads page 2 and advances nextPageURL to p3
+        loader.loadMore()
+        try await waitUntil { !loader.isLoadingMore }
+        XCTAssertFalse(loader.paginationFailed)
+        XCTAssertEqual(loader.currentPage, 2)
+        XCTAssertEqual(loader.nextPageURL, p3)
+        if case .done(let page2Items) = loader.state {
+            XCTAssertEqual(page2Items.map(\.title), ["第1页", "第2页"])
+        } else { XCTFail("缺少第2页") }
+
+        // Page 3 self-referencing next link stops pagination cleanly
+        loader.loadMore()
+        try await waitUntil { !loader.isLoadingMore }
+        XCTAssertEqual(loader.currentPage, 3)
+        XCTAssertNil(loader.nextPageURL)
+        XCTAssertFalse(loader.canLoadMore)
+        if case .done(let allItems) = loader.state {
+            XCTAssertEqual(allItems.map(\.title), ["第1页", "第2页", "第3页"])
+        } else { XCTFail("缺少第3页") }
+    }
+}
+
+private final class LockedCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = 0
+    func next() -> Int { lock.withLock { value += 1; return value } }
 }
