@@ -137,14 +137,13 @@ import CryptoKit
         }
         let client = SMBClient(config: NASConfig(name: "CoveDemo", host: "127.0.0.1:1445", port: 1445, username: "", shareName: "CoveDemo"))
         try await client.connect(password: "")
-        let connection = NASConnection.smb(client)
         let all = try await client.listDirectory()
         XCTAssertTrue(all.contains { $0.fileType == .video }); XCTAssertTrue(all.contains { $0.fileType == .cbz })
         XCTAssertTrue(all.contains { $0.fileType == .txt }); XCTAssertTrue(all.contains { $0.fileType == .pdf })
         let names = ["赵雷 — 无法长大.jpg", "Rust 学习指南.epub", "山谷慢行.mp4", "沿海来信.jpg", "沿途音频.opus", "沿途绘本.cbz", "阅读空间.txt", "Cove 使用手记.pdf", "森林回声.jpg", "夜航手记.jpg", "城市漫游.jpg", "星际日记.jpg"]
         let entries = names.compactMap { name in all.first { $0.name == name } }
         for layout in [BrowserLayout.list, .bento] {
-            try await capture(ExampleNAS(entries: entries, connection: connection, layout: layout), name: "nas-" + layout.rawValue,
+            try await capture(ExampleNAS(entries: entries, connection: client, layout: layout), name: "nas-" + layout.rawValue,
                               container: container, expectsPictures: layout != .list)
         }
         await client.disconnect()
@@ -245,7 +244,7 @@ private struct PreviewTrack: Decodable {
 
 private struct ExampleNAS: View {
     let entries: [NASFileEntry]
-    let connection: NASConnection
+    let connection: SMBClient
     @State var layout: BrowserLayout
     var body: some View {
         NavigationStack {

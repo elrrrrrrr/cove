@@ -200,6 +200,33 @@ import CryptoKit
         do { _ = try await worker.synchronize(local: bytes, baseline: nil, folder: root, dataRoot: root, recovery: root.appendingPathComponent("R")); XCTFail("Must reject symlink") } catch { }
         XCTAssertEqual(try Data(contentsOf: outside), bytes)
     }
+    func testUppercaseURLSchemePassesValidationAndOfflineDotPathRejected() throws {
+        var value = backup()
+        value.sites = [SiteBackup(id: UUID(), name: "大写", urlString: "HTTPS://library.example/home", category: SiteCategory.other.rawValue, note: "", sortOrder: 0)]
+        value.favorites = [.init(id: UUID(), title: "收藏", pageURL: "HTTP://library.example/item")]
+        XCTAssertNoThrow(try value.validate())
+
+        value.offlineItems = [.init(id: UUID(), title: "dot", localPath: "Offline/.", fileType: .txt, savedAt: Date(), fileSizeBytes: 0)]
+        XCTAssertThrowsError(try value.validate())
+    }
+    func testApplySynchronizedDeletesRemovedOfflineFiles() throws {
+        let container = try ModelContainer(for: BookmarkSite.self, NASConfig.self, ReadingHistory.self, FavoriteVideo.self, OfflineItem.self,
+            configurations: ModelConfiguration(isStoredInMemoryOnly: true))
+        let context = container.mainContext
+        let rel = "Offline/sync-delete-test-\(UUID().uuidString).txt"
+        guard let fileURL = OfflineFiles.shared.url(for: rel) else { XCTFail("Invalid offline path"); return }
+        try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("temp".utf8).write(to: fileURL)
+        defer { try? FileManager.default.removeItem(at: fileURL) }
+
+        let offline = OfflineItem(title: "待删", localPath: rel, fileType: .txt)
+        context.insert(offline); try context.save()
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let store = SiteDefinitionStore(storageURL: folder.appendingPathComponent("sites.json"))
+        try backup().applySynchronized(to: context, store: store)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fileURL.path))
+    }
 }
 
 private final class SyncProgressRecorder: @unchecked Sendable {

@@ -74,7 +74,8 @@ extension ConfigBackup {
             }
         }
         if let offlineItems {
-            guard Set(offlineItems.map(\.id)).count == offlineItems.count, Set(offlineItems.map(\.localPath).filter { !$0.isEmpty }).count == offlineItems.filter { !$0.localPath.isEmpty }.count else { throw SiteDefinitionError.invalid("离线记录重复") }
+            let paths = offlineItems.map(\.localPath).filter { !$0.isEmpty }
+            guard Set(offlineItems.map(\.id)).count == offlineItems.count, Set(paths).count == paths.count else { throw SiteDefinitionError.invalid("离线记录重复") }
             for item in offlineItems { try item.validate() }
         }
         for history in histories ?? [] {
@@ -90,7 +91,7 @@ extension ConfigBackup {
               Set(nasConfigs.map(\.id)).count == nasConfigs.count else { throw SiteDefinitionError.invalid("备份包含重复标识") }
         let definitionIDs = Set(siteDefinitions.map(\.id))
         for site in sites {
-            guard let url = URL(string: site.urlString), ["http", "https"].contains(url.scheme ?? ""), url.host() != nil,
+            guard let url = URL(string: site.urlString), ["http", "https"].contains(url.scheme?.lowercased() ?? ""), url.host() != nil,
                   SiteCategory(rawValue: site.category) != nil,
                   site.definitionID.map({ definitionIDs.contains($0) }) ?? true else { throw SiteDefinitionError.invalid("备份中的站点配置无效") }
         }
@@ -101,20 +102,14 @@ extension ConfigBackup {
     }
 
     func writeToTempFile() throws -> URL {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        encoder.dateEncodingStrategy = .iso8601
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("Cove-Backup.json")
-        try encoder.encode(self).write(to: url, options: .atomic)
+        try json().write(to: url, options: .atomic)
         return url
     }
 
     static func read(from url: URL) throws -> ConfigBackup {
         let accessing = url.startAccessingSecurityScopedResource()
         defer { if accessing { url.stopAccessingSecurityScopedResource() } }
-        let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
-        let result = try decoder.decode(Self.self, from: Data(contentsOf: url))
-        try result.validate()
-        return result
+        return try decode(Data(contentsOf: url))
     }
 }

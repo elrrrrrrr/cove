@@ -85,20 +85,10 @@ enum FolderSyncPackage {
             guard let a = String(data: first, encoding: .utf8), let b = String(data: second, encoding: .utf8) else { return false }
             return try SiteDefinition.decode(a) == SiteDefinition.decode(b)
         }
-        func tree(_ bytes: Data) throws -> SyncJSON {
-            guard var object = try JSONDecoder().decode(SyncJSON.self, from: bytes).object else { throw ReaderSafetyError.message("配置文件必须是 JSON 对象") }
-            object.removeValue(forKey: "exportDate")
-            for key in ["sites", "nasConfigs", "favorites", "histories", "offlineItems"] {
-                if case .array(let values) = object[key] {
-                    object[key] = .array(values.sorted { String(describing: $0.object?["id"]) < String(describing: $1.object?["id"]) })
-                }
-            }
-            if case .array(let values) = object["siteDefinitionIDs"] {
-                object["siteDefinitionIDs"] = .array(values.sorted { String(describing: $0) < String(describing: $1) })
-            }
-            return .object(object)
-        }
-        return try tree(first) == tree(second)
+        let objectKeys = ["sites", "nasConfigs", "favorites", "histories", "offlineItems"]
+        let scalarKeys = ["siteDefinitionIDs"]
+        return try SyncJSON.canonicalized(first, objectArrayKeys: objectKeys, scalarArrayKeys: scalarKeys)
+            == SyncJSON.canonicalized(second, objectArrayKeys: objectKeys, scalarArrayKeys: scalarKeys)
     }
     static func object(_ data: Data) throws -> [String: Any] {
         guard let value = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw ReaderSafetyError.message("配置文件必须是 JSON 对象") }

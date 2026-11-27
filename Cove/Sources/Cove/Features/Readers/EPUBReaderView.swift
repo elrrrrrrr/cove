@@ -26,33 +26,12 @@ struct EPUBReaderView: View {
         ZStack(alignment: .bottom) {
             theme.backgroundColor.ignoresSafeArea()
             if isLoading {
-                VStack(spacing: 16) {
-                    ProgressView()
-                    Text("解析中…")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                    Text(fileURL.lastPathComponent)
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(1)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .overlay(alignment: .topLeading) { floatingBackButton }
+                ReaderLoadingStateView(message: "解析中…", filename: fileURL.lastPathComponent) { dismiss() }
             } else if let error {
-                ContentUnavailableView {
-                    Label("解析失败", systemImage: "book.closed")
-                } description: {
-                    Text(error)
-                } actions: {
-                    Button("重试") { Task { await parseEPUB() } }.buttonStyle(.borderedProminent)
-                    Button("返回") { dismiss() }
-                }
+                ReaderErrorView(title: "解析失败", systemImage: "book.closed", message: error,
+                                onRetry: { Task { await parseEPUB() } }, onBack: { dismiss() })
             } else if chapters.isEmpty {
-                ContentUnavailableView {
-                    Label("无法解析章节", systemImage: "book.closed")
-                } actions: {
-                    Button("返回") { dismiss() }
-                }
+                ReaderErrorView(title: "无法解析章节", systemImage: "book.closed") { dismiss() }
             } else {
                 EPUBWebView(chapter: chapters[currentChapter], fontSize: fontSize, theme: theme) {
                     withAnimation(.easeInOut(duration: 0.2)) { showBars.toggle() }
@@ -60,7 +39,7 @@ struct EPUBReaderView: View {
                 .ignoresSafeArea()
             }
 
-            if showBars && !isLoading && error == nil {
+            if showBars && !isLoading && error == nil && !chapters.isEmpty {
                 VStack(spacing: 0) { topBar; Spacer(); bottomBar }
                     .transition(.opacity)
             }
@@ -72,30 +51,12 @@ struct EPUBReaderView: View {
         .onDisappear { saveProgress() }
     }
 
-    private var floatingBackButton: some View {
-        Button { dismiss() } label: {
-            Image(systemName: "chevron.left")
-                .font(.system(size: 17, weight: .medium))
-                .padding(10)
-                .background(.ultraThinMaterial, in: Circle())
-        }
-        .padding(.leading, 16)
-        .padding(.top, 12)
-    }
-
     // MARK: - Bars
 
     private var topBar: some View {
-        HStack {
-            Button { dismiss() } label: { Image(systemName: "chevron.left").imageScale(.large) }
-            Spacer()
-            Text(fileURL.deletingPathExtension().lastPathComponent)
-                .font(.headline).lineLimit(1)
-            Spacer()
+        ReaderTopBar(title: fileURL.deletingPathExtension().lastPathComponent, onBack: { dismiss() }) {
             Button { showTOC = true } label: { Image(systemName: "list.bullet") }
         }
-        .padding(.horizontal).padding(.vertical, 8)
-        .background(.ultraThinMaterial)
     }
 
     private var bottomBar: some View {
@@ -139,37 +100,38 @@ struct EPUBReaderView: View {
     // MARK: - EPUB parsing
 
     private func parseEPUB() async {
+        error = nil
+        isLoading = true
+        let file = fileURL
         do {
-            let parsed = try await Task.detached(priority: .userInitiated) {
-                try EPUBParser.parse(fileURL: self.fileURL)
-            }.value
-            await MainActor.run {
-                chapters = parsed
-                if let progress = historyItem?.progress, progress.isFinite, !parsed.isEmpty {
-                    currentChapter = min(parsed.count - 1, Int(max(0, min(1, progress)) * Double(parsed.count)))
-                }
-                isLoading = false
+            let task = Task.detached(priority: .userInitiated) {
+                try EPUBParser.parse(fileURL: file)
             }
+            let parsed = try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
+            guard !Task.isCancelled else { return }
+            chapters = parsed
+            if let progress = historyItem?.progress, progress.isFinite, !parsed.isEmpty {
+                currentChapter = ReadingHistory.restoredIndex(progress: progress, count: parsed.count)
+            }
+            isLoading = false
         } catch {
-            await MainActor.run {
-                self.error = error.localizedDescription
-                isLoading = false
-            }
+            guard !Task.isCancelled else { return }
+            self.error = error.localizedDescription
+            isLoading = false
         }
     }
 
     private func saveProgress() {
-        let p = chapters.isEmpty ? 0 : Double(currentChapter + 1) / Double(chapters.count)
-        if let item = historyItem {
-            item.progress = p; item.lastReadAt = Date()
-        } else {
-            context.insert(ReadingHistory(
-                title: fileURL.deletingPathExtension().lastPathComponent,
-                filePath: fileURL.path,
-                fileType: .epub,
-                progress: p
-            ))
-        }
+        guard !chapters.isEmpty else { return }
+        let p = Double(currentChapter + 1) / Double(chapters.count)
+        ReadingHistory.recordProgress(
+            in: context,
+            historyItem: historyItem,
+            title: fileURL.deletingPathExtension().lastPathComponent,
+            filePath: fileURL.path,
+            fileType: .epub,
+            progress: p
+        )
     }
 }
 
@@ -179,6 +141,13 @@ struct EPUBChapter: Identifiable, Sendable {
     let id    = UUID()
     let title : String
     let htmlURL: URL    // extracted HTML file path
+    let rootURL: URL
+
+    init(title: String, htmlURL: URL, rootURL: URL? = nil) {
+        self.title = title
+        self.htmlURL = htmlURL
+        self.rootURL = rootURL ?? htmlURL.deletingLastPathComponent()
+    }
 }
 
 // MARK: - EPUB parser (OPF-based)
@@ -191,21 +160,9 @@ enum EPUBParser {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("epub-" + key, isDirectory: true)
 
-        // Extract if needed
+        // Extract if needed (atomic staging avoids partial-extract cache poisoning)
         if !FileManager.default.fileExists(atPath: tempDir.path) {
-            let archive: Archive
-            do { archive = try Archive(url: fileURL, accessMode: .read, pathEncoding: nil) }
-            catch { throw EPUBError.invalidArchive }
-            try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
-            var expanded: UInt64 = 0
-            for entry in archive {
-                guard entry.type != .symlink, entry.uncompressedSize <= 128 * 1024 * 1024,
-                      expanded <= 1024 * 1024 * 1024 - entry.uncompressedSize else { throw ReaderSafetyError.message("压缩包超过安全解包限制") }
-                expanded += entry.uncompressedSize
-                let dest = try ReaderContainedPath.resolve(entry.path, under: tempDir)
-                try FileManager.default.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
-                _ = try archive.extract(entry, to: dest)
-            }
+            _ = try ReaderArchive.extract(archiveURL: fileURL, to: tempDir)
         }
 
         // Find container.xml → OPF path
@@ -251,7 +208,7 @@ enum EPUBParser {
             let title   = href.components(separatedBy: "/").last?
                             .replacingOccurrences(of: ".xhtml", with: "")
                             .replacingOccurrences(of: ".html", with: "") ?? href
-            chapters.append(EPUBChapter(title: title, htmlURL: htmlURL))
+            chapters.append(EPUBChapter(title: title, htmlURL: htmlURL, rootURL: base))
         }
         return chapters
     }
@@ -268,6 +225,7 @@ private final class SimpleXMLParser: NSObject, XMLParserDelegate {
 
     func parse() {
         let p = XMLParser(data: data)
+        p.shouldProcessNamespaces = true
         p.delegate = self
         p.parse()
     }
@@ -330,7 +288,7 @@ struct EPUBWebView: UIViewRepresentable {
         coordinator.css = css
         if coordinator.loadedURL != chapter.htmlURL {
             coordinator.loadedURL = chapter.htmlURL
-            uiView.loadFileURL(chapter.htmlURL, allowingReadAccessTo: chapter.htmlURL.deletingLastPathComponent())
+            uiView.loadFileURL(chapter.htmlURL, allowingReadAccessTo: chapter.rootURL)
         } else if changed && !uiView.isLoading {
             coordinator.applyStyle(to: uiView)
         }
@@ -358,6 +316,17 @@ struct EPUBWebView: UIViewRepresentable {
 
         @objc func handleTap() { parent.onTap() }
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { applyStyle(to: webView) }
+        func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
+                     decisionHandler: @escaping @MainActor (WKNavigationActionPolicy) -> Void) {
+            guard let url = navigationAction.request.url, url.isFileURL else {
+                decisionHandler(.cancel)
+                return
+            }
+            let root = parent.chapter.rootURL.standardizedFileURL.resolvingSymlinksInPath().path
+            let target = url.standardizedFileURL.resolvingSymlinksInPath().path
+            let contained = target == root || target.hasPrefix(root == "/" ? "/" : root + "/")
+            decisionHandler(contained ? .allow : .cancel)
+        }
         func applyStyle(to webView: WKWebView) {
             webView.callAsyncJavaScript("""
             let style = document.getElementById('cove-reader-style');

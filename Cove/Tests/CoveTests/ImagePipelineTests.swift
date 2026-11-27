@@ -99,6 +99,30 @@ import ImageIO
         let expired = ImageMemoryCache(ttl: -1)
         expired.store(picture, forKey: "expired"); XCTAssertNil(expired.image(forKey: "expired"))
     }
+    func testTitleMaskImagePreservesWideAspectAndAlphaAtTitleSizing() async throws {
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        format.opaque = false
+        let pngData = UIGraphicsImageRenderer(size: CGSize(width: 701, height: 44), format: format).image { context in
+            UIColor.clear.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 701, height: 44))
+            UIColor.white.setFill()
+            context.fill(CGRect(x: 20, y: 8, width: 640, height: 28))
+        }.pngData()!
+        let server = try ImageFixtureServer { _ in pngData }
+        defer { server.listener.cancel() }
+        let pipeline = ImagePipeline(root: try directory())
+        let request = ThumbnailRequest(url: server.url, sizing: .thumbnail(2048))
+        let loaded = await pipeline.image(for: request)
+        let rendered = try XCTUnwrap(loaded)
+        let cg = try XCTUnwrap(rendered.cgImage)
+        XCTAssertEqual(cg.width, 701)
+        XCTAssertEqual(cg.height, 44)
+        XCTAssertNotEqual(cg.alphaInfo, .none)
+        XCTAssertNotEqual(cg.alphaInfo, .noneSkipLast)
+        XCTAssertNotEqual(cg.alphaInfo, .noneSkipFirst)
+    }
+
     func testNASKeysSeparateHostShareRevisionAndDisplaySize() {
         let now = Date(timeIntervalSince1970: 100)
         func entry(_ bytes: Int, _ date: Date?) -> NASFileEntry { .init(name: "page.jpg", path: "/page.jpg", isDirectory: false, size: bytes, modifiedAt: date) }

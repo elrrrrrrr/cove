@@ -11,6 +11,8 @@ struct NASAudioView: View {
     @AppStorage(AppTheme.storageKey) private var theme: AppTheme = .system
     @Environment(\.dismiss) private var dismiss
     @State private var audioManager = AudioPlayerManager.shared
+    @State private var isScrubbing = false
+    @State private var scrubTime: Double = 0
 
     var body: some View {
         ZStack {
@@ -49,14 +51,23 @@ struct NASAudioView: View {
 
                 // Progress
                 VStack(spacing: 4) {
-                    Slider(value: Binding(
-                        get: { audioManager.currentTime },
-                        set: { audioManager.seek(to: $0) }
-                    ), in: 0...max(audioManager.duration, 1))
+                    Slider(
+                        value: Binding(
+                            get: { isScrubbing ? scrubTime : min(audioManager.currentTime, max(audioManager.duration, 0)) },
+                            set: { scrubTime = $0 }
+                        ),
+                        in: 0...max(audioManager.duration, 1),
+                        onEditingChanged: { editing in
+                            isScrubbing = editing
+                            if editing { scrubTime = audioManager.currentTime }
+                            else { audioManager.seek(to: scrubTime) }
+                        }
+                    )
+                    .disabled(audioManager.duration <= 0)
                     .tint(theme.textColor)
 
                     HStack {
-                        Text(formatTime(audioManager.currentTime))
+                        Text(formatTime(isScrubbing ? scrubTime : audioManager.currentTime))
                         Spacer()
                         Text(formatTime(audioManager.duration))
                     }

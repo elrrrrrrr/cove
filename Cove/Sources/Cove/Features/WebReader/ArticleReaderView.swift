@@ -48,7 +48,7 @@ struct ArticleReaderView: View {
         .background(theme.backgroundColor.ignoresSafeArea())
         .background {
             GeometryReader { geometry in
-                HiddenWebView(webView: loader.webView)
+                ParsingWebViewHost(webView: loader.webView, accessibilityHidden: true)
                     .frame(width: max(320, geometry.size.width), height: max(600, geometry.size.height))
                     .opacity(0).allowsHitTesting(false).accessibilityHidden(true)
             }

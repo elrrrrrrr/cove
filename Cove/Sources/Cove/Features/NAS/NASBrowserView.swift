@@ -2,22 +2,6 @@ import SwiftUI
 import SwiftData
 import AVFoundation
 
-// MARK: - SMB connection
-
-enum NASConnection: Sendable {
-    case smb(SMBClient)
-    var cacheIdentity: String { switch self { case .smb(let client): client.cacheIdentity } }
-    var smbClient: SMBClient? { if case .smb(let client) = self { return client }; return nil }
-    func listDirectory(path: String, refresh: Bool = false) async throws -> [NASFileEntry] {
-        switch self { case .smb(let client): try await client.listDirectory(path: path, refresh: refresh) }
-    }
-    func listRoot() async throws -> [NASFileEntry] { try await listDirectory(path: "/") }
-    func readFile(at path: String, progress: (@Sendable (Double) -> Void)? = nil) async throws -> Data {
-        switch self { case .smb(let client): try await client.readFile(at: path, progress: progress) }
-    }
-    func disconnect() async { if case .smb(let client) = self { await client.disconnect() } }
-}
-
 // MARK: - NASBrowserView
 
 /// Shows NAS file tree with native navigation (swipe-back) and file routing.
@@ -30,7 +14,7 @@ struct NASBrowserView: View {
     @State private var selectedConfig: NASConfig?
     @State private var nasPassword  = ""
     @State private var showConnect  = false
-    @State private var connection: NASConnection?
+    @State private var connection: SMBClient?
     @State private var error: String?
 
     // Navigation stack for directory browsing (swipe-back support)
@@ -42,8 +26,7 @@ struct NASBrowserView: View {
     @State private var openedFileType: FileType?
     @State private var openedFileData: Data?
     @State private var openedStreamItem: AVPlayerItem?
-    @State private var openedStreamURL: URL?
-    @State private var downloadProgress: (name: String, progress: Double, isVideo: Bool)?
+    @State private var downloadProgress: (name: String, progress: Double)?
     @State private var isDownloading = false
 
     // Sibling navigation
@@ -54,11 +37,13 @@ struct NASBrowserView: View {
     @State private var showAudioPlayer = false
     @State private var audioManager = AudioPlayerManager.shared
 
-    // SMB connection progress
+    // SMB connection & transfer tasks
     @State private var isResolving = false
+    @State private var connectTask: Task<Void, Never>?
+    @State private var openTask: Task<Void, Never>?
 
     private var isShowingReader: Bool {
-        openedFileURL != nil || openedFileData != nil || openedStreamItem != nil || openedStreamURL != nil
+        openedFileURL != nil || openedFileData != nil || openedStreamItem != nil
     }
 
     @State private var readPathSet: Set<String> = []
@@ -73,18 +58,7 @@ struct NASBrowserView: View {
                 if nasConfigs.isEmpty {
                     nasEmptyState
                 } else if let connection {
-                    NASDirectoryListView(
-                        path: "/",
-                        title: selectedConfig?.name ?? "NAS",
-                        connection: connection,
-                        sourceID: selectedConfig?.id.uuidString ?? "nas",
-                        isDownloading: isDownloading,
-                        readPathSet: readPathSet,
-                        onOpenDirectory: { dirPath in navPath.append(dirPath) },
-                        onOpen: { entry, entries in openFile(entry, from: entries) },
-                        onDownload: { entry in downloadToOffline(entry) },
-                        onDisconnect: { disconnect() }
-                    )
+                    directoryView(path: "/", title: selectedConfig?.name ?? "NAS", connection: connection)
                 } else {
                     configPickerView
                 }
@@ -93,29 +67,22 @@ struct NASBrowserView: View {
             .navigationTitle("NAS")
             .navigationDestination(for: String.self) { dirPath in
                 if let connection {
-                    NASDirectoryListView(
-                        path: dirPath,
-                        title: (dirPath as NSString).lastPathComponent,
-                        connection: connection,
-                        sourceID: selectedConfig?.id.uuidString ?? "nas",
-                        isDownloading: isDownloading,
-                        readPathSet: readPathSet,
-                        onOpenDirectory: { dirPath in navPath.append(dirPath) },
-                        onOpen: { entry, entries in openFile(entry, from: entries) },
-                        onDownload: { entry in downloadToOffline(entry) },
-                        onDisconnect: { disconnect() }
-                    )
+                    directoryView(path: dirPath, title: (dirPath as NSString).lastPathComponent, connection: connection)
                 }
             }
         }
         .task { updateReadPaths() }
         .onChange(of: readHistory) { _, _ in updateReadPaths() }
         .onChange(of: selectedConfig?.id) { _, _ in updateReadPaths() }
+        .onDisappear {
+            connectTask?.cancel(); connectTask = nil
+            openTask?.cancel(); openTask = nil
+        }
         .overlay {
             if isResolving {
                 VStack(spacing: 12) {
                     ProgressView()
-                    Text(resolvingMessage)
+                    Text("正在连接 SMB…")
                         .font(.caption)
                 }
                 .padding(24)
@@ -177,59 +144,44 @@ struct NASBrowserView: View {
         openedHistory = nil
         openedFileData = nil
         openedStreamItem = nil
-        openedStreamURL = nil
     }
 
     @ViewBuilder
     private var readerDestination: some View {
         let ft = openedFileType ?? .unknown
         if let data = openedFileData {
-            dataReaderView(data: data, fileType: ft)
-        } else if openedStreamItem != nil && (ft == .video || ft == .audio) {
+            NASImageView(files: openedSiblings, initialIndex: openedIndex,
+                         client: connection, initialData: data)
+        } else if openedStreamItem != nil && ft == .video {
             NASVideoView(streamItem: openedStreamItem,
                          files: openedSiblings, initialIndex: openedIndex,
-                         client: connection?.smbClient)
-        } else if openedStreamURL != nil && (ft == .video || ft == .audio) {
-            NASVideoView(streamURL: openedStreamURL,
-                         files: openedSiblings, initialIndex: openedIndex)
+                         client: connection)
         } else if let url = openedFileURL {
             readerView(for: url, fileType: ft)
         }
     }
 
-    @ViewBuilder
-    private func readerView(for url: URL, fileType: FileType) -> some View {
-        switch fileType {
-        case .txt:
-            TXTReaderView(fileURL: url, historyItem: openedHistory)
-        case .pdf:
-            PDFReaderView(fileURL: url)
-        case .cbz, .cbr:
-            CBZReaderView(fileURL: url)
-        case .epub:
-            EPUBReaderView(fileURL: url)
-        case .image:
-            NASImageView(files: openedSiblings, initialIndex: openedIndex,
-                         client: connection?.smbClient)
-        case .video:
-            NASVideoView(fileURL: url, files: openedSiblings, initialIndex: openedIndex,
-                         client: connection?.smbClient)
-        default:
-            ContentUnavailableView("不支持的文件类型", systemImage: "doc.questionmark",
-                                   description: Text(url.pathExtension.uppercased()))
-        }
+    private func directoryView(path: String, title: String, connection: SMBClient) -> some View {
+        NASDirectoryListView(
+            path: path,
+            title: title,
+            connection: connection,
+            sourceID: selectedConfig?.id.uuidString ?? "nas",
+            isDownloading: isDownloading,
+            readPathSet: readPathSet,
+            onOpenDirectory: { navPath.append($0) },
+            onOpen: { openFile($0, from: $1) },
+            onDownload: { downloadToOffline($0) },
+            onDisconnect: { disconnect() }
+        )
     }
 
     @ViewBuilder
-    private func dataReaderView(data: Data, fileType: FileType) -> some View {
-        switch fileType {
-        case .image:
-            NASImageView(files: openedSiblings, initialIndex: openedIndex,
-                         client: connection?.smbClient, initialData: data)
-        default:
-            if let url = openedFileURL {
-                readerView(for: url, fileType: fileType)
-            }
+    private func readerView(for url: URL, fileType: FileType) -> some View {
+        if fileType == .video {
+            NASVideoView(fileURL: url, files: openedSiblings, initialIndex: openedIndex, client: connection)
+        } else {
+            LocalFileReaderView(fileURL: url, fileType: fileType, historyItem: openedHistory)
         }
     }
 
@@ -244,31 +196,30 @@ struct NASBrowserView: View {
     }
 
     private var configPickerView: some View {
-        ZStack {
-            List(nasConfigs) { config in
-                Button {
-                    selectedConfig = config
-                    if let saved = NASKeychain.load(for: config.id) {
-                        nasPassword = saved
-                        showConnect = false
-                        connectToNAS(config: config)
-                    } else {
-                        showConnect = true
-                    }
-                } label: {
-                    HStack {
-                        Image(systemName: configIcon(config))
-                            .font(.title2)
-                            .foregroundStyle(.blue)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(config.name).font(.headline)
-                            Text(configSubtitle(config))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    .padding(.vertical, 4)
+        List(nasConfigs) { config in
+            Button {
+                selectedConfig = config
+                if let saved = NASKeychain.load(for: config.id) {
+                    nasPassword = saved
+                    showConnect = false
+                    connectToNAS(config: config)
+                } else {
+                    nasPassword = ""
+                    showConnect = true
                 }
+            } label: {
+                HStack {
+                    Image(systemName: "externaldrive.fill")
+                        .font(.title2)
+                        .foregroundStyle(.blue)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(config.name).font(.headline)
+                        Text(configSubtitle(config))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.vertical, 4)
             }
         }
     }
@@ -280,10 +231,10 @@ struct NASBrowserView: View {
                     Section("连接到 \(config.name)") {
                         SecureField("密码", text: $nasPassword)
                     }
-                    Toggle("记住密码", isOn: .constant(true))
                     Button("连接") {
                         showConnect = false
-                        NASKeychain.save(password: nasPassword, for: config.id)
+                        if nasPassword.isEmpty { NASKeychain.delete(for: config.id) }
+                        else { NASKeychain.save(password: nasPassword, for: config.id) }
                         connectToNAS(config: config)
                     }
                 }
@@ -311,11 +262,9 @@ struct NASBrowserView: View {
 
     // MARK: - Config display helpers
 
-    private func configIcon(_ config: NASConfig) -> String { "externaldrive.fill" }
     private func configSubtitle(_ config: NASConfig) -> String {
         config.requiresSMBSetup ? "需要重新配置 SMB" : "\(config.host):\(config.port) / \(config.shareName)"
     }
-    private var resolvingMessage: String { "正在连接 SMB…" }
     private func connectToNAS(config: NASConfig) {
         guard !config.requiresSMBSetup else {
             error = "请编辑此连接，填写 SMB 主机、端口和共享名"
@@ -325,28 +274,25 @@ struct NASBrowserView: View {
     }
 
     private func connectSMB(config: NASConfig, password: String) {
+        connectTask?.cancel()
         let snap = NASConfigSnapshot(config: config)
         let smb = SMBClient(snapshot: snap)
         isResolving = true
-        Task {
+        connectTask = Task {
             do {
                 try await smb.connect(password: password)
-                await MainActor.run {
-                    isResolving = false
-                    connection = .smb(smb)
-                }
+                guard !Task.isCancelled else { await smb.disconnect(); return }
+                isResolving = false
+                connection = smb
+                connectTask = nil
             } catch {
-                await MainActor.run {
-                    isResolving = false
-                    self.error = error.localizedDescription
-                }
+                guard !Task.isCancelled else { return }
+                isResolving = false
+                connectTask = nil
+                self.error = error.localizedDescription
             }
         }
     }
-
-
-
-
 
     // MARK: - File open
 
@@ -367,130 +313,126 @@ struct NASBrowserView: View {
 
         switch ft {
         case .video:
-            openVideo(entry: entry, connection: connection, ft: ft)
+            openVideo(entry: entry, client: connection, ft: ft)
         case .audio:
-            openAudio(entry: entry, connection: connection, siblings: siblings, index: index, ft: ft)
+            openAudio(entry: entry, client: connection, siblings: siblings, index: index, ft: ft)
         case .image:
-            openImage(entry: entry, connection: connection, ft: ft)
+            openImage(entry: entry, client: connection, ft: ft)
         default:
-            downloadAndOpen(entry: entry, connection: connection, ft: ft, isVideo: false)
+            downloadAndOpen(entry: entry, client: connection, ft: ft)
         }
     }
 
-    private func openVideo(entry: NASFileEntry, connection: NASConnection, ft: FileType) {
-        if case .smb(let client) = connection {
-            if SMBStreamLoader.supportsVideo(path: entry.path) {
-                let item = SMBStreamLoader.makePlayerItem(client: client, remotePath: entry.path)
-                openedFileType = ft
-                openedStreamItem = item
-                saveHistory(entry: entry, fileType: ft)
-            } else {
-                downloadAndOpen(entry: entry, connection: connection, ft: ft, isVideo: true)
-            }
+    private func openVideo(entry: NASFileEntry, client: SMBClient, ft: FileType) {
+        if SMBStreamLoader.supportsVideo(path: entry.path) {
+            let item = SMBStreamLoader.makePlayerItem(client: client, remotePath: entry.path)
+            openedFileType = ft
+            openedStreamItem = item
+            saveHistory(entry: entry, fileType: ft)
+        } else {
+            downloadAndOpen(entry: entry, client: client, ft: ft)
         }
     }
 
-    private func openAudio(entry: NASFileEntry, connection: NASConnection,
+    private func openAudio(entry: NASFileEntry, client: SMBClient,
                            siblings: [NASFileEntry], index: Int, ft: FileType) {
         let name = (entry.name as NSString).deletingPathExtension
+        let item = SMBStreamLoader.makePlayerItem(client: client, remotePath: entry.path)
+        audioManager.play(item: item, name: name, path: entry.path,
+                          siblings: siblings, currentIndex: index, client: client)
+        showAudioPlayer = true
+        saveHistory(entry: entry, fileType: ft)
+    }
 
-        if case .smb(let client) = connection {
-            let item = SMBStreamLoader.makePlayerItem(client: client, remotePath: entry.path)
-            audioManager.play(item: item, name: name, path: entry.path,
-                              siblings: siblings, currentIndex: index, client: client)
-            showAudioPlayer = true
+    private func openImage(entry: NASFileEntry, client: SMBClient, ft: FileType) {
+        runOpenTransfer(entry: entry, client: client) { onProgress in
+            let data = try await client.readFile(at: entry.path, progress: onProgress)
+            return (data, nil)
+        } apply: { data, _ in
+            openedFileType = ft
+            openedFileData = data
             saveHistory(entry: entry, fileType: ft)
         }
     }
 
-    private func openImage(entry: NASFileEntry, connection: NASConnection, ft: FileType) {
-        isDownloading = true
-        downloadProgress = (entry.name, 0, false)
-        Task {
-            do {
-                let data = try await connection.readFile(at: entry.path) { pct in
-                    Task { @MainActor in
-                        downloadProgress = (entry.name, pct, false)
-                    }
-                }
-                await MainActor.run {
-                    isDownloading = false
-                    downloadProgress = nil
-                    openedFileType = ft
-                    openedFileData = data
-                    saveHistory(entry: entry, fileType: ft)
-                }
-            } catch {
-                await MainActor.run {
-                    isDownloading = false
-                    downloadProgress = nil
-                    self.error = "加载失败: \(error.localizedDescription)"
-                }
-            }
+    private func downloadAndOpen(entry: NASFileEntry, client: SMBClient, ft: FileType) {
+        runOpenTransfer(entry: entry, client: client) { onProgress in
+            let dest = try await client.temporaryFile(for: entry.path, progress: onProgress)
+            return (nil, dest)
+        } apply: { _, dest in
+            openedFileType = ft
+            openedFileURL = dest
+            openedHistory = saveHistory(entry: entry, fileType: ft)
         }
     }
 
-    private func downloadAndOpen(entry: NASFileEntry, connection: NASConnection, ft: FileType, isVideo: Bool) {
+    private func runOpenTransfer(
+        entry: NASFileEntry,
+        client: SMBClient,
+        perform: @escaping (@escaping @Sendable (Double) -> Void) async throws -> (Data?, URL?),
+        apply: @escaping (Data?, URL?) -> Void
+    ) {
+        openTask?.cancel()
         isDownloading = true
-        downloadProgress = (entry.name, 0, isVideo)
-        Task {
+        downloadProgress = (entry.name, 0)
+        openTask = Task {
             do {
-                guard let client = connection.smbClient else { throw SMBError.notConnected }
-                let dest = try await client.temporaryFile(for: entry.path) { pct in
+                let (data, dest) = try await perform { pct in
                     Task { @MainActor in
-                        downloadProgress = (entry.name, pct, isVideo)
+                        guard isDownloading else { return }
+                        downloadProgress = (entry.name, pct)
                     }
                 }
-                await MainActor.run {
-                    isDownloading = false
-                    downloadProgress = nil
-                    openedFileType = ft
-                    openedFileURL = dest
-                    openedHistory = saveHistory(entry: entry, fileType: ft)
+                guard !Task.isCancelled, connection === client else {
+                    if let dest { try? FileManager.default.removeItem(at: dest.deletingLastPathComponent()) }
+                    return
                 }
+                isDownloading = false
+                downloadProgress = nil
+                openTask = nil
+                apply(data, dest)
             } catch {
-                await MainActor.run {
-                    isDownloading = false
-                    downloadProgress = nil
-                    self.error = "加载失败: \(error.localizedDescription)"
-                }
+                guard !Task.isCancelled else { return }
+                isDownloading = false
+                downloadProgress = nil
+                openTask = nil
+                self.error = "加载失败: \(error.localizedDescription)"
             }
         }
     }
 
     // MARK: - History (with dedup)
 
-    @discardableResult private func saveHistory(entry: NASFileEntry, fileType: FileType) -> ReadingHistory {
+    @discardableResult private func saveHistory(entry: NASFileEntry, fileType: FileType) -> ReadingHistory? {
         let configID = selectedConfig?.id.uuidString
-        if let existing = readHistory.first(where: { $0.filePath == entry.path && $0.nasConfigID == configID }) {
-            existing.lastReadAt = Date()
-            existing.nasConfigID = selectedConfig?.id.uuidString
-            return existing
-        } else {
-            let history = ReadingHistory(
-                title: (entry.name as NSString).deletingPathExtension,
-                filePath: entry.path,
-                fileType: fileType
-            )
-            history.nasConfigID = selectedConfig?.id.uuidString
-            modelContext.insert(history)
-            return history
-        }
+        let existing = ReadingHistory.find(in: modelContext, filePath: entry.path, nasConfigID: configID)
+        return ReadingHistory.recordProgress(
+            in: modelContext,
+            historyItem: existing,
+            title: (entry.name as NSString).deletingPathExtension,
+            filePath: entry.path,
+            fileType: fileType,
+            progress: existing?.progress ?? 0,
+            nasConfigID: configID
+        )
     }
 
     private func disconnect() {
+        connectTask?.cancel(); connectTask = nil
+        openTask?.cancel(); openTask = nil
+        isDownloading = false
+        downloadProgress = nil
+        isResolving = false
+        nasPassword = ""
         guard let c = connection else { return }
-        if let client = c.smbClient { AudioPlayerManager.shared.stopIfUsing(client: client) }
+        AudioPlayerManager.shared.stopIfUsing(client: c)
         Task { await c.disconnect() }
         connection = nil
         navPath.removeAll()
     }
 
     private func downloadToOffline(_ entry: NASFileEntry) {
-        guard let smbClient = connection?.smbClient else {
-            self.error = "当前连接方式暂不支持离线下载"
-            return
-        }
+        guard let smbClient = connection else { return }
         DownloadManager.shared.configureSMB(client: smbClient)
         DownloadManager.shared.add(
             title: entry.name,
@@ -507,7 +449,7 @@ struct NASBrowserView: View {
 struct NASDirectoryListView: View {
     let path: String
     let title: String
-    let connection: NASConnection
+    let connection: SMBClient
     let isDownloading: Bool
     let readPathSet: Set<String>
     let onOpenDirectory: (String) -> Void
@@ -522,7 +464,7 @@ struct NASDirectoryListView: View {
     @State private var isLoading = true
     @State private var error: String?
 
-    init(path: String, title: String, connection: NASConnection, sourceID: String,
+    init(path: String, title: String, connection: SMBClient, sourceID: String,
          isDownloading: Bool, readPathSet: Set<String>,
          onOpenDirectory: @escaping (String) -> Void,
          onOpen: @escaping (NASFileEntry, [NASFileEntry]) -> Void,
@@ -544,7 +486,12 @@ struct NASDirectoryListView: View {
             } else if let error {
                 ContentUnavailableView {
                     Label("加载失败", systemImage: "exclamationmark.triangle")
-                } description: { Text(error) } actions: { Button("重试") { refreshTask = Task { await loadEntries(refresh: true) } } }
+                } description: { Text(error) } actions: {
+                    Button("重试") {
+                        refreshTask?.cancel()
+                        refreshTask = Task { await loadEntries(refresh: true) }
+                    }
+                }
             } else if allEntries.isEmpty {
                 ContentUnavailableView("空文件夹", systemImage: "folder")
             } else {

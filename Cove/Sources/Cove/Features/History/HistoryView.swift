@@ -21,6 +21,7 @@ struct HistoryView: View {
                                         .swipeActions(edge: .trailing) {
                                             Button(role: .destructive) {
                                                 context.delete(item)
+                                                try? context.save()
                                             } label: {
                                                 Label("删除", systemImage: "trash")
                                             }
@@ -74,9 +75,15 @@ struct HistoryRow: View {
 
             Spacer()
 
-            ProgressView(value: item.progress)
-                .frame(width: 48)
-                .tint(.accentColor)
+            if item.isWebVideoPlayback {
+                Text(item.progressSummary)
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            } else {
+                ProgressView(value: item.clampedFraction)
+                    .frame(width: 48)
+                    .tint(.accentColor)
+            }
         }
         .padding(.vertical, 2)
     }

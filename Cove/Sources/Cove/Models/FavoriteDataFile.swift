@@ -26,7 +26,7 @@ struct FavoriteDataFile: Codable, Sendable {
         let identifiers = favorites.compactMap(\.id)
         guard Set(identifiers).count == identifiers.count else { throw SiteDefinitionError.invalid("收藏 id 重复") }
         for record in favorites {
-            guard let url = URL(string: record.pageURL), ["https", "http"].contains(url.scheme ?? ""),
+            guard let url = URL(string: record.pageURL), ["https", "http"].contains(url.scheme?.lowercased() ?? ""),
                   url.host() != nil, !record.title.isEmpty else { throw SiteDefinitionError.invalid("收藏标题或地址无效：\(record.title)") }
             guard record.pinOrder.map({ $0 >= 0 }) ?? true else { throw SiteDefinitionError.invalid("收藏置顶顺序不能为负数") }
             guard !(record.isComic == true && record.isArticle == true) else { throw SiteDefinitionError.invalid("收藏不能同时是漫画和图文") }

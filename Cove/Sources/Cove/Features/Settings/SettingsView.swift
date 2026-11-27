@@ -147,28 +147,6 @@ struct SettingsView: View {
                     Text("「清除所有数据」将删除所有阅读记录、收藏、站点、缓存及设置，恢复到初始状态。")
                 }
 
-                // Diagnostics
-                Section("诊断") {
-                    Toggle(isOn: Binding(
-                        get: { AppLogger.shared.isEnabled },
-                        set: { AppLogger.shared.isEnabled = $0 }
-                    )) {
-                        Label("启用诊断日志", systemImage: "ant")
-                    }
-                    if AppLogger.shared.isEnabled {
-                        NavigationLink {
-                            DiagnosticLogView()
-                        } label: {
-                            HStack {
-                                Label("连接日志", systemImage: "text.alignleft")
-                                Spacer()
-                                Text("\(AppLogger.shared.entries.count)")
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                }
-
                 // About
                 Section("关于") {
                     LabeledContent("版本", value: Bundle.main.appVersion)
@@ -280,9 +258,10 @@ struct SettingsView: View {
         isClearing = true
         defer { isClearing = false }
 
-        FolderSyncManager.shared.disconnect()
+        FolderSyncManager.shared.clearLocalState()
 
-        // 1. Delete all SwiftData models
+        // 1. Delete Keychain credentials and all SwiftData models
+        for config in nasConfigs { NASKeychain.delete(for: config.id) }
         try? context.delete(model: ReadingHistory.self)
         try? context.delete(model: FavoriteVideo.self)
         try? context.delete(model: BookmarkSite.self)

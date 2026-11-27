@@ -4,13 +4,21 @@ import SwiftUI
 /// Uses cancellable, shared SMB thumbnail requests.
 struct NASFileThumbnail: View {
     let entry: NASFileEntry
-    let connection: NASConnection?
+    let connection: SMBClient?
     var size: CGFloat = 80
-    var loadsThumbnail = true
 
     @Environment(\.displayScale) private var scale
     @State private var pixels = 256
-    private var revision: String { NASThumbnailCache.key(connectionID: connection?.cacheIdentity ?? "", entry: entry, pixels: pixels) }
+    private struct LoadKey: Equatable {
+        let connectionID: String
+        let path: String
+        let size: Int
+        let modifiedAt: Date?
+        let pixels: Int
+    }
+    private var loadKey: LoadKey {
+        LoadKey(connectionID: connection?.cacheIdentity ?? "", path: entry.path, size: entry.size, modifiedAt: entry.modifiedAt, pixels: pixels)
+    }
     @State private var thumbnail: UIImage?
     @State private var loadTask: Task<Void, Never>?
     @State private var loadToken: UUID?
@@ -39,7 +47,7 @@ struct NASFileThumbnail: View {
         .onDisappear {
             cancelThumbnailLoad()
         }
-        .onChange(of: revision) {
+        .onChange(of: loadKey) {
             thumbnail = nil
             cancelThumbnailLoad()
             scheduleThumbnailLoad()
@@ -48,7 +56,7 @@ struct NASFileThumbnail: View {
 
     @MainActor
     private func scheduleThumbnailLoad() {
-        guard loadsThumbnail, thumbnail == nil, loadTask == nil, let connection else { return }
+        guard thumbnail == nil, loadTask == nil, let connection else { return }
 
         let fileType = entry.fileType
         guard fileType == .image || fileType == .video else { return }
@@ -67,17 +75,14 @@ struct NASFileThumbnail: View {
 
             let image = await NASThumbnailCache.shared.thumbnail(for: entry, connection: connection, pixels: pixels)
 
-            guard !Task.isCancelled else {
+            guard !Task.isCancelled, loadToken == token else {
                 clearLoadTask(token: token)
                 return
             }
 
-            await MainActor.run {
-                guard loadToken == token else { return }
-                thumbnail = image
-                loadTask = nil
-                loadToken = nil
-            }
+            thumbnail = image
+            loadTask = nil
+            loadToken = nil
         }
     }
 

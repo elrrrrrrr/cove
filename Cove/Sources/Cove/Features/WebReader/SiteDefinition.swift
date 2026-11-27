@@ -271,7 +271,7 @@ struct SiteExtraction: Codable, Sendable, Equatable {
                     if (!value) value = el.getAttribute(attribute);
                 }
                 if (field.pattern && value) value = value.match(new RegExp(field.pattern))?.[field.capture ?? 1] || '';
-                if (value && (field.resolveURL === true || ['url','thumbnail','cover','nextPageURL','prevChapter','nextChapter','images','sourceURL','commentsURL'].includes(name))) {
+                if (value && (field.resolveURL === true || ['url','thumbnail','titleImage','cover','nextPageURL','prevChapter','nextChapter','images','sourceURL','commentsURL'].includes(name))) {
                     try { value = new URL(value, document.baseURI).href; } catch (_) { value = ''; }
                 }
                 if (field.number === true || ['episodeNumber','episodeCount'].includes(name)) {
@@ -387,7 +387,7 @@ struct SitePortal: Codable, Sendable, Equatable {
     var excludedHosts: [String]?
     var headers: [String: String]?
     func validate() throws {
-        guard let value = URL(string: url), ["http", "https"].contains(value.scheme ?? ""), value.host() != nil else { throw SiteDefinitionError.invalid("门户地址无效") }
+        guard let value = URL(string: url), ["http", "https"].contains(value.scheme?.lowercased() ?? ""), value.host() != nil else { throw SiteDefinitionError.invalid("门户地址无效") }
         for pattern in [base64Pattern, dataPattern, keyPattern, identityPattern].compactMap({ $0 }) { _ = try NSRegularExpression(pattern: pattern) }
     }
 }

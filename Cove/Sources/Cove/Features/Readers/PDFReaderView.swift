@@ -11,28 +11,42 @@ struct PDFReaderView: View {
 
     @State private var currentPage = 0
     @State private var totalPages  = 0
+    @State private var jumpToPage: Int?
+    @State private var loadFailed  = false
     @State private var showBars    = true
-    @State private var pdfDocument: PDFDocument?
 
     var body: some View {
         ZStack(alignment: .bottom) {
-            PDFViewRepresentable(
-                url: fileURL,
-                onPageChange: { current, total in
-                    currentPage = current
-                    totalPages  = total
-                },
-                onTap: {
-                    withAnimation(.easeInOut(duration: 0.2)) { showBars.toggle() }
-                }
-            )
-            .ignoresSafeArea()
+            if loadFailed {
+                ReaderErrorView(title: "无法打开 PDF", systemImage: "doc.richtext") { dismiss() }
+            } else {
+                PDFViewRepresentable(
+                    url: fileURL,
+                    initialProgress: historyItem?.progress,
+                    jumpToPage: $jumpToPage,
+                    onPageChange: { current, total in
+                        currentPage = current
+                        totalPages  = total
+                    },
+                    onLoadFailed: { loadFailed = true },
+                    onTap: {
+                        withAnimation(.easeInOut(duration: 0.2)) { showBars.toggle() }
+                    }
+                )
+                .ignoresSafeArea()
+            }
 
-            if showBars {
+            if showBars && !loadFailed && totalPages > 0 {
                 VStack(spacing: 0) {
-                    topBar
+                    ReaderTopBar(title: fileURL.deletingPathExtension().lastPathComponent, onBack: { dismiss() }) {
+                        Text("\(currentPage) / \(totalPages)")
+                            .foregroundStyle(.secondary)
+                    }
                     Spacer()
-                    bottomBar
+                    ReaderPageSliderBar(current: currentPage, total: totalPages, oneBased: true) { page in
+                        currentPage = page
+                        jumpToPage = page
+                    }
                 }
                 .transition(.opacity)
             }
@@ -42,56 +56,17 @@ struct PDFReaderView: View {
         .onDisappear { saveProgress() }
     }
 
-    private var topBar: some View {
-        HStack {
-            Button { dismiss() } label: {
-                Image(systemName: "chevron.left").imageScale(.large)
-            }
-            Spacer()
-            Text(fileURL.deletingPathExtension().lastPathComponent)
-                .font(.headline)
-                .lineLimit(1)
-            Spacer()
-            Text("\(currentPage) / \(totalPages)")
-                .foregroundStyle(.secondary)
-        }
-        .padding(.horizontal)
-        .padding(.vertical, 8)
-        .background(.ultraThinMaterial)
-    }
-
-    private var bottomBar: some View {
-        VStack(spacing: 4) {
-            if totalPages > 0 {
-                Slider(
-                    value: Binding(
-                        get: { Double(currentPage) },
-                        set: { _ in }   // PDFViewRepresentable handles page jumping
-                    ),
-                    in: 1...Double(max(totalPages, 1)),
-                    step: 1
-                )
-                .padding(.horizontal)
-            }
-        }
-        .padding(.vertical, 8)
-        .background(.ultraThinMaterial)
-    }
-
     private func saveProgress() {
-        let progress = totalPages > 0 ? Double(currentPage) / Double(totalPages) : 0
-        if let item = historyItem {
-            item.progress   = progress
-            item.lastReadAt = Date()
-        } else {
-            let entry = ReadingHistory(
-                title: fileURL.deletingPathExtension().lastPathComponent,
-                filePath: fileURL.path,
-                fileType: .pdf,
-                progress: progress
-            )
-            context.insert(entry)
-        }
+        guard totalPages > 0 else { return }
+        let progress = Double(currentPage) / Double(totalPages)
+        ReadingHistory.recordProgress(
+            in: context,
+            historyItem: historyItem,
+            title: fileURL.deletingPathExtension().lastPathComponent,
+            filePath: fileURL.path,
+            fileType: .pdf,
+            progress: progress
+        )
     }
 }
 
@@ -99,7 +74,10 @@ struct PDFReaderView: View {
 
 struct PDFViewRepresentable: UIViewRepresentable {
     let url: URL
+    var initialProgress: Double?
+    @Binding var jumpToPage: Int?
     var onPageChange: (Int, Int) -> Void = { _, _ in }
+    var onLoadFailed: () -> Void = {}
     var onTap: () -> Void = {}
 
     func makeUIView(context: Context) -> PDFView {
@@ -109,9 +87,16 @@ struct PDFViewRepresentable: UIViewRepresentable {
         pdfView.displayDirection = .vertical
         pdfView.usePageViewController(false)
 
-        if let doc = PDFDocument(url: url) {
+        if let doc = PDFDocument(url: url), doc.pageCount > 0 {
             pdfView.document = doc
-            onPageChange(1, doc.pageCount)
+            let targetIndex = initialProgress.map { ReadingHistory.restoredIndex(progress: $0, count: doc.pageCount) } ?? 0
+            if targetIndex > 0, let page = doc.page(at: targetIndex) {
+                pdfView.go(to: page)
+            }
+            let current = targetIndex + 1, total = doc.pageCount
+            DispatchQueue.main.async { onPageChange(current, total) }
+        } else {
+            DispatchQueue.main.async { onLoadFailed() }
         }
 
         // Tap to toggle bars
@@ -130,10 +115,18 @@ struct PDFViewRepresentable: UIViewRepresentable {
         return pdfView
     }
 
-    func updateUIView(_ uiView: PDFView, context: Context) {}
+    func updateUIView(_ uiView: PDFView, context: Context) {
+        context.coordinator.parent = self
+        if let target = jumpToPage, let doc = uiView.document,
+           (1...doc.pageCount).contains(target), let page = doc.page(at: target - 1) {
+            uiView.go(to: page)
+            DispatchQueue.main.async { jumpToPage = nil }
+        }
+    }
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
+    @MainActor
     final class Coordinator: NSObject {
         var parent: PDFViewRepresentable
         weak var pdfView: PDFView?

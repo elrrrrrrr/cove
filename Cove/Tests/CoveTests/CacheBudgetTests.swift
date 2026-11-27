@@ -79,6 +79,20 @@ import XCTest
         let older = await cache.load(for: first, now: now.addingTimeInterval(2)); XCTAssertNil(older)
         let newest = await cache.load(for: second, now: now.addingTimeInterval(2)); XCTAssertEqual(newest?.items.map(\.title), items.map(\.title))
     }
+    func testDiskCacheIndexesThroughSymlinkedRootPath() async throws {
+        let realRoot = try directory()
+        let linkRoot = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createSymbolicLink(at: linkRoot, withDestinationURL: realRoot)
+        addTeardownBlock { try? FileManager.default.removeItem(at: linkRoot) }
+
+        let now = Date()
+        let writer = DiskDataCache(root: realRoot, suffix: ".cache", byteLimit: 100, ttl: 100)
+        await writer.store(Data(count: 4), for: "aa", now: now)
+
+        let reader = DiskDataCache(root: linkRoot, suffix: ".cache", byteLimit: 100, ttl: 100)
+        let bytes = await reader.usageBytes(); XCTAssertEqual(bytes, 4)
+        let loaded = await reader.load("aa", now: now.addingTimeInterval(1)); XCTAssertEqual(loaded?.count, 4)
+    }
 }
 
 @MainActor final class SharedImageWorkTests: XCTestCase {

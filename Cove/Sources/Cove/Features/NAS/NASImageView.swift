@@ -19,7 +19,9 @@ struct NASImageView: View {
     @State private var loadID = UUID()
     @State private var isLoadingImage = false
     @State private var scale: CGFloat = 1
+    @State private var lastScale: CGFloat = 1
     @State private var offset: CGSize = .zero
+    @State private var lastOffset: CGSize = .zero
 
     var body: some View {
         ZStack {
@@ -81,8 +83,12 @@ struct NASImageView: View {
         }
         .onTapGesture(count: 2) {
             withAnimation {
-                if scale > 1 { scale = 1; offset = .zero }
-                else { scale = 2.5 }
+                if scale > 1 {
+                    scale = 1; lastScale = 1
+                    offset = .zero; lastOffset = .zero
+                } else {
+                    scale = 2.5; lastScale = 2.5
+                }
             }
         }
         .onGeometryChange(for: Int.self) { [displayScale] proxy in
@@ -99,8 +105,8 @@ struct NASImageView: View {
         let newIndex = currentIndex + offset
         guard newIndex >= 0, newIndex < files.count else { return }
         withAnimation(.easeInOut(duration: 0.15)) {
-            scale = 1
-            self.offset = .zero
+            scale = 1; lastScale = 1
+            self.offset = .zero; lastOffset = .zero
         }
         currentIndex = newIndex
         loadImage(at: newIndex)
@@ -131,28 +137,33 @@ struct NASImageView: View {
 
     private var magnifyGesture: some Gesture {
         MagnifyGesture()
-            .onChanged { v in scale = max(1, v.magnification) }
+            .onChanged { v in scale = max(1, lastScale * v.magnification) }
             .onEnded { _ in
-                if scale < 1.1 { withAnimation { scale = 1; offset = .zero } }
+                if scale < 1.1 {
+                    withAnimation {
+                        scale = 1; lastScale = 1
+                        offset = .zero; lastOffset = .zero
+                    }
+                } else {
+                    lastScale = scale
+                }
             }
     }
 
     private var panGesture: some Gesture {
         DragGesture()
             .onChanged { v in
-                if scale > 1 { offset = v.translation }
+                if scale > 1 {
+                    offset = CGSize(width: lastOffset.width + v.translation.width,
+                                    height: lastOffset.height + v.translation.height)
+                }
             }
             .onEnded { _ in
-                if scale <= 1.1 { withAnimation { offset = .zero } }
+                if scale <= 1.1 {
+                    offset = .zero; lastOffset = .zero
+                } else {
+                    lastOffset = offset
+                }
             }
-    }
-}
-
-/// Image presentation for an already downloaded, bounded resource.
-struct NASImageDataView: View {
-    let data: Data
-
-    var body: some View {
-        NASImageView(initialData: data)
     }
 }

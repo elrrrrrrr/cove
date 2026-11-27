@@ -43,6 +43,26 @@ import XCTest
         XCTAssertFalse(cancelled.accept(completed: 0, total: 0))
         XCTAssertThrowsError(try cancelled.check()) { XCTAssertTrue($0 is CancellationError) }
     }
+
+    func testSMBURLIncludesCustomPort() {
+        XCTAssertEqual(SMBClient.smbURL(host: "192.168.1.2", port: 445)?.absoluteString, "smb://192.168.1.2")
+        XCTAssertEqual(SMBClient.smbURL(host: "192.168.1.2", port: 1445)?.absoluteString, "smb://192.168.1.2:1445")
+        XCTAssertEqual(SMBClient.smbURL(host: "127.0.0.1:1445", port: 445)?.absoluteString, "smb://127.0.0.1:1445")
+    }
+
+    func testReadingHistoryProgressRoundTripAndWebVideoSummary() {
+        for idx in 0..<10 {
+            let stored = Double(idx + 1) / 10.0
+            XCTAssertEqual(ReadingHistory.restoredIndex(progress: stored, count: 10), idx)
+        }
+        let video = ReadingHistory(title: "视频", url: "https://media.example/v", fileType: .video, progress: 125)
+        XCTAssertTrue(video.isWebVideoPlayback)
+        XCTAssertEqual(video.progressSummary, "02:05")
+
+        let nanHistory = ReadingHistory(title: "文本", filePath: "/a.txt", fileType: .txt, progress: .nan)
+        XCTAssertEqual(nanHistory.clampedFraction, 0)
+        XCTAssertEqual(ReadingHistory.restoredIndex(progress: .nan, count: 5), 0)
+    }
 }
 
 private actor FakeRangeSource: SMBRangeSource {

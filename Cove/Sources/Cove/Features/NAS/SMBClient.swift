@@ -74,9 +74,28 @@ actor SMBClient: SMBRangeSource, OfflineDownloadSource {
 
     // MARK: - Share Discovery
 
+    static func smbURL(host: String, port: Int = 445) -> URL? {
+        var cleanedHost = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        if cleanedHost.lowercased().hasPrefix("smb://") { cleanedHost = String(cleanedHost.dropFirst(6)) }
+        var resolvedPort = port
+        if cleanedHost.filter({ $0 == ":" }).count == 1, let colon = cleanedHost.lastIndex(of: ":"),
+           let parsedPort = Int(cleanedHost[cleanedHost.index(after: colon)...]), (1...65535).contains(parsedPort) {
+            cleanedHost = String(cleanedHost[..<colon])
+            resolvedPort = parsedPort
+        }
+        guard !cleanedHost.isEmpty else { return nil }
+        var components = URLComponents()
+        components.scheme = "smb"
+        components.host = cleanedHost
+        if resolvedPort > 0 && resolvedPort != 445 {
+            components.port = resolvedPort
+        }
+        return components.url
+    }
+
     /// Lists available SMB shares on the server (no prior connection needed).
-    static func listShares(host: String, username: String, password: String) async throws -> [(name: String, comment: String)] {
-        guard let url = URL(string: "smb://\(host)") else {
+    static func listShares(host: String, port: Int = 445, username: String, password: String) async throws -> [(name: String, comment: String)] {
+        guard let url = smbURL(host: host, port: port) else {
             throw SMBError.invalidURL
         }
         let credential = URLCredential(user: username, password: password, persistence: .forSession)
@@ -94,7 +113,7 @@ actor SMBClient: SMBRangeSource, OfflineDownloadSource {
         let generation = connectionGeneration
         await directories.clear()
         try? await previous?.disconnectShare()
-        guard let url = URL(string: "smb://\(config.host)") else {
+        guard let url = Self.smbURL(host: config.host, port: config.port) else {
             throw SMBError.invalidURL
         }
         let credential = URLCredential(
@@ -219,6 +238,8 @@ actor SMBClient: SMBRangeSource, OfflineDownloadSource {
             }
             try control.check()
             try Task.checkCancellation()
+            let actualSize = (try? staging.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) ?? 0
+            guard actualSize <= maxBytes else { throw SMBError.tooLarge(maxBytes) }
             if FileManager.default.fileExists(atPath: destination.path) {
                 _ = try FileManager.default.replaceItemAt(destination, withItemAt: staging)
             } else {
@@ -231,12 +252,16 @@ actor SMBClient: SMBRangeSource, OfflineDownloadSource {
 
     /// Downloads documents and nonstreamable media to a unique, bounded temporary file.
     func temporaryFile(for remotePath: String, progress: (@Sendable (Double) -> Void)? = nil) async throws -> URL {
-        let filename = URL(fileURLWithPath: remotePath).lastPathComponent
+        var filename = URL(fileURLWithPath: remotePath).lastPathComponent
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "\\", with: "_")
+            .replacingOccurrences(of: "\0", with: "")
+        if filename.isEmpty || filename == "." || filename == ".." { filename = "file" }
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("NASOpen", isDirectory: true)
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
-        let dest = tempDir.appendingPathComponent(filename)
+        let dest = try ReaderContainedPath.resolve(filename, under: tempDir)
         do {
             try await download(remotePath: remotePath, to: dest, progress: { progress?($0) })
             return dest
@@ -315,8 +340,6 @@ final class SMBTransferControl: @unchecked Sendable {
         }
     }
 }
-
-// MARK: - FileManager helpers
 
 // MARK: - Keychain helper
 

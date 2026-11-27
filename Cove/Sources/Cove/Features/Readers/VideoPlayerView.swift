@@ -10,6 +10,7 @@ struct VideoPlayerView: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var player: AVPlayer?
+    @State private var restoreTask: Task<Void, Never>?
     @State private var showBars = true
 
     var body: some View {
@@ -24,13 +25,6 @@ struct VideoPlayerView: View {
                     }
             } else {
                 ProgressView("加载中…").tint(.white)
-            }
-
-            if let player {
-                VideoNetworkSpeedBadge(player: player)
-                    .padding(.top, 58)
-                    .padding(.trailing, 16)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
             }
 
             if showBars {
@@ -63,34 +57,119 @@ struct VideoPlayerView: View {
         .navigationBarHidden(true)
         .statusBarHidden(!showBars)
         .onAppear { setupPlayer() }
-        .onDisappear { saveProgress() }
+        .onDisappear {
+            restoreTask?.cancel(); restoreTask = nil
+            saveProgress()
+            player?.pause()
+            player = nil
+        }
     }
 
     private func setupPlayer() {
+        activatePlaybackAudioSession(mode: .moviePlayback)
         let item = AVPlayerItem(url: fileURL)
         let p = AVPlayer(playerItem: item)
         self.player = p
-        p.play()
+        let fraction = historyItem?.clampedFraction ?? 0
+        if fraction > 0 && fraction < 0.99 {
+            restoreTask = Task {
+                if let duration = try? await item.asset.load(.duration), !Task.isCancelled {
+                    let secs = duration.seconds
+                    if secs.isFinite && secs > 0 {
+                        await p.seek(to: CMTime(seconds: secs * fraction, preferredTimescale: 600))
+                    }
+                }
+                guard !Task.isCancelled else { return }
+                p.play()
+            }
+        } else {
+            p.play()
+        }
     }
 
     private func saveProgress() {
         guard let player else { return }
         let duration  = player.currentItem?.duration.seconds ?? 0
         let current   = player.currentTime().seconds
-        let progress  = duration > 0 ? current / duration : 0
         player.pause()
+        guard duration.isFinite, duration > 0, current.isFinite else { return }
+        let progress = min(max(current / duration, 0), 1)
+        ReadingHistory.recordProgress(
+            in: context,
+            historyItem: historyItem,
+            title: fileURL.deletingPathExtension().lastPathComponent,
+            filePath: fileURL.path,
+            fileType: .video,
+            progress: progress
+        )
+    }
+}
 
-        if let item = historyItem {
-            item.progress   = progress
-            item.lastReadAt = Date()
-        } else {
-            context.insert(ReadingHistory(
-                title: fileURL.deletingPathExtension().lastPathComponent,
-                filePath: fileURL.path,
-                fileType: .video,
-                progress: progress
-            ))
+// MARK: - Shared AVAudioSession & AVPlayerViewController wrapper
+
+@MainActor
+func activatePlaybackAudioSession(mode: AVAudioSession.Mode = .default) {
+    try? AVAudioSession.sharedInstance().setCategory(.playback, mode: mode)
+    try? AVAudioSession.sharedInstance().setActive(true)
+}
+
+struct PlayerViewController: UIViewControllerRepresentable {
+    @Binding var player: AVPlayer?
+    var onPlaybackEnded: (@MainActor () -> Void)? = nil
+
+    func makeCoordinator() -> Coordinator { Coordinator(onPlaybackEnded: onPlaybackEnded) }
+
+    func makeUIViewController(context: Context) -> AVPlayerViewController {
+        let vc = AVPlayerViewController()
+        vc.player = player
+        vc.showsPlaybackControls = true
+        vc.videoGravity = .resizeAspect
+        vc.allowsPictureInPicturePlayback = true
+        context.coordinator.syncEndObserver(for: player)
+        return vc
+    }
+
+    func updateUIViewController(_ vc: AVPlayerViewController, context: Context) {
+        if vc.player !== player { vc.player = player }
+        context.coordinator.onPlaybackEnded = onPlaybackEnded
+        context.coordinator.syncEndObserver(for: player)
+    }
+
+    static func dismantleUIViewController(_ vc: AVPlayerViewController, coordinator: Coordinator) {
+        vc.player?.pause()
+        vc.player = nil
+        coordinator.stopObserving()
+    }
+
+    @MainActor
+    final class Coordinator: NSObject {
+        var onPlaybackEnded: (@MainActor () -> Void)?
+        private weak var observedItem: AVPlayerItem?
+
+        init(onPlaybackEnded: (@MainActor () -> Void)?) { self.onPlaybackEnded = onPlaybackEnded }
+
+        func syncEndObserver(for player: AVPlayer?) {
+            let item = onPlaybackEnded != nil ? player?.currentItem : nil
+            guard item !== observedItem else { return }
+            stopObserving()
+            observedItem = item
+            if let item {
+                NotificationCenter.default.addObserver(
+                    self,
+                    selector: #selector(playbackEnded),
+                    name: AVPlayerItem.didPlayToEndTimeNotification,
+                    object: item
+                )
+            }
         }
+
+        func stopObserving() {
+            NotificationCenter.default.removeObserver(self)
+            observedItem = nil
+        }
+
+        @objc private func playbackEnded() { onPlaybackEnded?() }
+        deinit { NotificationCenter.default.removeObserver(self) }
     }
 }
 
@@ -170,7 +249,9 @@ final class VideoNetworkSpeedMonitor {
             return
         }
 
-        label = isLocal(player: player) ? "本地" : "网速 --"
+        let local = isLocal(player: player)
+        label = local ? "本地" : "网速 --"
+        if local && streamKey == nil { return }
 
         if let streamKey {
             smbObserver = NotificationCenter.default.addObserver(

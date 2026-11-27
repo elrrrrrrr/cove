@@ -24,7 +24,7 @@ actor NASThumbnailCache {
         return SHA256.hash(data: Data(context.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 
-    func thumbnail(for entry: NASFileEntry, connection: NASConnection, pixels: Int) async -> UIImage? {
+    func thumbnail(for entry: NASFileEntry, connection: SMBClient, pixels: Int) async -> UIImage? {
         let key = Self.key(connectionID: connection.cacheIdentity, entry: entry, pixels: pixels)
         if let cached = ImageMemoryCache.shared.image(forKey: key) { return Task.isCancelled ? nil : cached }
         return await pending.value(for: key) {
@@ -35,9 +35,9 @@ actor NASThumbnailCache {
             let image: UIImage?
             switch entry.fileType {
             case .image:
-                image = await self.imageSlots.run { await Self.imageThumbnail(entry: entry, connection: connection, pixels: pixels) }
+                image = await self.imageSlots.run { await Self.imageThumbnail(entry: entry, client: connection, pixels: pixels) }
             case .video:
-                image = await self.videoSlots.run { await Self.videoThumbnail(entry: entry, connection: connection, pixels: pixels) }
+                image = await self.videoSlots.run { await Self.videoThumbnail(entry: entry, client: connection, pixels: pixels) }
             default: image = nil
             }
             guard let image, !Task.isCancelled else { return nil }
@@ -53,20 +53,20 @@ actor NASThumbnailCache {
         ImageMemoryCache.shared.clear()
         await disk.clear()
     }
-    func diskUsageBytes() async -> Int { await disk.usageBytes() }
 
     private static func decode(_ data: Data, pixels: Int) async -> UIImage? {
         let task = Task.detached(priority: .utility) { ImageDecoder.decode(data, sizing: .thumbnail(pixels)) }
         return await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
     }
 
-    private static func imageThumbnail(entry: NASFileEntry, connection: NASConnection, pixels: Int) async -> UIImage? {
-        guard let client = connection.smbClient else { return nil }
+    private static func imageThumbnail(entry: NASFileEntry, client: SMBClient, pixels: Int) async -> UIImage? {
         do {
             let length = entry.size > 0 ? min(entry.size, 256 * 1024) : 256 * 1024
             if let header = try? await client.readRange(at: entry.path, offset: 0, length: length), !Task.isCancelled {
-                let thumbnail = await Task.detached(priority: .utility) { embeddedThumbnail(header, pixels: pixels) }.value
-                if let thumbnail { return thumbnail }
+                let task = Task.detached(priority: .utility) { embeddedThumbnail(header, pixels: pixels) }
+                if let thumbnail = await withTaskCancellationHandler(operation: { await task.value }, onCancel: { task.cancel() }) {
+                    return thumbnail
+                }
             }
             guard !Task.isCancelled, entry.size <= 20_000_000 else { return nil }
             // The client also enforces its bounded read limit for unknown/changed file sizes.
@@ -91,8 +91,8 @@ actor NASThumbnailCache {
         return UIImage(cgImage: image)
     }
 
-    private static func videoThumbnail(entry: NASFileEntry, connection: NASConnection, pixels: Int) async -> UIImage? {
-        guard let client = connection.smbClient, !Task.isCancelled else { return nil }
+    private static func videoThumbnail(entry: NASFileEntry, client: SMBClient, pixels: Int) async -> UIImage? {
+        guard !Task.isCancelled else { return nil }
         let operation = VideoThumbnailOperation(asset: SMBStreamLoader.makeAsset(client: client, remotePath: entry.path))
         defer { SMBStreamLoader.cancel(in: operation.asset) }
         let generator = operation.generator

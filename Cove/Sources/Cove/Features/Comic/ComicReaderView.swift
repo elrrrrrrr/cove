@@ -6,34 +6,36 @@ import WebKit
 
 struct ChapterImageData: Sendable {
     let imageURLs: [URL]
-    let bookId: String
-    let chapterId: String
-    let chapterName: String
-    let bookName: String
-    let prevChapterURL: URL?
-    let nextChapterURL: URL?
 }
 
 // MARK: - ChapterImageExtractor
 
 @Observable
 @MainActor
-final class ChapterImageExtractor: NSObject {
+final class ChapterImageExtractor {
     enum State {
         case loading, loaded(ChapterImageData), failed(String)
     }
     var state: State = .loading
-    let webView: WKWebView
+    let webView = WebScript.makeWebView()
 
+    private var navBridge: WebNavigationBridge?
     private var targetURL: URL?
     private var definitionID: String?
     private var extractTask: Task<Void, Never>?
 
-    override init() {
-        let wv = WebScript.makeWebView()
-        self.webView = wv
-        super.init()
-        wv.navigationDelegate = self
+    init() {
+        navBridge = WebNavigationBridge.attach(
+            to: webView,
+            onFinish: { [weak self] _ in
+                guard let self, case .loading = state else { return }
+                startExtraction()
+            },
+            onFail: { [weak self] _, error in
+                guard let self, case .loading = state else { return }
+                state = .failed(error.localizedDescription)
+            }
+        )
     }
 
     func load(url: URL, definitionID: String? = nil) {
@@ -41,7 +43,8 @@ final class ChapterImageExtractor: NSObject {
         extractTask?.cancel()
         targetURL = url
         state = .loading
-        webView.load(URLRequest(url: url))
+        let headers = SiteParserRegistry.rule(for: url, role: "chapter", definitionID: definitionID)?.load?.headers ?? [:]
+        webView.load(WebScript.makeRequest(url: url, headers: headers))
     }
 
     func cancel() {
@@ -63,19 +66,20 @@ final class ChapterImageExtractor: NSObject {
         }
         do {
             if let request = rule.request {
-                try await extractRequest(request, target: target)
+                try await extractRequest(request, target: target, headers: rule.load?.headers ?? [:])
                 return
             }
             guard let extraction = rule.extract else { throw SiteDefinitionError.invalid("缺少章节提取规则") }
             for attempt in 0..<2 {
                 try await Task.sleep(for: .seconds(attempt == 0 ? rule.load?.waitSeconds ?? 0 : 1.5))
                 guard !Task.isCancelled else { return }
-                guard let raw = try await WebScript.string(extraction.javascript, in: webView), let bytes = raw.data(using: .utf8) else { continue }
+                guard let raw = try await WebScript.boundedString(extraction.javascript, in: webView),
+                      let bytes = raw.data(using: .utf8) else { continue }
                 let parsed = try JSONDecoder().decode(RawData.self, from: bytes)
-                let urls = parsed.images.compactMap { URL(string: $0, relativeTo: target)?.absoluteURL }
+                let urls = parsed.images.compactMap { WebScript.resolveURL($0, relativeTo: target, allowData: true) }
                 if !urls.isEmpty {
                     guard !Task.isCancelled else { return }
-                    state = .loaded(makeChapterData(parsed, urls: urls))
+                    state = .loaded(ChapterImageData(imageURLs: urls))
                     return
                 }
             }
@@ -83,65 +87,25 @@ final class ChapterImageExtractor: NSObject {
         } catch { if !Task.isCancelled { state = .failed("加载失败：\(error.localizedDescription)") } }
     }
 
-    private func extractRequest(_ config: SiteTextRequest, target: URL) async throws {
+    private func extractRequest(_ config: SiteTextRequest, target: URL, headers: [String: String]) async throws {
         guard let capture = SitePortalResolver.captures(config.capturePattern, in: target.absoluteString).first,
-              let url = URL(string: config.urlTemplate.replacingOccurrences(of: "{capture}", with: capture), relativeTo: target)?.absoluteURL else {
+              let url = WebScript.resolveURL(config.urlTemplate.replacingOccurrences(of: "{capture}", with: capture), relativeTo: target) else {
             throw SiteDefinitionError.invalid("无法从地址生成章节请求")
         }
-        var request = URLRequest(url: url)
-        request.setValue(webView.customUserAgent, forHTTPHeaderField: "User-Agent")
-        request.timeoutInterval = 15
+        let request = WebScript.makeRequest(url: url, headers: headers, userAgent: webView.customUserAgent, timeout: 15)
         let (bytes, response) = try await URLSession.shared.data(for: request)
         guard let status = (response as? HTTPURLResponse)?.statusCode, (200...299).contains(status),
               let text = String(data: bytes, encoding: .utf8) else { throw SiteDefinitionError.invalid("章节请求失败") }
         let urls = SitePortalResolver.captures(config.responsePattern, in: text)
             .filter { value in !(config.exclude ?? []).contains(where: { value.contains($0) }) }
-            .compactMap { URL(string: $0, relativeTo: url)?.absoluteURL }
+            .compactMap { WebScript.resolveURL($0, relativeTo: url, allowData: true) }
         guard !Task.isCancelled else { return }
         guard !urls.isEmpty else { throw SiteDefinitionError.invalid("未找到图片，请检查响应规则") }
-        state = .loaded(ChapterImageData(imageURLs: urls, bookId: capture, chapterId: capture,
-            chapterName: "", bookName: "", prevChapterURL: nil, nextChapterURL: nil))
+        state = .loaded(ChapterImageData(imageURLs: urls))
     }
 
     private struct RawData: Decodable {
         let images: [String]
-        let bookId: String?
-        let chapterId: String?
-        let chapterName: String?
-        let bookName: String?
-        let prevChapter: String?
-        let nextChapter: String?
-    }
-
-    private func makeChapterData(_ raw: RawData, urls: [URL]) -> ChapterImageData {
-        ChapterImageData(
-            imageURLs: urls,
-            bookId: raw.bookId ?? "",
-            chapterId: raw.chapterId ?? "",
-            chapterName: raw.chapterName ?? "",
-            bookName: raw.bookName ?? "",
-            prevChapterURL: resolveURL(raw.prevChapter),
-            nextChapterURL: resolveURL(raw.nextChapter)
-        )
-    }
-
-    private func resolveURL(_ path: String?) -> URL? {
-        guard let path, !path.isEmpty else { return nil }
-        if path.hasPrefix("http") { return URL(string: path) }
-        guard let base = targetURL else { return nil }
-        return URL(string: path, relativeTo: base)?.absoluteURL
-    }
-}
-
-extension ChapterImageExtractor: WKNavigationDelegate {
-    nonisolated func webView(_ wv: WKWebView, didFinish _: WKNavigation!) {
-        Task { @MainActor in self.startExtraction() }
-    }
-    nonisolated func webView(_ wv: WKWebView, didFail _: WKNavigation!, withError error: Error) {
-        Task { @MainActor in self.state = .failed(error.localizedDescription) }
-    }
-    nonisolated func webView(_ wv: WKWebView, didFailProvisionalNavigation _: WKNavigation!, withError error: Error) {
-        Task { @MainActor in self.state = .failed(error.localizedDescription) }
     }
 }
 
@@ -185,7 +149,7 @@ struct ComicReaderView: View {
             Color.black.ignoresSafeArea()
 
             // Hidden WebView
-            HiddenWebView(webView: extractor.webView)
+            ParsingWebViewHost(webView: extractor.webView, accessibilityHidden: true)
                 .frame(width: 1, height: 1)
                 .opacity(0)
                 .allowsHitTesting(false)
@@ -260,8 +224,16 @@ struct ComicReaderView: View {
                 LazyVStack(spacing: 0) {
                     Color.clear.frame(height: 0).id("reader-top")
 
-                    ForEach(Array(data.imageURLs.enumerated()), id: \.offset) { index, url in
-                        ComicPageImage(url: url, index: index)
+                    ForEach(Array(data.imageURLs.enumerated()), id: \.offset) { _, url in
+                        PageImageView(
+                            url: url,
+                            referer: currentChapter.chapterURL,
+                            definitionID: definitionID,
+                            placeholderHeight: 400,
+                            spinnerTint: .white.opacity(0.5),
+                            placeholderBackground: nil,
+                            failureColor: .white.opacity(0.5)
+                        )
                     }
 
                     // Chapter end actions
@@ -359,7 +331,7 @@ struct ComicReaderView: View {
                 }
                 .disabled(!hasPrev)
 
-                Text("\(currentChapterIndex + 1) / \(allChapters.count)")
+                Text(allChapters.isEmpty ? "0 / 0" : "\(currentChapterIndex + 1) / \(allChapters.count)")
                     .font(.subheadline.monospacedDigit())
 
                 Button {
@@ -396,106 +368,19 @@ struct ComicReaderView: View {
     // MARK: - Progress
 
     private func saveProgress() {
-        let urlString = bookURL.absoluteString
         let progress = allChapters.isEmpty ? 0 : Double(currentChapterIndex) / Double(allChapters.count)
-        let comicType = FileType.comic
-        let descriptor = FetchDescriptor<ReadingHistory>(
-            predicate: #Predicate { $0.url == urlString && $0.fileType == comicType }
+        ReadingHistory.recordProgress(
+            in: modelContext,
+            historyItem: nil,
+            title: bookTitle,
+            url: bookURL.absoluteString,
+            filePath: currentChapter.id,
+            fileType: .comic,
+            progress: progress,
+            thumbnailURLString: coverURL?.absoluteString,
+            definitionID: definitionID,
+            updateFilePath: true,
+            updateMetadata: true
         )
-        if let existing = try? modelContext.fetch(descriptor).first {
-            existing.definitionID = definitionID
-            existing.progress = progress
-            existing.lastReadAt = Date()
-            existing.filePath = currentChapter.id  // store last-read chapter ID
-        } else {
-            let entry = ReadingHistory(
-                title: bookTitle,
-                url: urlString,
-                filePath: currentChapter.id,
-                fileType: .comic,
-                progress: progress,
-                thumbnailURLString: coverURL?.absoluteString
-            )
-            entry.definitionID = definitionID
-            modelContext.insert(entry)
-        }
-    }
-}
-
-// MARK: - Comic page image
-
-private struct ComicPageImage: View {
-    let url: URL
-    let index: Int
-
-    @Environment(\.displayScale) private var scale
-    @State private var pixels = 1024
-    private let source: ThumbnailRequest
-    private var request: ThumbnailRequest { source.resized(.page(width: pixels)) }
-    @State private var image: UIImage?
-    @State private var failed = false
-    @State private var isVisible = true
-
-    init(url: URL, index: Int) {
-        self.url = url
-        self.index = index
-        source = ThumbnailRequest(url: url, sizing: .page(width: 1024))
-        _image = State(initialValue: ImageMemoryCache.shared.image(for: source))
-    }
-
-    var body: some View {
-        Group {
-            if let img = image {
-                Image(uiImage: img)
-                    .resizable()
-                    .scaledToFit()
-            } else if failed {
-                VStack(spacing: 8) {
-                    Image(systemName: "photo.badge.exclamationmark")
-                        .font(.title2)
-                        .foregroundStyle(.white.opacity(0.5))
-                    Text("图片加载失败")
-                        .font(.caption)
-                        .foregroundStyle(.white.opacity(0.4))
-                }
-                .frame(maxWidth: .infinity)
-                .frame(height: 300)
-            } else {
-                ProgressView()
-                    .tint(.white.opacity(0.5))
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 400)
-            }
-        }
-        .onGeometryChange(for: Int.self) { [scale] proxy in ImageSizing.pixels(points: proxy.size.width, scale: scale) } action: { pixels = $0 }
-        .task(id: request) {
-            failed = false
-            let loaded = await ImagePipeline.shared.image(for: request)
-            guard !Task.isCancelled else { return }
-            if let img = loaded {
-                withAnimation(.easeIn(duration: 0.15)) {
-                    image = img
-                }
-            } else {
-                failed = true
-            }
-        }
-        .onAppear {
-            isVisible = true
-            // Re-load from L0 cache if image was released while off-screen
-            if image == nil, !failed {
-                image = ImageMemoryCache.shared.image(for: request)
-            }
-        }
-        .onDisappear {
-            isVisible = false
-            // Delay release to avoid re-load on quick scroll back;
-            // L0/L1/L2 cache retains the data so re-loading is nearly instant.
-            Task { @MainActor in
-                try? await Task.sleep(for: .seconds(5))
-                guard !isVisible else { return }
-                image = nil
-            }
-        }
     }
 }

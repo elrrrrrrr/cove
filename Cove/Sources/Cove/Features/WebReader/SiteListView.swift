@@ -291,7 +291,10 @@ struct SiteEditSheet: View {
     @State private var note      = ""
 
     private var isValid: Bool {
-        !name.isEmpty && URL(string: urlString) != nil && urlString.hasPrefix("http")
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedName.isEmpty,
+              let url = URL(string: urlString.trimmingCharacters(in: .whitespacesAndNewlines)) else { return false }
+        return WebScript.isWebURL(url)
     }
 
     var body: some View {

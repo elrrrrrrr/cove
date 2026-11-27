@@ -23,7 +23,14 @@ enum TextPaginator {
 
     static func load(_ url: URL) async throws -> (text: String, chapters: [Chapter]) {
         let work = Task.detached(priority: .userInitiated) {
+            let maxBytes = 50 * 1024 * 1024
+            if let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize), size > maxBytes {
+                throw ReaderSafetyError.message("文本文件超过 50 MB 加载上限")
+            }
             let data = try Data(contentsOf: url)
+            guard data.count <= maxBytes else {
+                throw ReaderSafetyError.message("文本文件超过 50 MB 加载上限")
+            }
             let encoding = String.Encoding(rawValue: CFStringConvertEncodingToNSStringEncoding(CFStringEncoding(CFStringEncodings.GB_18030_2000.rawValue)))
             guard let text = String(data: data, encoding: .utf8) ?? String(data: data, encoding: encoding) else {
                 throw ReaderSafetyError.message("无法识别小说文件编码")
@@ -77,14 +84,8 @@ enum TextPaginator {
 
                 // Binary search: find the last chapter starting at or before this page
                 var chapterTitle: String? = nil
-                if !sortedLocs.isEmpty {
-                    var lo = 0, hi = sortedLocs.count
-                    while lo < hi {
-                        let mid = (lo + hi) / 2
-                        if sortedLocs[mid] <= visibleRange.location { lo = mid + 1 } else { hi = mid }
-                    }
-                    if lo > 0 { chapterTitle = locToTitle[sortedLocs[lo - 1]] }
-                }
+                let chapterPos = upperBound(sortedLocs, for: visibleRange.location)
+                if chapterPos > 0 { chapterTitle = locToTitle[sortedLocs[chapterPos - 1]] }
 
                 pages.append(PageContent(id: pages.count, text: pageText, chapterTitle: chapterTitle))
                 startIndex = visibleRange.location + visibleRange.length
@@ -92,6 +93,15 @@ enum TextPaginator {
             return pages
         }
         return await withTaskCancellationHandler { await work.value } onCancel: { work.cancel() }
+    }
+
+    private static func upperBound(_ sorted: [Int], for target: Int) -> Int {
+        var lo = 0, hi = sorted.count
+        while lo < hi {
+            let mid = (lo + hi) / 2
+            if sorted[mid] <= target { lo = mid + 1 } else { hi = mid }
+        }
+        return lo
     }
 
     // Pre-compiled chapter detection regex patterns
@@ -139,13 +149,7 @@ enum TextPaginator {
         }
         // For each chapter, binary search for the page containing its location — O(chapters * log(pages))
         for i in chapters.indices {
-            let loc = chapters[i].location
-            var lo = 0, hi = offsets.count
-            while lo < hi {
-                let mid = (lo + hi) / 2
-                if offsets[mid] <= loc { lo = mid + 1 } else { hi = mid }
-            }
-            let pageIdx = max(lo - 1, 0)
+            let pageIdx = max(upperBound(offsets, for: chapters[i].location) - 1, 0)
             chapters[i] = Chapter(id: chapters[i].id, title: chapters[i].title,
                                   location: chapters[i].location, pageIndex: pageIdx)
         }
@@ -189,36 +193,15 @@ struct TXTReaderView: View {
         ZStack {
             backgroundColor.ignoresSafeArea()
 
-            // Hidden GeometryReader always present to capture container size
-            GeometryReader { geo in
-                Color.clear
-                    .onAppear {
-                        let s = geo.size
-                        if s.width > 0, s.height > 0, containerSize != s {
-                            containerSize = s
-                            if !fullText.isEmpty { repaginate() }
-                        }
-                    }
-                    .onChange(of: geo.size) { _, s in
-                        if s.width > 0, s.height > 0, containerSize != s {
-                            containerSize = s
-                            if !fullText.isEmpty { repaginate() }
-                        }
-                    }
-            }
-
             if isLoading {
-                loadingView.overlay(alignment: .topLeading) { floatingBackButton }
+                ReaderLoadingStateView(message: "加载中…", filename: fileURL.lastPathComponent) { dismiss() }
             } else if let loadError {
-                errorView(loadError)
+                ReaderErrorView(title: "加载失败", systemImage: "doc.text", message: loadError,
+                                onRetry: { Task { await loadFile() } }, onBack: { dismiss() })
             } else if isPaginating {
-                paginatingView.overlay(alignment: .topLeading) { floatingBackButton }
+                ReaderLoadingStateView(message: "排版中…") { dismiss() }
             } else if pages.isEmpty {
-                ContentUnavailableView {
-                    Label("空文件", systemImage: "doc.text")
-                } actions: {
-                    Button("返回") { dismiss() }
-                }
+                ReaderErrorView(title: "空文件", systemImage: "doc.text") { dismiss() }
             } else {
                 if readingMode == .scroll { scrollingContentView }
                 else { pageContentView }
@@ -226,6 +209,12 @@ struct TXTReaderView: View {
                     VStack(spacing: 0) { topBar; Spacer(); bottomBar }
                         .transition(.opacity)
                 }
+            }
+        }
+        .onGeometryChange(for: CGSize.self) { $0.size } action: { size in
+            if size.width > 0, size.height > 0, containerSize != size {
+                containerSize = size
+                if !fullText.isEmpty { repaginate() }
             }
         }
         .navigationBarHidden(true)
@@ -298,23 +287,20 @@ struct TXTReaderView: View {
                             // Swipe left → next page
                             withAnimation(.easeOut(duration: 0.2)) { dragOffset = -w }
                             DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                                dragOffset = 0; currentPage += 1
+                                dragOffset = 0
+                                currentPage = min(currentPage + 1, max(pages.count - 1, 0))
                             }
                         } else if value.translation.width + velocity > threshold, currentPage > 0 {
                             // Swipe right → previous page
                             withAnimation(.easeOut(duration: 0.2)) { dragOffset = w }
                             DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                                dragOffset = 0; currentPage -= 1
+                                dragOffset = 0
+                                currentPage = max(currentPage - 1, 0)
                             }
                         } else {
                             withAnimation(.easeOut(duration: 0.15)) { dragOffset = 0 }
                         }
                     }
-            )
-            .simultaneousGesture(
-                TapGesture().onEnded {
-                    // no-op: tap location handled below
-                }
             )
             // Tap zones overlaid on top
             .overlay {
@@ -344,67 +330,20 @@ struct TXTReaderView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
-    // MARK: - Loading views
-
-    private var loadingView: some View {
-        VStack(spacing: 16) {
-            ProgressView()
-            Text("加载中…").font(.subheadline).foregroundStyle(.secondary)
-            Text(fileURL.lastPathComponent).font(.caption).foregroundStyle(.tertiary).lineLimit(1)
-        }
-    }
-
-    private func errorView(_ msg: String) -> some View {
-        ContentUnavailableView {
-            Label("加载失败", systemImage: "doc.text")
-        } description: { Text(msg) } actions: {
-            Button("重试") { Task { await loadFile() } }.buttonStyle(.borderedProminent)
-            Button("返回") { dismiss() }
-        }
-    }
-
-    private var paginatingView: some View {
-        VStack(spacing: 16) {
-            ProgressView()
-            Text("排版中…").font(.subheadline).foregroundStyle(.secondary)
-        }
-    }
-
-    private var floatingBackButton: some View {
-        Button { dismiss() } label: {
-            Image(systemName: "chevron.left")
-                .font(.system(size: 17, weight: .medium))
-                .padding(10)
-                .background(.ultraThinMaterial, in: Circle())
-        }
-        .padding(.leading, 16)
-        .padding(.top, 12)
-    }
-
     // MARK: - Bars
 
     private var topBar: some View {
-        HStack(spacing: 12) {
-            Button { dismiss() } label: {
-                Image(systemName: "chevron.left").imageScale(.large).fontWeight(.medium)
-            }
-            VStack(alignment: .leading, spacing: 2) {
-                Text(fileURL.deletingPathExtension().lastPathComponent)
-                    .font(.headline).lineLimit(1)
-                if pages.indices.contains(currentPage),
-                   let ch = pages[currentPage].chapterTitle {
-                    Text(ch).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                }
-            }
-            Spacer()
+        ReaderTopBar(
+            title: fileURL.deletingPathExtension().lastPathComponent,
+            subtitle: pages.indices.contains(currentPage) ? pages[currentPage].chapterTitle : nil,
+            onBack: { dismiss() }
+        ) {
             if !chapters.isEmpty {
                 Button { showChapterList = true } label: {
                     Image(systemName: "list.bullet").imageScale(.large)
                 }
             }
         }
-        .padding(.horizontal, 16).padding(.vertical, 10)
-        .background(.ultraThinMaterial)
     }
 
     private var bottomBar: some View {
@@ -481,8 +420,7 @@ struct TXTReaderView: View {
 
     private func loadFile() async {
         loadError = nil; isLoading = true
-        let path = fileURL.path
-        let stored = try? context.fetch(FetchDescriptor<ReadingHistory>(predicate: #Predicate { $0.filePath == path })).first
+        let stored = ReadingHistory.find(in: context, filePath: fileURL.path)
         restoredProgress = historyItem?.progress ?? stored?.progress ?? 0
         do {
             let loaded = try await TextPaginator.load(fileURL)
@@ -528,26 +466,24 @@ struct TXTReaderView: View {
         isPaginating = false
 
         if !pages.isEmpty {
-            currentPage = min(Int(savedProgress * Double(pages.count - 1)), pages.count - 1)
+            let safe = savedProgress.isFinite ? min(max(savedProgress, 0), 1) : 0
+            currentPage = min(Int(safe * Double(pages.count - 1)), pages.count - 1)
             scrollPage = currentPage
-            scrollProgress = savedProgress
+            scrollProgress = safe
         }
     }
 
     private func saveProgress() {
         guard !pages.isEmpty else { return }
         let p = readingMode == .scroll ? scrollProgress : Double(currentPage) / Double(max(pages.count - 1, 1))
-        let path = fileURL.path
-        let stored = try? context.fetch(FetchDescriptor<ReadingHistory>(predicate: #Predicate { $0.filePath == path })).first
-        if let item = historyItem ?? stored {
-            item.progress = p; item.lastReadAt = Date()
-        } else {
-            context.insert(ReadingHistory(
-                title: fileURL.deletingPathExtension().lastPathComponent,
-                filePath: fileURL.path, fileType: .txt, progress: p
-            ))
-        }
-        try? context.save()
+        ReadingHistory.recordProgress(
+            in: context,
+            historyItem: historyItem,
+            title: fileURL.deletingPathExtension().lastPathComponent,
+            filePath: fileURL.path,
+            fileType: .txt,
+            progress: p
+        )
     }
 }
 

@@ -1,14 +1,35 @@
 import WebKit
 
-@Observable @MainActor final class ArticleLoader: NSObject {
+@Observable @MainActor final class ArticleLoader {
     enum State: Equatable { case idle, loading, loaded(ArticleDocument), failed(String) }
     var state: State = .idle
     private var storedWebView: WKWebView?
+    private var navBridge: WebNavigationBridge?
     var webView: WKWebView {
         if let storedWebView { return storedWebView }
-        let config = WKWebViewConfiguration(); config.websiteDataStore = .default()
-        let view = WKWebView(frame: .zero, configuration: config)
-        view.navigationDelegate = self; storedWebView = view; return view
+        let view = WebScript.makeWebView()
+        navBridge = WebNavigationBridge.attach(
+            to: view,
+            onFinish: { [weak self] id in
+                guard let self, id == navigationID else { return }
+                extract()
+            },
+            onFail: { [weak self] id, error in
+                guard let self, id == navigationID, state == .loading else { return }
+                fail(error.localizedDescription)
+            },
+            onResponse: { [weak self] response in
+                guard let self, response.isForMainFrame,
+                      let http = response.response as? HTTPURLResponse,
+                      !(200...299).contains(http.statusCode),
+                      state == .loading else { return .allow }
+                timeout?.cancel(); timeout = nil; extraction?.cancel(); extraction = nil
+                state = .failed("网页响应 HTTP \(http.statusCode)，可查看原始网页")
+                return .allow
+            }
+        )
+        storedWebView = view
+        return view
     }
     private(set) var request: URLRequest?
     private var extraction: Task<Void, Never>?
@@ -25,8 +46,7 @@ import WebKit
             state = .failed("图文地址需要 HTTP 或 HTTPS"); return
         }
         state = .loading
-        var request = URLRequest(url: url)
-        for (key, value) in rule(for: url)?.load?.headers ?? [:] { request.setValue(value, forHTTPHeaderField: key) }
+        let request = WebScript.makeRequest(url: url, headers: rule(for: url)?.load?.headers ?? [:])
         self.request = request; navigate(request)
         let id = generation
         timeout = Task {
@@ -89,32 +109,4 @@ import WebKit
         "title": .init(selector: "h1, title", text: true),
         "blocks": .init(selector: "article, main, [role=main]", content: true)
     ])
-}
-
-extension ArticleLoader: WKNavigationDelegate {
-    func webView(_ webView: WKWebView, decidePolicyFor response: WKNavigationResponse) async -> WKNavigationResponsePolicy {
-        if response.isForMainFrame, let http = response.response as? HTTPURLResponse, !(200...299).contains(http.statusCode), state == .loading {
-            timeout?.cancel(); timeout = nil; extraction?.cancel(); extraction = nil
-            state = .failed("网页响应 HTTP \(http.statusCode)，可查看原始网页")
-        }
-        return .allow
-    }
-    nonisolated func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        let id = navigation.map(ObjectIdentifier.init)
-        Task { @MainActor in guard id == self.navigationID else { return }; self.extract() }
-    }
-    nonisolated func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-        let id = navigation.map(ObjectIdentifier.init)
-        Task { @MainActor in
-            guard id == self.navigationID, (error as NSError).code != NSURLErrorCancelled, self.state == .loading else { return }
-            self.fail(error.localizedDescription)
-        }
-    }
-    nonisolated func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-        let id = navigation.map(ObjectIdentifier.init)
-        Task { @MainActor in
-            guard id == self.navigationID, (error as NSError).code != NSURLErrorCancelled, self.state == .loading else { return }
-            self.fail(error.localizedDescription)
-        }
-    }
 }

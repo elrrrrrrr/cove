@@ -9,31 +9,36 @@ struct SiteGalleryView: View {
     /// Non-nil when launched from BookmarkSite — used to open site configuration.
     let bookmarkSite  : BookmarkSite?
     init(site: BookmarkSite) {
-        definitionID = site.definitionID
-        siteName        = site.name
-        siteURLString   = site.urlString
-        bookmarkSite    = site
-        _loader         = State(wrappedValue: Self.makeLoader())
-        _parser = State(initialValue: SiteParserRegistry.parser(for: site.urlString, definitionID: site.definitionID))
-        _navigation = State(initialValue: SiteCatalogNavigation(entryURLString: site.urlString))
-        _savedLayout = AppStorage(wrappedValue: "", BrowserLayout.preferenceKey(source: "web", location: site.id.uuidString))
+        self.init(
+            definitionID: site.definitionID,
+            siteName: site.name,
+            siteURLString: site.urlString,
+            bookmarkSite: site,
+            layoutKey: BrowserLayout.preferenceKey(source: "web", location: site.id.uuidString)
+        )
     }
 
     // Sub-site navigation.
     init(name: String, urlString: String, definitionID: String? = nil) {
-        self.definitionID = definitionID
-        siteName      = name
-        siteURLString = urlString
-        bookmarkSite  = nil
-        _loader       = State(wrappedValue: Self.makeLoader())
-        _parser = State(initialValue: SiteParserRegistry.parser(for: urlString, definitionID: definitionID))
-        _navigation = State(initialValue: SiteCatalogNavigation(entryURLString: urlString))
-        _savedLayout = AppStorage(wrappedValue: "", BrowserLayout.preferenceKey(source: "web:" + (definitionID ?? ""), location: urlString))
+        self.init(
+            definitionID: definitionID,
+            siteName: name,
+            siteURLString: urlString,
+            bookmarkSite: nil,
+            layoutKey: BrowserLayout.preferenceKey(source: "web:" + (definitionID ?? ""), location: urlString)
+        )
     }
 
-    /// Creates a bare PageLoader — cache is pre-populated asynchronously in .task
-    /// to avoid a blocking disk read during the view init/State construction.
-    private static func makeLoader() -> PageLoader { PageLoader() }
+    private init(definitionID: String?, siteName: String, siteURLString: String, bookmarkSite: BookmarkSite?, layoutKey: String) {
+        self.definitionID = definitionID
+        self.siteName = siteName
+        self.siteURLString = siteURLString
+        self.bookmarkSite = bookmarkSite
+        _loader = State(wrappedValue: PageLoader())
+        _parser = State(initialValue: SiteParserRegistry.parser(for: siteURLString, definitionID: definitionID))
+        _navigation = State(initialValue: SiteCatalogNavigation(entryURLString: siteURLString))
+        _savedLayout = AppStorage(wrappedValue: "", layoutKey)
+    }
 
     @State private var loader: PageLoader
     @State private var showWeb          = false
@@ -121,26 +126,31 @@ struct SiteGalleryView: View {
             // Async cache pre-warm (disk I/O runs on actor, not main thread)
             if case .idle = loader.state,
                let (cached, _) = await GalleryCache.load(for: parser.cacheURL(for: url)) {
+                guard !Task.isCancelled else { return }
                 loader.preload(cached)
             }
+            guard !Task.isCancelled else { return }
             loader.load(url: url, parser: parser)
         }
+        .onDisappear { loader.cancel() }
         // Keep favoriteURLCache in sync — avoids rebuilding a Set<String> on
         // every body re-evaluation (which can happen many times during a load).
-        .onChange(of: allFavorites) { _, favorites in
+        .onChange(of: allFavorites, initial: true) { _, favorites in
             favoriteURLCache = Set(favorites.map(\.pageURLString))
         }
         .onChange(of: library.definitions) { _, _ in
-            refreshParser()
+            let updated = navigation.parser(definitionID: bookmarkSite?.definitionID ?? definitionID)
+            if updated.definitionID != parser.definitionID || updated.ruleID != parser.ruleID ||
+               updated.extractItemsJS != parser.extractItemsJS || updated.needsJS != parser.needsJS ||
+               updated.portalURL != parser.portalURL || updated.transformScript != parser.transformScript {
+                refreshParser()
+            }
         }
         .onChange(of: bookmarkSite?.definitionID) { _, _ in refreshParser() }
         .onChange(of: loader.state, initial: true) { _, state in
             if case .done(let items) = state { automaticImages = isImageContent(items) }
         }
         .navigationDestination(item: $navigationItem) { item in destinationView(for: item) }
-        .task(id: "favorites") {
-            favoriteURLCache = Set(allFavorites.map(\.pageURLString))
-        }
     }
 
     private var searchableContent: some View {
@@ -270,8 +280,8 @@ struct SiteGalleryView: View {
 
     private func imageGalleryLayout(_ items: [ParsedItem]) -> some View {
         LazyVStack(spacing: 2) {
-            ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                ThreadImageCard(url: item.thumbnail, index: index, referer: item.pageURL, definitionID: parser.definitionID)
+            ForEach(items) { item in
+                PageImageView(url: item.thumbnail, referer: item.pageURL, definitionID: parser.definitionID)
             }
             infiniteScrollFooter
         }
@@ -311,11 +321,16 @@ struct SiteGalleryView: View {
 
     @ViewBuilder
     private func portraitCard(for item: ParsedItem) -> some View {
+        let card = ComicCard(
+            item: item,
+            isFavorited: isFavorited(item),
+            definitionID: parser.definitionID,
+            onTap: parser.itemKind == .video ? { openItem(item) } : nil,
+            onExtraTap: extraAction(for: item)
+        )
         if parser.itemKind == .video {
             ZStack(alignment: .topLeading) {
-                ComicCard(item: item, isFavorited: isFavorited(item), definitionID: parser.definitionID,
-                    onTap: { openItem(item) }, onExtraTap: extraAction(for: item))
-
+                card
                 if let count = listEpisodeCount(for: item) {
                     Button {
                         UIImpactFeedbackGenerator(style: .light).impactOccurred()
@@ -335,15 +350,9 @@ struct SiteGalleryView: View {
             }
             .contextMenu { favoriteMenuButton(for: item) }
         } else {
-            NavigationLink(destination: destinationView(for: item)) {
-                ComicCard(
-                    item: item,
-                    isFavorited: favoriteURLCache.contains(item.pageURL.absoluteString),
-                    definitionID: parser.definitionID
-                )
-            }
-            .buttonStyle(CardPressStyle())
-            .contextMenu { favoriteMenuButton(for: item) }
+            NavigationLink(destination: destinationView(for: item)) { card }
+                .buttonStyle(CardPressStyle())
+                .contextMenu { favoriteMenuButton(for: item) }
         }
     }
 
@@ -373,7 +382,8 @@ struct SiteGalleryView: View {
             pageURL: pageURL,
             thumbnail: item.thumbnail,
             duration: "第 \(number) 集",
-            extra: item.extra
+            extra: item.extra,
+            titleImage: item.titleImage
         )
     }
 
@@ -477,6 +487,7 @@ struct SiteGalleryView: View {
             ))
             favoriteURLCache.insert(key)
         }
+        try? modelContext.save()
     }
 
     private func isMixedMediaItem(_ item: ParsedItem) -> Bool {
@@ -587,30 +598,22 @@ struct SiteGalleryView: View {
 
     // MARK: - Toolbar
 
+    private var activeCategory: SiteParserCategory? {
+        let active = effectiveURLString
+        return parser.categories.first { $0.urlString == active || active.hasSuffix($0.urlString) }
+    }
+
     // Category binding for Picker
     private var categorySelection: Binding<String> {
         Binding(
-            get: {
-                // Return matching category's raw urlString for Picker tag matching
-                let active = effectiveURLString
-                if let cat = parser.categories.first(where: {
-                    $0.urlString == active || active.hasSuffix($0.urlString)
-                }) {
-                    return cat.urlString
-                }
-                return active
-            },
+            get: { activeCategory?.urlString ?? effectiveURLString },
             set: { newURL in
                 // Resolve relative category paths against the WebView's actual domain
                 // Handles redirects from a portal to its current content host.
-                let resolved: URL?
-                if newURL.hasPrefix("http") {
-                    resolved = URL(string: newURL)
-                } else if let base = loader.resolvedBaseURL ?? URL(string: siteURLString) {
-                    resolved = URL(string: newURL, relativeTo: base)?.absoluteURL
-                } else {
-                    resolved = nil
-                }
+                let resolved = WebScript.resolveURL(
+                    newURL,
+                    relativeTo: newURL.hasPrefix("http") ? nil : (loader.resolvedBaseURL ?? URL(string: siteURLString))
+                )
                 guard let url = resolved else { return }
                 navigation.selectCategory(url)
                 searchText = ""
@@ -620,15 +623,7 @@ struct SiteGalleryView: View {
     }
 
     /// Current category name for status subtitle.
-    private var activeCategoryName: String {
-        let active = effectiveURLString
-        if let cat = parser.categories.first(where: {
-            $0.urlString == active || active.hasSuffix($0.urlString)
-        }) {
-            return cat.name
-        }
-        return ""
-    }
+    private var activeCategoryName: String { activeCategory?.name ?? "" }
 
     /// Status subtitle: "60 项 · 中文字幕" or "搜索: keyword" or "加载第3页…"
     private var statusSubtitle: String {
@@ -813,10 +808,15 @@ struct NavLinkCard: View {
             }
 
             VStack(alignment: .leading, spacing: 4) {
-                Text(item.title)
-                    .font(.body.weight(.medium))
-                    .lineLimit(2)
-                    .foregroundStyle(.primary)
+                ItemTitleView(
+                    title: item.title,
+                    titleImage: item.titleImage,
+                    referer: item.pageURL,
+                    definitionID: definitionID,
+                    font: .body.weight(.medium),
+                    fontSize: 16,
+                    lineLimit: 2
+                )
 
                 // Metadata row: extra (author · date) + duration (upvotes, replies, etc.)
                 let parts = [item.extra, item.duration].filter { !$0.isEmpty }
@@ -868,22 +868,20 @@ struct VideoCard: View {
                 .contentShape(Rectangle())
                 .gesture(cardGesture)
             VStack(alignment: .leading, spacing: 3) {
-                Text(item.title)
-                    .font(titleFont)
-                    .lineLimit(titleLines)
-                    .foregroundStyle(.primary)
-                    .contentShape(Rectangle())
-                    .gesture(cardGesture)
+                ItemTitleView(
+                    title: item.title,
+                    titleImage: item.titleImage,
+                    referer: item.pageURL,
+                    definitionID: definitionID,
+                    font: titleFont,
+                    fontSize: cardSize == .large ? 15 : 13,
+                    lineLimit: titleLines
+                )
+                .contentShape(Rectangle())
+                .gesture(cardGesture)
                 if !item.extra.isEmpty {
-                    if onExtraTap != nil {
-                        extraTagsView
-                    } else {
-                        Text(item.extra)
-                            .font(extraFont)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .gesture(cardGesture)
-                    }
+                    CardExtraText(extra: item.extra, tags: item.extraTags, font: extraFont, onTap: onExtraTap)
+                        .gesture(onExtraTap == nil ? cardGesture : nil)
                 }
             }
             .padding(.horizontal, 4)
@@ -904,30 +902,14 @@ struct VideoCard: View {
             }
     }
 
-    // MARK: - Extra tags
-
-    private var extraTagsView: some View {
-        ItemTagLinks(tags: item.extraTags, font: extraFont) { onExtraTap?($0) }
-    }
-
     // MARK: - Thumbnail
 
     @ViewBuilder
     private var thumbnailView: some View {
         ZStack(alignment: .bottomTrailing) {
-            if item.thumbnail != nil {
-                CachedThumbnail(url: item.thumbnail, placeholder: placeholder, referer: item.pageURL, definitionID: definitionID)
-            } else {
-                Color(.secondarySystemBackground)
-                    .overlay {
-                        Image(systemName: placeholder)
-                            .font(.title).foregroundStyle(.tertiary)
-                    }
-            }
+            CachedThumbnail(url: item.thumbnail, placeholder: placeholder, referer: item.pageURL, definitionID: definitionID)
             if !item.duration.isEmpty {
                 LinearGradient(colors: [.clear, .black.opacity(0.55)], startPoint: .center, endPoint: .bottom)
-            }
-            if !item.duration.isEmpty {
                 Text(item.duration)
                     .font(.system(size: 11, weight: .semibold).monospacedDigit())
                     .foregroundStyle(.white)
@@ -936,84 +918,9 @@ struct VideoCard: View {
                     .padding(6)
             }
             if isFavorited {
-                Image(systemName: "heart.fill")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(.pink)
-                    .padding(4)
-                    .background(.black.opacity(0.45), in: Circle())
-                    .padding(6)
+                CardFavoriteBadge()
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
             }
-        }
-    }
-}
-
-// MARK: - Thread image card (full-width image for forum thread galleries)
-
-private struct ThreadImageCard: View {
-    let url: URL?
-    private let source: ThumbnailRequest?
-    @Environment(\.displayScale) private var scale
-    @State private var pixels = 1024
-    private var request: ThumbnailRequest? { source?.resized(.page(width: pixels)) }
-    let index: Int
-
-    @State private var image: UIImage?
-    @State private var failed = false
-
-    init(url: URL?, index: Int, referer: URL?, definitionID: String?) {
-        self.url = url
-        self.index = index
-        source = url.map { ThumbnailRequest(url: $0, referer: referer, definitionID: definitionID, sizing: .page(width: 1024)) }
-        _image = State(initialValue: source.flatMap { ImageMemoryCache.shared.image(for: $0) })
-    }
-
-    var body: some View {
-        Group {
-            if let img = image {
-                Image(uiImage: img)
-                    .resizable()
-                    .scaledToFit()
-            } else if failed {
-                VStack(spacing: 8) {
-                    Image(systemName: "photo.badge.exclamationmark")
-                        .font(.title2)
-                        .foregroundStyle(.secondary)
-                    Text("图片加载失败")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                }
-                .frame(maxWidth: .infinity)
-                .frame(height: 200)
-                .background(Color(.secondarySystemBackground))
-            } else {
-                ProgressView()
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 300)
-                    .background(Color(.secondarySystemBackground))
-            }
-        }
-        .onGeometryChange(for: Int.self) { [scale] proxy in ImageSizing.pixels(points: proxy.size.width, scale: scale) } action: { pixels = $0 }
-        .task(id: request) {
-            guard let request else { return }
-            failed = false
-            let loaded = await ImagePipeline.shared.image(for: request)
-            guard !Task.isCancelled else { return }
-            if let img = loaded {
-                withAnimation(.easeIn(duration: 0.15)) {
-                    image = img
-                }
-            } else {
-                failed = true
-            }
-        }
-        .onAppear {
-            if image == nil, !failed, let request {
-                image = ImageMemoryCache.shared.image(for: request)
-            }
-        }
-        .onDisappear {
-            image = nil
         }
     }
 }
@@ -1031,33 +938,13 @@ struct ParsedItemsDebugSheet: View {
         return []
     }
 
-    private var stateLabel: String {
+    private var stateSummary: (label: String, icon: String, color: Color) {
         switch loader.state {
-        case .idle:            return "空闲"
-        case .loading:         return "加载中…"
-        case .extracting:      return "提取中…"
-        case .done(let items): return "完成（\(items.count) 项）"
-        case .failed(let msg): return "失败：\(msg)"
-        }
-    }
-
-    private var stateIcon: String {
-        switch loader.state {
-        case .idle:       return "moon.zzz"
-        case .loading:    return "arrow.down.circle"
-        case .extracting: return "gearshape.2"
-        case .done:       return "checkmark.circle.fill"
-        case .failed:     return "xmark.circle.fill"
-        }
-    }
-
-    private var stateColor: Color {
-        switch loader.state {
-        case .idle:       return .secondary
-        case .loading:    return .orange
-        case .extracting: return .blue
-        case .done:       return .green
-        case .failed:     return .red
+        case .idle:            ("空闲", "moon.zzz", .secondary)
+        case .loading:         ("加载中…", "arrow.down.circle", .orange)
+        case .extracting:      ("提取中…", "gearshape.2", .blue)
+        case .done(let items): ("完成（\(items.count) 项）", "checkmark.circle.fill", .green)
+        case .failed(let msg): ("失败：\(msg)", "xmark.circle.fill", .red)
         }
     }
 
@@ -1066,6 +953,12 @@ struct ParsedItemsDebugSheet: View {
         case .none:          return "无"
         case .ajax:          return "AJAX"
         case .webNavigation: return "WebNavigation"
+        }
+    }
+
+    private func debugTextRow(_ label: String, _ value: String) -> some View {
+        LabeledContent(label) {
+            Text(value).font(.caption2).foregroundStyle(.secondary).textSelection(.enabled)
         }
     }
 
@@ -1087,8 +980,8 @@ struct ParsedItemsDebugSheet: View {
                 // ── Request status ──────────────────────────
                 Section("请求状态") {
                     LabeledContent("状态") {
-                        Label(stateLabel, systemImage: stateIcon)
-                            .foregroundColor(stateColor)
+                        Label(stateSummary.label, systemImage: stateSummary.icon)
+                            .foregroundColor(stateSummary.color)
                     }
                     LabeledContent("翻页模式", value: paginationLabel)
                     LabeledContent("当前页", value: "\(loader.currentPage)")
@@ -1096,24 +989,13 @@ struct ParsedItemsDebugSheet: View {
                     if case .ajax = parser.paginationMode {
                         LabeledContent("有下一页", value: loader.hasNextPage ? "是" : "否")
                     }
-                    if let next = loader.nextPageURL {
-                        LabeledContent("下一页 URL") {
-                            Text(next.absoluteString)
-                                .font(.caption2).foregroundStyle(.secondary).textSelection(.enabled)
-                        }
-                    }
+                    if let next = loader.nextPageURL { debugTextRow("下一页 URL", next.absoluteString) }
                 }
 
                 Section("页面信息") {
-                    LabeledContent("请求 URL") {
-                        Text(pageURL?.absoluteString ?? "—")
-                            .font(.caption2).foregroundStyle(.secondary).textSelection(.enabled)
-                    }
-                    if let webURL = loader.webView.url, webURL != pageURL {
-                        LabeledContent("WebView URL") {
-                            Text(webURL.absoluteString)
-                                .font(.caption2).foregroundStyle(.secondary).textSelection(.enabled)
-                        }
+                    debugTextRow("请求 URL", pageURL?.absoluteString ?? "—")
+                    if let webURL = loader.currentWebViewURL, webURL != pageURL {
+                        debugTextRow("WebView URL", webURL.absoluteString)
                     }
                     LabeledContent("解析项数", value: "\(items.count)")
                 }
@@ -1121,35 +1003,37 @@ struct ParsedItemsDebugSheet: View {
                 // ── Parsed items ────────────────────────────
                 ForEach(Array(items.enumerated()), id: \.offset) { idx, item in
                     Section("[\(idx + 1)] \(item.title)") {
-                        LabeledContent("pageURL") {
-                            Text(item.pageURL.absoluteString)
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                                .textSelection(.enabled)
-                        }
+                        debugTextRow("pageURL", item.pageURL.absoluteString)
                         LabeledContent("thumbnail") {
                             if let thumb = item.thumbnail {
                                 VStack(alignment: .trailing, spacing: 6) {
-                                    Text(thumb.absoluteString)
-                                        .font(.caption2)
-                                        .foregroundStyle(.secondary)
-                                        .textSelection(.enabled)
-                                    CachedThumbnail(url: thumb, placeholder: "photo")
+                                    Text(thumb.absoluteString).font(.caption2).foregroundStyle(.secondary).textSelection(.enabled)
+                                    CachedThumbnail(url: thumb, placeholder: "photo", referer: item.pageURL, definitionID: parser.definitionID)
                                         .frame(width: 80, height: 50)
                                         .clipShape(RoundedRectangle(cornerRadius: 6))
                                 }
                             } else {
-                                Text("nil")
-                                    .font(.caption2)
-                                    .foregroundStyle(.red)
+                                Text("nil").font(.caption2).foregroundStyle(.red)
                             }
                         }
-                        if !item.duration.isEmpty {
-                            LabeledContent("duration", value: item.duration)
+                        if let titleImage = item.titleImage {
+                            LabeledContent("titleImage") {
+                                VStack(alignment: .trailing, spacing: 6) {
+                                    Text(titleImage.absoluteString).font(.caption2).foregroundStyle(.secondary).textSelection(.enabled)
+                                    ItemTitleView(
+                                        title: item.title,
+                                        titleImage: titleImage,
+                                        referer: item.pageURL,
+                                        definitionID: parser.definitionID,
+                                        font: .caption,
+                                        fontSize: 13,
+                                        lineLimit: 1
+                                    )
+                                }
+                            }
                         }
-                        if !item.extra.isEmpty {
-                            LabeledContent("extra", value: item.extra)
-                        }
+                        if !item.duration.isEmpty { LabeledContent("duration", value: item.duration) }
+                        if !item.extra.isEmpty { LabeledContent("extra", value: item.extra) }
                     }
                 }
             }

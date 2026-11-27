@@ -27,6 +27,8 @@ final class AudioPlayerManager {
     private var durationTask: Task<Void, Never>?
     private var metadataTask: Task<Void, Never>?
     private var timeObserver: Any?
+    private var endObserver: NSObjectProtocol?
+    private var statusObserver: NSKeyValueObservation?
 
     private init() {}
 
@@ -37,8 +39,7 @@ final class AudioPlayerManager {
               name: String, path: String,
               siblings: [NASFileEntry] = [], currentIndex: Int = 0,
               client: SMBClient? = nil) {
-        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
-        try? AVAudioSession.sharedInstance().setActive(true)
+        activatePlaybackAudioSession()
 
         cleanup()
 
@@ -97,6 +98,26 @@ final class AudioPlayerManager {
 
         p.play()
         isPlaying = true
+
+        if let current = p.currentItem {
+            endObserver = NotificationCenter.default.addObserver(
+                forName: .AVPlayerItemDidPlayToEndTime,
+                object: current,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor in
+                    guard let self, self.player === p else { return }
+                    self.isPlaying = false
+                }
+            }
+            statusObserver = current.observe(\.status, options: [.new]) { [weak self] item, _ in
+                guard item.status == .failed else { return }
+                Task { @MainActor in
+                    guard let self, self.player === p else { return }
+                    self.isPlaying = false
+                }
+            }
+        }
     }
 
     func togglePlay() {
@@ -155,6 +176,9 @@ final class AudioPlayerManager {
     private func cleanup() {
         durationTask?.cancel(); durationTask = nil
         metadataTask?.cancel(); metadataTask = nil
+        if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
+        endObserver = nil
+        statusObserver?.invalidate(); statusObserver = nil
         title = ""; artist = ""; album = ""; artwork = nil
         if let obs = timeObserver { player?.removeTimeObserver(obs) }
         timeObserver = nil

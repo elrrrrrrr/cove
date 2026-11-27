@@ -8,7 +8,7 @@ struct NASVideoView: View {
     // Source: local file URL (from download) or streaming player item
     var fileURL: URL?
     var streamItem: AVPlayerItem?
-    var streamURL: URL?  // Direct HTTP media URL
+    var streamKey: String?
 
     // Sibling navigation
     var files: [NASFileEntry] = []
@@ -21,14 +21,14 @@ struct NASVideoView: View {
     init(
         fileURL: URL? = nil,
         streamItem: AVPlayerItem? = nil,
-        streamURL: URL? = nil,
+        streamKey: String? = nil,
         files: [NASFileEntry] = [],
         initialIndex: Int = 0,
         client: SMBClient? = nil
     ) {
         self.fileURL = fileURL
         self.streamItem = streamItem
-        self.streamURL = streamURL
+        self.streamKey = streamKey
         self.files = files
         self.initialIndex = initialIndex
         self.client = client
@@ -46,11 +46,10 @@ struct NASVideoView: View {
                         VideoPage(
                             entry: entry,
                             client: client,
-
                             isInitial: idx == initialIndex,
                             initialFileURL: idx == initialIndex ? fileURL : nil,
                             initialStreamItem: idx == initialIndex ? streamItem : nil,
-                            initialStreamURL: idx == initialIndex ? streamURL : nil,
+                            streamKey: entry.path,
                             isActive: idx == currentIndex
                         )
                         .ignoresSafeArea()
@@ -65,11 +64,10 @@ struct NASVideoView: View {
                 VideoPage(
                     entry: files.first,
                     client: client,
-
                     isInitial: true,
                     initialFileURL: fileURL,
                     initialStreamItem: streamItem,
-                    initialStreamURL: streamURL,
+                    streamKey: streamKey ?? files.first?.path,
                     isActive: true
                 )
                 .ignoresSafeArea()
@@ -130,10 +128,11 @@ private struct VideoPage: View {
     let isInitial: Bool
     let initialFileURL: URL?
     let initialStreamItem: AVPlayerItem?
-    let initialStreamURL: URL?
+    let streamKey: String?
     let isActive: Bool
 
     @State private var player: AVPlayer?
+    @State private var consumedInitialStream = false
     @State private var isLoadingFile = false
     @State private var loadTask: Task<Void, Never>?
     @State private var loadError: String?
@@ -144,7 +143,7 @@ private struct VideoPage: View {
             Color.black
 
             if player != nil {
-                NASPlayerViewController(player: $player)
+                PlayerViewController(player: $player)
             } else if let loadError {
                 Text(loadError).foregroundStyle(.white).padding()
             } else {
@@ -153,7 +152,7 @@ private struct VideoPage: View {
         }
         .overlay(alignment: .topTrailing) {
             if let player {
-                VideoNetworkSpeedBadge(player: player, streamKey: entry?.path)
+                VideoNetworkSpeedBadge(player: player, streamKey: streamKey)
                     .padding(.top, 96)
                     .padding(.trailing, 16)
             }
@@ -180,12 +179,11 @@ private struct VideoPage: View {
             return
         }
 
-        if isInitial, let item = initialStreamItem {
+        if isInitial, !consumedInitialStream, let item = initialStreamItem {
+            consumedInitialStream = true
             setupPlayer(item: item)
-        } else if isInitial, let url = initialStreamURL {
-            setupPlayer(url: url)
         } else if isInitial, let url = initialFileURL {
-            setupPlayer(url: url)
+            setupPlayer(item: AVPlayerItem(url: url))
         } else if let entry {
             loadEntry(entry)
         }
@@ -203,23 +201,11 @@ private struct VideoPage: View {
     }
 
     private func setupPlayer(item: AVPlayerItem) {
-        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
-        try? AVAudioSession.sharedInstance().setActive(true)
+        activatePlaybackAudioSession()
         player?.pause()
         SMBStreamLoader.cancel(in: player?.currentItem?.asset)
         player?.replaceCurrentItem(with: nil)
         let p = AVPlayer(playerItem: item)
-        player = p
-        p.play()
-    }
-
-    private func setupPlayer(url: URL) {
-        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
-        try? AVAudioSession.sharedInstance().setActive(true)
-        player?.pause()
-        SMBStreamLoader.cancel(in: player?.currentItem?.asset)
-        player?.replaceCurrentItem(with: nil)
-        let p = AVPlayer(url: url)
         player = p
         p.play()
     }
@@ -239,7 +225,7 @@ private struct VideoPage: View {
                     temporaryURL = dest
                     isLoadingFile = false
                     loadTask = nil
-                    setupPlayer(url: dest)
+                    setupPlayer(item: AVPlayerItem(url: dest))
                 }
             } catch {
                 guard !Task.isCancelled else { return }
@@ -262,31 +248,5 @@ private struct VideoPage: View {
         player = nil
         if let temporaryURL { try? FileManager.default.removeItem(at: temporaryURL.deletingLastPathComponent()) }
         temporaryURL = nil
-    }
-}
-
-// MARK: - Video player (AVPlayerViewController wrapper)
-
-private struct NASPlayerViewController: UIViewControllerRepresentable {
-    @Binding var player: AVPlayer?
-
-    func makeUIViewController(context: Context) -> AVPlayerViewController {
-        let vc = AVPlayerViewController()
-        vc.player = player
-        vc.showsPlaybackControls = true
-        vc.videoGravity = .resizeAspect
-        vc.allowsPictureInPicturePlayback = true
-        return vc
-    }
-
-    func updateUIViewController(_ vc: AVPlayerViewController, context: Context) {
-        if vc.player !== player {
-            vc.player = player
-        }
-    }
-
-    static func dismantleUIViewController(_ vc: AVPlayerViewController, coordinator: ()) {
-        vc.player?.pause()
-        vc.player = nil
     }
 }

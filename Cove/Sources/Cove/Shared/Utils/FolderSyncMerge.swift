@@ -24,6 +24,28 @@ enum SyncJSON: Codable, Equatable, Sendable {
         }
     }
     var object: [String: SyncJSON]? { if case .object(let v) = self { return v }; return nil }
+
+    static func canonicalized(
+        _ data: Data,
+        objectArrayKeys: [String] = [],
+        scalarArrayKeys: [String] = []
+    ) throws -> [String: SyncJSON] {
+        guard var object = try JSONDecoder().decode(SyncJSON.self, from: data).object else {
+            throw ReaderSafetyError.message("配置文件必须是 JSON 对象")
+        }
+        object.removeValue(forKey: "exportDate")
+        for key in objectArrayKeys {
+            if case .array(let values) = object[key] {
+                object[key] = .array(values.sorted { String(describing: $0.object?["id"]) < String(describing: $1.object?["id"]) })
+            }
+        }
+        for key in scalarArrayKeys {
+            if case .array(let values) = object[key] {
+                object[key] = .array(values.sorted { String(describing: $0) < String(describing: $1) })
+            }
+        }
+        return object
+    }
 }
 
 enum FolderSyncMerge {
@@ -89,16 +111,7 @@ enum FolderSyncMerge {
         return Result(data: try encoder.encode(SyncJSON.object(output)), hasConflicts: conflicts)
     }
     static func equivalent(_ first: Data, _ second: Data) throws -> Bool {
-        func value(_ data: Data) throws -> [String: SyncJSON] {
-            var object = try JSONDecoder().decode(SyncJSON.self, from: data).object ?? [:]
-            object.removeValue(forKey: "exportDate")
-            for key in ["sites", "nasConfigs", "siteDefinitions", "favorites", "histories", "offlineItems"] {
-                if case .array(let values) = object[key] {
-                    object[key] = .array(values.sorted { String(describing: $0.object?["id"]) < String(describing: $1.object?["id"]) })
-                }
-            }
-            return object
-        }
-        return try value(first) == value(second)
+        let keys = ["sites", "nasConfigs", "siteDefinitions", "favorites", "histories", "offlineItems"]
+        return try SyncJSON.canonicalized(first, objectArrayKeys: keys) == SyncJSON.canonicalized(second, objectArrayKeys: keys)
     }
 }

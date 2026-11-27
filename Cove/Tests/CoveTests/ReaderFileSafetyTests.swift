@@ -69,4 +69,55 @@ final class ReaderFileSafetyTests: XCTestCase {
         try FileManager.default.createSymbolicLink(at: root.appendingPathComponent("link"), withDestinationURL: root.deletingLastPathComponent())
         XCTAssertThrowsError(try ReaderContainedPath.resolve("link/not-created.jpg", under: root))
     }
+    func testRootDirectoryDotReferenceIsRejected() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        XCTAssertThrowsError(try ReaderContainedPath.resolve(".", under: root))
+        XCTAssertThrowsError(try ReaderContainedPath.resolve("folder/..", under: root))
+    }
+    func testArchiveExtractionEnforcesLimitAndAtomicStaging() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let zip = root.appendingPathComponent("test.cbz")
+        let archive = try Archive(url: zip, accessMode: .create, pathEncoding: .utf8)
+        let payload = Data(repeating: 65, count: 4096)
+        try archive.addEntry(with: "01.jpg", type: .file, uncompressedSize: Int64(payload.count)) { pos, size in
+            payload.subdata(in: Int(pos)..<Int(pos) + size)
+        }
+        let tooSmallDest = root.appendingPathComponent("fail")
+        XCTAssertThrowsError(try ReaderArchive.extract(archiveURL: zip, to: tooSmallDest, maxEntryBytes: 1024))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: tooSmallDest.path))
+
+        let okDest = root.appendingPathComponent("ok")
+        let files = try ReaderArchive.extract(archiveURL: zip, to: okDest, maxEntryBytes: 8192)
+        XCTAssertEqual(files.count, 1)
+    }
+    func testEPUBNamespacesParseCorrectly() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        var caches: [URL] = []
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            for c in caches { try? FileManager.default.removeItem(at: c) }
+        }
+        let epub = root.appendingPathComponent("ns.epub")
+        let archive = try Archive(url: epub, accessMode: .create, pathEncoding: .utf8)
+        let entries = [
+            "META-INF/container.xml": "<container><rootfiles><rootfile full-path='OEBPS/content.opf'/></rootfiles></container>",
+            "OEBPS/content.opf": "<opf:package xmlns:opf='http://www.idpf.org/2007/opf'><opf:manifest><opf:item id='c1' href='Text/ch1.xhtml'/></opf:manifest><opf:spine><opf:itemref idref='c1'/></opf:spine></opf:package>",
+            "OEBPS/Text/ch1.xhtml": "<p>Hello</p>"
+        ]
+        for (path, text) in entries {
+            let data = Data(text.utf8)
+            try archive.addEntry(with: path, type: .file, uncompressedSize: Int64(data.count)) { pos, size in
+                data.subdata(in: Int(pos)..<Int(pos) + size)
+            }
+        }
+        let chapters = try EPUBParser.parse(fileURL: epub)
+        XCTAssertEqual(chapters.count, 1)
+        caches.append(chapters[0].rootURL)
+        XCTAssertNotEqual(chapters[0].rootURL, chapters[0].htmlURL.deletingLastPathComponent())
+    }
 }
