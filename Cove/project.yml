@@ -17,6 +17,9 @@ packages:
   ZipFoundation:
     url: https://github.com/weichsel/ZIPFoundation
     from: 0.9.19
+  Nuke:
+    url: https://github.com/kean/Nuke
+    from: 12.8.0
 
 schemes:
   Cove:
@@ -94,7 +97,7 @@ targets:
           - "**/*.md"
       - path: Resources/Assets.xcassets
         buildPhase: resources
-      - path: Sources/Cove/Features/WebReader/BlockerRules.json
+      - path: Resources/BlockerRules.json
         buildPhase: resources
     preBuildScripts:
       - name: Bundle local site definitions
@@ -167,3 +170,7 @@ targets:
         embed: true
       - package: ZipFoundation
         product: ZIPFoundation
+      - package: Nuke
+        product: Nuke
+      - package: Nuke
+        product: NukeUI

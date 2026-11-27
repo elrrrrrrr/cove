@@ -1,53 +1,66 @@
 import SwiftUI
 import SwiftData
-import os
 
 @main
 struct CoveApp: App {
-
-    @Environment(\.scenePhase) private var scenePhase
     let modelContainer: ModelContainer
     private let freshInstall: Bool
 
+    @AppStorage(AppTheme.storageKey) private var theme: AppTheme = .cinemaDark
+    @State private var store = SiteDefinitionStore.shared
+    @State private var activeTab = 0
+
     init() {
         do {
-            let storage = try LocalAppStorage.prepareModelStore()
-            do { try OfflineFiles.shared.migrateLegacyDirectory() }
-            catch { Logger(subsystem: "Cove", category: "Storage").error("离线目录迁移暂未完成：\(error.localizedDescription, privacy: .private)") }
-            freshInstall = storage.freshInstall
-            modelContainer = try ModelContainer(for:
-                ReadingHistory.self,
-                BookmarkSite.self,
-                OfflineItem.self,
-                NASConfig.self,
-                FavoriteVideo.self,
-                configurations: ModelConfiguration(url: storage.url)
+            let prep = try LocalAppStorage.prepareModelStore()
+            self.freshInstall = prep.freshInstall
+            let config = ModelConfiguration(url: prep.url)
+            self.modelContainer = try ModelContainer(
+                for: BookmarkSite.self, FavoriteVideo.self, ReadingHistory.self, OfflineItem.self, NASConfig.self,
+                configurations: config
             )
         } catch {
-            fatalError("Failed to create ModelContainer: \(error)")
+            fatalError("无法打开数据库：\(error.localizedDescription)")
         }
     }
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
-                .appAppearance()
-                .onReceive(NotificationCenter.default.publisher(for: ModelContext.didSave)) { _ in
-                    FolderSyncManager.shared.requestSync()
+            TabView(selection: $activeTab) {
+                Tab("主页", systemImage: "house.fill", value: 0) {
+                    HomeView()
                 }
-                .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)) { _ in
-                    FolderSyncManager.shared.requestSync()
+                Tab("收藏", systemImage: "heart.fill", value: 1) {
+                    LibraryView()
                 }
-                .onChange(of: SiteDefinitionStore.shared.definitions) { _, _ in FolderSyncManager.shared.requestSync() }
-                .task(id: scenePhase) {
-                    guard scenePhase == .active else { return }
-                    do { try await OfflineFiles.shared.normalizeRecords(in: modelContainer.mainContext) }
-                    catch { Logger(subsystem: "Cove", category: "Storage").error("离线路径更新暂未完成：\(error.localizedDescription, privacy: .private)") }
-                    SiteDefinitionStore.shared.initialize(context: modelContainer.mainContext, freshInstall: freshInstall)
-                    await FolderSyncManager.shared.runWhileActive(context: modelContainer.mainContext)
+                Tab("NAS", systemImage: "externaldrive.connected.to.line.below.fill", value: 2) {
+                    NASRootView()
                 }
+                Tab("设置", systemImage: "gearshape.fill", value: 3) {
+                    SettingsView()
+                }
+            }
+            .tabBarMinimizeBehavior(.onScrollDown)
+            .preferredColorScheme(theme.colorScheme)
+            .tint(.accentColor)
+            .overlay(alignment: .top) { ToastOverlay() }
+            .task {
+                store.initialize(context: modelContainer.mainContext, freshInstall: freshInstall)
+                if FolderSyncManager.shared.isConnected {
+                    await FolderSyncManager.shared.syncNow(context: modelContainer.mainContext)
+                }
+            }
+            .onOpenURL { url in
+                guard url.pathExtension.lowercased() == "site" else { return }
+                let scoped = url.startAccessingSecurityScopedResource()
+                defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+                if let text = try? String(contentsOf: url, encoding: .utf8),
+                   let def = try? SiteDefinition.decode(text) {
+                    store.pendingImport = def
+                    activeTab = 3
+                }
+            }
         }
         .modelContainer(modelContainer)
     }
-
 }
