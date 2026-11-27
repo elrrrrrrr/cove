@@ -48,6 +48,35 @@ final class ReadingHistory {
     }
 
     @MainActor
+    static func find(
+        in context: ModelContext,
+        url: String? = nil,
+        filePath: String? = nil,
+        fileType: FileType? = nil,
+        nasConfigID: String? = nil
+    ) -> ReadingHistory? {
+        let candidates: [ReadingHistory]
+        if let filePath {
+            candidates = (try? context.fetch(FetchDescriptor<ReadingHistory>(
+                predicate: #Predicate { $0.filePath == filePath },
+                sortBy: [SortDescriptor(\.lastReadAt, order: .reverse)]
+            ))) ?? []
+        } else if let url {
+            candidates = (try? context.fetch(FetchDescriptor<ReadingHistory>(
+                predicate: #Predicate { $0.url == url },
+                sortBy: [SortDescriptor(\.lastReadAt, order: .reverse)]
+            ))) ?? []
+        } else {
+            return nil
+        }
+        return candidates.first { entry in
+            (fileType == nil || entry.fileType == fileType) &&
+            (nasConfigID == nil || entry.nasConfigID == nasConfigID)
+        }
+    }
+
+    @MainActor
+    @discardableResult
     static func recordProgress(
         in context: ModelContext,
         historyItem: ReadingHistory?,
@@ -57,37 +86,38 @@ final class ReadingHistory {
         fileType: FileType,
         progress: Double,
         thumbnailURLString: String? = nil,
-        definitionID: String? = nil
-    ) {
-        guard progress.isFinite else { return }
+        definitionID: String? = nil,
+        nasConfigID: String? = nil,
+        updateTitle: Bool = false,
+        updateFilePath: Bool = false,
+        updateMetadata: Bool = false
+    ) -> ReadingHistory? {
+        guard progress.isFinite else { return nil }
         let safeProgress = max(0, progress)
-        if let item = historyItem {
-            item.progress = safeProgress
-            item.lastReadAt = Date()
-            if let thumbnailURLString, item.thumbnailURLString == nil { item.thumbnailURLString = thumbnailURLString }
-            if let definitionID, item.definitionID == nil { item.definitionID = definitionID }
-            try? context.save()
-            return
-        }
-        let existing: ReadingHistory?
-        if let filePath {
-            existing = (try? context.fetch(FetchDescriptor<ReadingHistory>(
-                predicate: #Predicate { $0.filePath == filePath },
-                sortBy: [SortDescriptor(\.lastReadAt, order: .reverse)]
-            )))?.first { $0.fileType == fileType }
-        } else if let url {
-            existing = (try? context.fetch(FetchDescriptor<ReadingHistory>(
-                predicate: #Predicate { $0.url == url },
-                sortBy: [SortDescriptor(\.lastReadAt, order: .reverse)]
-            )))?.first { $0.fileType == fileType }
-        } else {
-            existing = nil
-        }
-        if let existing {
+        let lookupByPath = !updateFilePath && filePath != nil
+        let target = historyItem ?? find(
+            in: context,
+            url: lookupByPath ? nil : url,
+            filePath: lookupByPath ? filePath : nil,
+            fileType: fileType,
+            nasConfigID: nasConfigID
+        )
+
+        let record: ReadingHistory
+        if let existing = target {
             existing.progress = safeProgress
             existing.lastReadAt = Date()
-            if let thumbnailURLString, existing.thumbnailURLString == nil { existing.thumbnailURLString = thumbnailURLString }
-            if let definitionID, existing.definitionID == nil { existing.definitionID = definitionID }
+            if updateTitle { existing.title = title }
+            if updateFilePath, let filePath { existing.filePath = filePath }
+            if updateMetadata {
+                if let thumbnailURLString { existing.thumbnailURLString = thumbnailURLString }
+                if let definitionID { existing.definitionID = definitionID }
+            } else {
+                if let thumbnailURLString, existing.thumbnailURLString == nil { existing.thumbnailURLString = thumbnailURLString }
+                if let definitionID, existing.definitionID == nil { existing.definitionID = definitionID }
+            }
+            if let nasConfigID { existing.nasConfigID = nasConfigID }
+            record = existing
         } else {
             let entry = ReadingHistory(
                 title: title,
@@ -98,9 +128,12 @@ final class ReadingHistory {
                 thumbnailURLString: thumbnailURLString
             )
             entry.definitionID = definitionID
+            entry.nasConfigID = nasConfigID
             context.insert(entry)
+            record = entry
         }
         try? context.save()
+        return record
     }
 
     init(

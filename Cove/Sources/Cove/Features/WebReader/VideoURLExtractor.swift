@@ -28,7 +28,7 @@ struct VideoResult: Sendable, Equatable {
 
 @Observable
 @MainActor
-final class VideoURLExtractor: NSObject {
+final class VideoURLExtractor {
 
     enum State: Equatable { case loading, found(VideoResult), notFound }
 
@@ -36,6 +36,7 @@ final class VideoURLExtractor: NSObject {
     /// Non-nil after a failed extraction — describes what was found on the page.
     var diagnostic: String? = nil
     let webView: WKWebView
+    private var navBridge: WebNavigationBridge?
     private var targetURL: URL?
     var originalPageRequest: URLRequest? { targetURL.map { pageRequest(url: $0) } }
     private var definitionID: String?
@@ -73,11 +74,20 @@ final class VideoURLExtractor: NSObject {
     })()
     """#
 
-    override init() {
+    init() {
         let wv = WebScript.makeWebView()
         self.webView = wv
-        super.init()
-        wv.navigationDelegate = self
+        self.navBridge = WebNavigationBridge.attach(
+            to: wv,
+            onFinish: { [weak self] _ in
+                guard let self, state == .loading, extractTask == nil else { return }
+                startExtraction()
+            },
+            onFail: { [weak self] _, _ in
+                guard let self, case .loading = state else { return }
+                state = .notFound
+            }
+        )
     }
 
     func load(url: URL, forceRefresh: Bool = false, definitionID: String? = nil) {
@@ -181,11 +191,8 @@ final class VideoURLExtractor: NSObject {
     }
 
     private func pageRequest(url: URL) -> URLRequest {
-        var request = URLRequest(url: url)
-        for (key, value) in SiteParserRegistry.rule(for: url, role: "video", definitionID: definitionID)?.load?.headers ?? [:] {
-            request.setValue(value, forHTTPHeaderField: key)
-        }
-        return request
+        let headers = SiteParserRegistry.rule(for: url, role: "video", definitionID: definitionID)?.load?.headers ?? [:]
+        return WebScript.makeRequest(url: url, headers: headers)
     }
 
     // MARK: - Diagnostic (runs after extraction fails)
@@ -244,14 +251,11 @@ final class VideoURLExtractor: NSObject {
               raw != "null",
               let data = raw.data(using: .utf8),
               let obj  = try? JSONDecoder().decode(RawVideo.self, from: data),
-              let streamURL = URL(string: obj.url, relativeTo: targetURL)?.absoluteURL,
-              WebScript.isWebURL(streamURL) else { return nil }
-        let nextPage = obj.nextPageURL.flatMap { URL(string: $0, relativeTo: targetURL)?.absoluteURL }
-            .flatMap { WebScript.isWebURL($0) ? $0 : nil }
+              let streamURL = WebScript.resolveURL(obj.url, relativeTo: targetURL) else { return nil }
         return VideoResult(
             streamURL: streamURL,
             headers: obj.headers ?? [:],
-            nextPageURL: nextPage,
+            nextPageURL: WebScript.resolveURL(obj.nextPageURL, relativeTo: targetURL),
             episodeNumber: obj.episodeNumber,
             title: obj.title
         )
@@ -263,26 +267,5 @@ final class VideoURLExtractor: NSObject {
         let nextPageURL: String?
         let episodeNumber: Int?
         let title: String?
-    }
-}
-
-extension VideoURLExtractor: WKNavigationDelegate {
-    nonisolated func webView(_ wv: WKWebView, didFinish _: WKNavigation!) {
-        Task { @MainActor in
-            guard self.state == .loading, self.extractTask == nil else { return }
-            self.startExtraction()
-        }
-    }
-    nonisolated func webView(_ wv: WKWebView, didFail _: WKNavigation!, withError error: Error) {
-        Task { @MainActor in
-            guard (error as NSError).code != NSURLErrorCancelled else { return }
-            if case .loading = self.state { self.state = .notFound }
-        }
-    }
-    nonisolated func webView(_ wv: WKWebView, didFailProvisionalNavigation _: WKNavigation!, withError error: Error) {
-        Task { @MainActor in
-            guard (error as NSError).code != NSURLErrorCancelled else { return }
-            if case .loading = self.state { self.state = .notFound }
-        }
     }
 }

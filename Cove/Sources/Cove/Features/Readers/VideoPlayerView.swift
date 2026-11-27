@@ -66,8 +66,7 @@ struct VideoPlayerView: View {
     }
 
     private func setupPlayer() {
-        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
-        try? AVAudioSession.sharedInstance().setActive(true)
+        activatePlaybackAudioSession(mode: .moviePlayback)
         let item = AVPlayerItem(url: fileURL)
         let p = AVPlayer(playerItem: item)
         self.player = p
@@ -103,6 +102,74 @@ struct VideoPlayerView: View {
             fileType: .video,
             progress: progress
         )
+    }
+}
+
+// MARK: - Shared AVAudioSession & AVPlayerViewController wrapper
+
+@MainActor
+func activatePlaybackAudioSession(mode: AVAudioSession.Mode = .default) {
+    try? AVAudioSession.sharedInstance().setCategory(.playback, mode: mode)
+    try? AVAudioSession.sharedInstance().setActive(true)
+}
+
+struct PlayerViewController: UIViewControllerRepresentable {
+    @Binding var player: AVPlayer?
+    var onPlaybackEnded: (@MainActor () -> Void)? = nil
+
+    func makeCoordinator() -> Coordinator { Coordinator(onPlaybackEnded: onPlaybackEnded) }
+
+    func makeUIViewController(context: Context) -> AVPlayerViewController {
+        let vc = AVPlayerViewController()
+        vc.player = player
+        vc.showsPlaybackControls = true
+        vc.videoGravity = .resizeAspect
+        vc.allowsPictureInPicturePlayback = true
+        context.coordinator.syncEndObserver(for: player)
+        return vc
+    }
+
+    func updateUIViewController(_ vc: AVPlayerViewController, context: Context) {
+        if vc.player !== player { vc.player = player }
+        context.coordinator.onPlaybackEnded = onPlaybackEnded
+        context.coordinator.syncEndObserver(for: player)
+    }
+
+    static func dismantleUIViewController(_ vc: AVPlayerViewController, coordinator: Coordinator) {
+        vc.player?.pause()
+        vc.player = nil
+        coordinator.stopObserving()
+    }
+
+    @MainActor
+    final class Coordinator: NSObject {
+        var onPlaybackEnded: (@MainActor () -> Void)?
+        private weak var observedItem: AVPlayerItem?
+
+        init(onPlaybackEnded: (@MainActor () -> Void)?) { self.onPlaybackEnded = onPlaybackEnded }
+
+        func syncEndObserver(for player: AVPlayer?) {
+            let item = onPlaybackEnded != nil ? player?.currentItem : nil
+            guard item !== observedItem else { return }
+            stopObserving()
+            observedItem = item
+            if let item {
+                NotificationCenter.default.addObserver(
+                    self,
+                    selector: #selector(playbackEnded),
+                    name: AVPlayerItem.didPlayToEndTimeNotification,
+                    object: item
+                )
+            }
+        }
+
+        func stopObserving() {
+            NotificationCenter.default.removeObserver(self)
+            observedItem = nil
+        }
+
+        @objc private func playbackEnded() { onPlaybackEnded?() }
+        deinit { NotificationCenter.default.removeObserver(self) }
     }
 }
 

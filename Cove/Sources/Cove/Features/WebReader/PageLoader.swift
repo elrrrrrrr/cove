@@ -9,7 +9,7 @@ import os
 /// Supports pagination: AJAX (fetch via JS) and webNavigation (WKWebView next-page link).
 @Observable
 @MainActor
-final class PageLoader: NSObject {
+final class PageLoader {
 
     enum State: Equatable {
         case idle, loading, extracting, done([ParsedItem]), failed(String)
@@ -49,10 +49,7 @@ final class PageLoader: NSObject {
     var resolvedBaseURL: URL? { _webView?.url ?? currentURL }
     var currentWebViewURL: URL? { _webView?.url }
     var originalPageRequest: URLRequest? {
-        guard let currentURL else { return nil }
-        var request = URLRequest(url: currentURL)
-        for (name, value) in parser?.requestHeaders ?? [:] { request.setValue(value, forHTTPHeaderField: name) }
-        return request
+        currentURL.map { WebScript.makeRequest(url: $0, headers: parser?.requestHeaders ?? [:]) }
     }
     var inspectionStatus: String {
         switch state {
@@ -68,7 +65,16 @@ final class PageLoader: NSObject {
     var webView: WKWebView {
         if let wv = _webView { return wv }
         let wv = WebScript.makeWebView(frame: CGRect(x: 0, y: 0, width: 1, height: 1), allowsInlineMediaPlayback: true)
-        wv.navigationDelegate = self
+        navBridge = WebNavigationBridge.attach(
+            to: wv,
+            onFinish: { [weak self] _ in
+                guard let self, awaitingPageLoad else { return }
+                Task { @MainActor [weak self] in await self?.extract() }
+            },
+            onFail: { [weak self] _, error in
+                self?.handleNavigationFailure(error)
+            }
+        )
         _webView = wv
         // Host in off-screen UIWindow for navigation delegate + JS execution
         if let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first {
@@ -84,6 +90,7 @@ final class PageLoader: NSObject {
         return wv
     }
     private var _webView: WKWebView?
+    private var navBridge: WebNavigationBridge?
     private var parser   : SiteParser?
     private var allItems : [ParsedItem] = []
     private var ajaxTask: Task<Void, Never>?
@@ -97,10 +104,7 @@ final class PageLoader: NSObject {
     private var preNavigateCount = 0
     private var _backgroundWindow: UIWindow?
 
-    override init() {
-        super.init()
-        // Lightweight — WKWebView created lazily on first load()
-    }
+    init() {}
 
     func cancel() {
         loadTask?.cancel(); loadTask = nil
@@ -206,10 +210,7 @@ final class PageLoader: NSObject {
         let transform = parser?.transformScript
         log("fetchAndLoad: fetching \(url.absoluteString)")
         do {
-            var request = URLRequest(url: url)
-            request.setValue(WebScript.mobileUserAgent, forHTTPHeaderField: "User-Agent")
-            for (name, value) in headers { request.setValue(value, forHTTPHeaderField: name) }
-            request.timeoutInterval = 10
+            let request = WebScript.makeRequest(url: url, headers: headers, userAgent: WebScript.mobileUserAgent, timeout: 10)
             let (data, response) = try await URLSession.shared.data(for: request)
             guard generation == loadID, !Task.isCancelled else { return }
             guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
@@ -275,9 +276,7 @@ final class PageLoader: NSObject {
     private func fallbackToWebView(url: URL) {
         usedFastLoad = false
         awaitingPageLoad = true
-        var request = URLRequest(url: url)
-        for (name, value) in parser?.requestHeaders ?? [:] { request.setValue(value, forHTTPHeaderField: name) }
-        webView.load(request)
+        webView.load(WebScript.makeRequest(url: url, headers: parser?.requestHeaders ?? [:]))
         startLoadTimeout()
     }
 
@@ -383,7 +382,22 @@ final class PageLoader: NSObject {
         }
     }
 
-    // MARK: - AJAX page fetch
+    /// Wait for DOM and extract items; advances pagination and updates cache.
+    private func cacheFirstPageIfNeeded(_ snapshot: [ParsedItem]) {
+        guard let url = currentURL, !snapshot.isEmpty, currentPage <= 1 else { return }
+        let key = parser?.cacheURL(for: url) ?? url
+        Task { await GalleryCache.save(snapshot, for: key) }
+    }
+
+    private func handleNavigationFailure(_ error: Error) {
+        awaitingPageLoad = false
+        loadTimeoutTask?.cancel()
+        if isLoadingMore {
+            paginationFailed = true
+            isLoadingMore = false
+        }
+        if case .loading = state { state = .failed(error.localizedDescription) }
+    }
 
     private func fetchAjaxPage(_ page: Int, js: String, thumbnailJS: String? = nil) async {
         let generation = loadID
@@ -413,11 +427,7 @@ final class PageLoader: NSObject {
             currentPage = page
 
             let snapshot = allItems
-            // Only cache first page to avoid storing huge accumulated data
-            if let url = currentURL, !snapshot.isEmpty, currentPage <= 1 {
-                let key = parser?.cacheURL(for: url) ?? url
-                Task { await GalleryCache.save(snapshot, for: key) }
-            }
+            cacheFirstPageIfNeeded(snapshot)
             state         = .done(snapshot)
             isLoadingMore = false
 
@@ -568,8 +578,8 @@ final class PageLoader: NSObject {
                 let loadedURL = webView.url ?? currentURL
                 let nextHref = try? await WebScript.boundedString(npJS, in: webView)
                 guard generation == loadID, !Task.isCancelled else { return }
-                let resolvedNext = nextHref.flatMap { URL(string: $0, relativeTo: loadedURL)?.absoluteURL }
-                nextPageURL  = (resolvedNext != nil && resolvedNext != loadedURL && resolvedNext.map(WebScript.isWebURL) == true) ? resolvedNext : nil
+                let resolvedNext = WebScript.resolveURL(nextHref, relativeTo: loadedURL)
+                nextPageURL  = resolvedNext != loadedURL ? resolvedNext : nil
                 hasNextPage  = false
 
             case .ajax:
@@ -578,11 +588,7 @@ final class PageLoader: NSObject {
             }
 
             let snapshot = allItems
-
-            // Only cache first page to avoid storing huge accumulated data
-            if let url = currentURL, !snapshot.isEmpty, currentPage <= 1 {
-                Task { await GalleryCache.save(snapshot, for: parser.cacheURL(for: url)) }
-            }
+            cacheFirstPageIfNeeded(snapshot)
             state         = .done(snapshot)
             isLoadingMore = false
             isExtracting  = false
@@ -599,41 +605,6 @@ final class PageLoader: NSObject {
 
 }
 
-// MARK: - WKNavigationDelegate
-
-extension PageLoader: WKNavigationDelegate {
-    nonisolated func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        Task { @MainActor in
-            guard self.awaitingPageLoad else { return }
-            await self.extract()
-        }
-    }
-    nonisolated func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
-        Task { @MainActor in
-            guard (error as NSError).code != NSURLErrorCancelled else { return }
-            self.awaitingPageLoad = false
-            self.loadTimeoutTask?.cancel()
-            if self.isLoadingMore {
-                self.paginationFailed = true
-                self.isLoadingMore = false
-            }
-            if case .loading = self.state { self.state = .failed(error.localizedDescription) }
-        }
-    }
-    nonisolated func webView(_ webView: WKWebView, didFailProvisionalNavigation _: WKNavigation!, withError error: Error) {
-        Task { @MainActor in
-            guard (error as NSError).code != NSURLErrorCancelled else { return }
-            self.awaitingPageLoad = false
-            self.loadTimeoutTask?.cancel()
-            if self.isLoadingMore {
-                self.paginationFailed = true
-                self.isLoadingMore = false
-            }
-            if case .loading = self.state { self.state = .failed(error.localizedDescription) }
-        }
-    }
-}
-
 // MARK: - Raw JSON item
 
 private struct RawItem: Decodable {
@@ -648,27 +619,15 @@ extension ParsedItem {
     }
 
     private init?(from raw: RawItem, base: URL) {
-        let titleImage = raw.titleImage.flatMap { value -> URL? in
-            guard !value.isEmpty,
-                  let resolved = URL(string: value, relativeTo: base)?.absoluteURL,
-                  WebScript.isMediaURL(resolved) else { return nil }
-            return resolved
-        }
+        let titleImage = WebScript.resolveURL(raw.titleImage, relativeTo: base, allowData: true)
         let rawTitle = (raw.title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let title = rawTitle.isEmpty ? (titleImage != nil ? "图片标题" : "") : rawTitle
         guard !title.isEmpty,
-              let pageURL = URL(string: raw.url, relativeTo: base)?.absoluteURL,
-              WebScript.isWebURL(pageURL) else { return nil }
-        let thumb = raw.thumbnail.flatMap { value -> URL? in
-            guard !value.isEmpty,
-                  let resolved = URL(string: value, relativeTo: base)?.absoluteURL,
-                  WebScript.isMediaURL(resolved) else { return nil }
-            return resolved
-        }
+              let pageURL = WebScript.resolveURL(raw.url, relativeTo: base) else { return nil }
         self.init(
             title: title,
             pageURL: pageURL,
-            thumbnail: thumb,
+            thumbnail: WebScript.resolveURL(raw.thumbnail, relativeTo: base, allowData: true),
             duration: raw.duration ?? "",
             extra: raw.extra ?? "",
             titleImage: titleImage

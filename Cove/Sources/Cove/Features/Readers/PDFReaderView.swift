@@ -18,11 +18,7 @@ struct PDFReaderView: View {
     var body: some View {
         ZStack(alignment: .bottom) {
             if loadFailed {
-                ContentUnavailableView {
-                    Label("无法打开 PDF", systemImage: "doc.richtext")
-                } actions: {
-                    Button("返回") { dismiss() }
-                }
+                ReaderErrorView(title: "无法打开 PDF", systemImage: "doc.richtext") { dismiss() }
             } else {
                 PDFViewRepresentable(
                     url: fileURL,
@@ -42,9 +38,15 @@ struct PDFReaderView: View {
 
             if showBars && !loadFailed && totalPages > 0 {
                 VStack(spacing: 0) {
-                    topBar
+                    ReaderTopBar(title: fileURL.deletingPathExtension().lastPathComponent, onBack: { dismiss() }) {
+                        Text("\(currentPage) / \(totalPages)")
+                            .foregroundStyle(.secondary)
+                    }
                     Spacer()
-                    bottomBar
+                    ReaderPageSliderBar(current: currentPage, total: totalPages, oneBased: true) { page in
+                        currentPage = page
+                        jumpToPage = page
+                    }
                 }
                 .transition(.opacity)
             }
@@ -52,46 +54,6 @@ struct PDFReaderView: View {
         .navigationBarHidden(true)
         .statusBarHidden(!showBars)
         .onDisappear { saveProgress() }
-    }
-
-    private var topBar: some View {
-        HStack {
-            Button { dismiss() } label: {
-                Image(systemName: "chevron.left").imageScale(.large)
-            }
-            Spacer()
-            Text(fileURL.deletingPathExtension().lastPathComponent)
-                .font(.headline)
-                .lineLimit(1)
-            Spacer()
-            Text("\(currentPage) / \(totalPages)")
-                .foregroundStyle(.secondary)
-        }
-        .padding(.horizontal)
-        .padding(.vertical, 8)
-        .background(.ultraThinMaterial)
-    }
-
-    private var bottomBar: some View {
-        VStack(spacing: 4) {
-            if totalPages > 1 {
-                Slider(
-                    value: Binding(
-                        get: { Double(max(currentPage, 1)) },
-                        set: { newVal in
-                            let page = Int(newVal)
-                            currentPage = page
-                            jumpToPage = page
-                        }
-                    ),
-                    in: 1...Double(totalPages),
-                    step: 1
-                )
-                .padding(.horizontal)
-            }
-        }
-        .padding(.vertical, 8)
-        .background(.ultraThinMaterial)
     }
 
     private func saveProgress() {

@@ -12,6 +12,44 @@ import WebKit
         isWebURL(url) || url.scheme?.lowercased() == "data"
     }
 
+    nonisolated static func resolveURL(_ value: String?, relativeTo base: URL?, allowData: Bool = false) -> URL? {
+        guard let value, !value.isEmpty,
+              let resolved = URL(string: value, relativeTo: base)?.absoluteURL else { return nil }
+        return (allowData ? isMediaURL(resolved) : isWebURL(resolved)) ? resolved : nil
+    }
+
+    static func makeRequest(
+        url: URL,
+        headers: [String: String] = [:],
+        userAgent: String? = nil,
+        timeout: TimeInterval? = nil
+    ) -> URLRequest {
+        var request = URLRequest(url: url)
+        if let userAgent { request.setValue(userAgent, forHTTPHeaderField: "User-Agent") }
+        for (key, value) in headers { request.setValue(value, forHTTPHeaderField: key) }
+        if let timeout { request.timeoutInterval = timeout }
+        return request
+    }
+
+    static func loadHTMLOrFallback(url: URL, headers: [String: String] = [:], in webView: WKWebView) async {
+        let request = makeRequest(url: url, headers: headers, userAgent: webView.customUserAgent ?? mobileUserAgent, timeout: 10)
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard !Task.isCancelled else { return }
+            if let http = response as? HTTPURLResponse,
+               (200...299).contains(http.statusCode),
+               let html = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .isoLatin1) {
+                let preparation = Task.detached(priority: .userInitiated) { stripResourceTags(html) }
+                let stripped = await withTaskCancellationHandler { await preparation.value } onCancel: { preparation.cancel() }
+                guard !Task.isCancelled else { return }
+                webView.loadHTMLString(stripped, baseURL: url)
+                return
+            }
+        } catch {}
+        guard !Task.isCancelled else { return }
+        webView.load(request)
+    }
+
     static func makeWebView(
         frame: CGRect = .zero,
         allowsInlineMediaPlayback: Bool = false,
@@ -86,6 +124,57 @@ import WebKit
                 }
             }
         } onCancel: { Task { @MainActor in call.finish(.failure(CancellationError())) } }
+    }
+}
+
+@MainActor final class WebNavigationBridge: NSObject, WKNavigationDelegate {
+    private let onFinish: @MainActor (ObjectIdentifier?) -> Void
+    private let onFail: @MainActor (ObjectIdentifier?, Error) -> Void
+    private let onResponse: (@MainActor (WKNavigationResponse) -> WKNavigationResponsePolicy)?
+
+    init(
+        onFinish: @escaping @MainActor (ObjectIdentifier?) -> Void,
+        onFail: @escaping @MainActor (ObjectIdentifier?, Error) -> Void,
+        onResponse: (@MainActor (WKNavigationResponse) -> WKNavigationResponsePolicy)? = nil
+    ) {
+        self.onFinish = onFinish
+        self.onFail = onFail
+        self.onResponse = onResponse
+    }
+
+    @discardableResult
+    static func attach(
+        to webView: WKWebView,
+        onFinish: @escaping @MainActor (ObjectIdentifier?) -> Void,
+        onFail: @escaping @MainActor (ObjectIdentifier?, Error) -> Void,
+        onResponse: (@MainActor (WKNavigationResponse) -> WKNavigationResponsePolicy)? = nil
+    ) -> WebNavigationBridge {
+        let bridge = WebNavigationBridge(onFinish: onFinish, onFail: onFail, onResponse: onResponse)
+        webView.navigationDelegate = bridge
+        return bridge
+    }
+
+    nonisolated func webView(_ webView: WKWebView, decidePolicyFor response: WKNavigationResponse) async -> WKNavigationResponsePolicy {
+        await MainActor.run { onResponse?(response) ?? .allow }
+    }
+
+    nonisolated func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        let id = navigation.map(ObjectIdentifier.init)
+        Task { @MainActor in onFinish(id) }
+    }
+
+    nonisolated func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        handleFailure(navigation, error: error)
+    }
+
+    nonisolated func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        handleFailure(navigation, error: error)
+    }
+
+    private nonisolated func handleFailure(_ navigation: WKNavigation!, error: Error) {
+        guard (error as NSError).code != NSURLErrorCancelled else { return }
+        let id = navigation.map(ObjectIdentifier.init)
+        Task { @MainActor in onFail(id, error) }
     }
 }
 

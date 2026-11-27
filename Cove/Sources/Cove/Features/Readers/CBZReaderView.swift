@@ -26,27 +26,10 @@ struct CBZReaderView: View {
             theme.backgroundColor.ignoresSafeArea()
 
             if isLoading {
-                VStack(spacing: 16) {
-                    ProgressView()
-                    Text("解压中…")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                    Text(fileURL.lastPathComponent)
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(1)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .overlay(alignment: .topLeading) { floatingBackButton }
+                ReaderLoadingStateView(message: "解压中…", filename: fileURL.lastPathComponent, tint: theme.textColor) { dismiss() }
             } else if let error {
-                ContentUnavailableView {
-                    Label("解压失败", systemImage: "xmark.circle")
-                } description: {
-                    Text(error)
-                } actions: {
-                    Button("重试") { Task { await extractPages() } }.buttonStyle(.borderedProminent)
-                    Button("返回") { dismiss() }
-                }
+                ReaderErrorView(title: "解压失败", systemImage: "xmark.circle", message: error,
+                                onRetry: { Task { await extractPages() } }, onBack: { dismiss() })
             } else {
                 scrollView
             }
@@ -55,7 +38,10 @@ struct CBZReaderView: View {
                 VStack(spacing: 0) {
                     topBar
                     Spacer()
-                    bottomBar
+                    ReaderPageSliderBar(current: currentPage, total: pages.count) { page in
+                        currentPage = page
+                        jumpTarget = page
+                    }
                 }
                 .transition(.opacity)
             }
@@ -116,54 +102,13 @@ struct CBZReaderView: View {
         .ignoresSafeArea()
     }
 
-    private var floatingBackButton: some View {
-        Button { dismiss() } label: {
-            Image(systemName: "chevron.left")
-                .font(.system(size: 17, weight: .medium))
-                .foregroundStyle(theme.textColor)
-                .padding(10)
-                .background(.ultraThinMaterial, in: Circle())
-        }
-        .padding(.leading, 16)
-        .padding(.top, 12)
-    }
-
     // MARK: - Bars
 
     private var topBar: some View {
-        HStack {
-            Button { dismiss() } label: {
-                Image(systemName: "chevron.left").imageScale(.large)
-            }
-            Spacer()
-            Text(fileURL.deletingPathExtension().lastPathComponent)
-                .font(.headline).lineLimit(1)
-            Spacer()
+        ReaderTopBar(title: fileURL.deletingPathExtension().lastPathComponent, tint: theme.textColor, onBack: { dismiss() }) {
             Text("\(currentPage + 1) / \(pages.count)")
                 .foregroundStyle(.secondary)
         }
-        .foregroundStyle(theme.textColor)
-        .padding(.horizontal)
-        .padding(.vertical, 8)
-        .background(.ultraThinMaterial)
-    }
-
-    private var bottomBar: some View {
-        VStack(spacing: 4) {
-            if pages.count > 1 {
-                Slider(value: Binding(
-                    get: { Double(currentPage) },
-                    set: { newVal in
-                        let page = Int(newVal)
-                        currentPage = page
-                        jumpTarget = page
-                    }
-                ), in: 0...Double(pages.count - 1), step: 1)
-                .padding(.horizontal)
-            }
-        }
-        .padding(.vertical, 8)
-        .background(.ultraThinMaterial)
     }
 
     // MARK: - Extraction

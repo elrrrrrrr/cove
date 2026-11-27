@@ -176,7 +176,7 @@ import WebKit
     func testHTTPErrorsCannotPublishNativeDocument() async throws {
         let server = try ArticleFixtureServer(routes: [:])
         let loader = ArticleLoader(); loader.load(url: URL(string: server.url + "/missing")!, title: "404", definitionID: nil)
-        XCTAssertTrue(loader.responds(to: NSSelectorFromString("webView:decidePolicyForNavigationResponse:decisionHandler:")))
+        XCTAssertTrue(loader.webView.navigationDelegate?.responds(to: NSSelectorFromString("webView:decidePolicyForNavigationResponse:decisionHandler:")) == true)
         try await wait { if case .failed = loader.state { return true }; return false }
         if case .failed(let message) = loader.state { XCTAssertTrue(message.contains("404"), message) }
     }

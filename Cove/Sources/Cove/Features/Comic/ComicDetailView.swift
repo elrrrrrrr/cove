@@ -24,22 +24,30 @@ struct ComicMeta: Sendable {
 
 @Observable
 @MainActor
-final class ComicDetailLoader: NSObject {
+final class ComicDetailLoader {
     enum State {
         case loading, loaded(ComicMeta), failed(String)
     }
     var state: State = .loading
-    let webView: WKWebView
+    let webView = WebScript.makeWebView()
 
+    private var navBridge: WebNavigationBridge?
     private var targetURL: URL?
     private var definitionID: String?
     private var extractTask: Task<Void, Never>?
 
-    override init() {
-        let wv = WebScript.makeWebView()
-        self.webView = wv
-        super.init()
-        wv.navigationDelegate = self
+    init() {
+        navBridge = WebNavigationBridge.attach(
+            to: webView,
+            onFinish: { [weak self] _ in
+                guard let self, case .loading = state else { return }
+                extract()
+            },
+            onFail: { [weak self] _, error in
+                guard let self, case .loading = state else { return }
+                state = .failed(error.localizedDescription)
+            }
+        )
     }
 
     func load(url: URL, definitionID: String? = nil) {
@@ -47,45 +55,18 @@ final class ComicDetailLoader: NSObject {
         self.definitionID = definitionID
         targetURL = url
         state = .loading
-        // Try URLSession fast path first (avoids cookie/anti-bot issues)
-        extractTask = Task { await fetchAndLoad(url: url) }
+        let rule = SiteParserRegistry.rule(for: url, role: "comic", definitionID: definitionID)
+        let headers = rule?.load?.headers ?? [:]
+        if rule?.load?.mode == "webView" {
+            webView.load(WebScript.makeRequest(url: url, headers: headers, userAgent: webView.customUserAgent, timeout: 10))
+        } else {
+            extractTask = Task { await WebScript.loadHTMLOrFallback(url: url, headers: headers, in: webView) }
+        }
     }
 
     func cancel() {
         extractTask?.cancel()
         webView.stopLoading()
-    }
-
-    /// URLSession fetch → strip scripts → loadHTMLString.
-    /// Shares cookies via HTTPCookieStorage and avoids WKWebView navigation issues.
-    private func fetchAndLoad(url: URL) async {
-        let rule = SiteParserRegistry.rule(for: url, role: "comic", definitionID: definitionID)
-        var request = URLRequest(url: url)
-        request.setValue(webView.customUserAgent, forHTTPHeaderField: "User-Agent")
-        for (name, value) in rule?.load?.headers ?? [:] { request.setValue(value, forHTTPHeaderField: name) }
-        request.timeoutInterval = 10
-
-        if rule?.load?.mode == "webView" {
-            webView.load(request)
-            return
-        }
-        do {
-            let (data, response) = try await URLSession.shared.data(for: request)
-            guard !Task.isCancelled else { return }
-            guard let http = response as? HTTPURLResponse,
-                  (200...299).contains(http.statusCode),
-                  let html = String(data: data, encoding: .utf8)
-                          ?? String(data: data, encoding: .isoLatin1) else {
-                // Fallback to direct WebView navigation
-                webView.load(request)
-                return
-            }
-            let stripped = WebScript.stripResourceTags(html)
-            webView.loadHTMLString(stripped, baseURL: url)
-        } catch {
-            guard !Task.isCancelled else { return }
-            webView.load(request)
-        }
     }
 
     private func extract() {
@@ -104,18 +85,12 @@ final class ComicDetailLoader: NSObject {
                       let bytes = raw.data(using: .utf8) else { throw SiteDefinitionError.invalid("解析结果为空") }
                 let meta = try JSONDecoder().decode(RawMeta.self, from: bytes)
                 let chapters = meta.chapters.compactMap { chapter -> ComicChapter? in
-                    guard let url = URL(string: chapter.url, relativeTo: target)?.absoluteURL,
-                          WebScript.isWebURL(url) else { return nil }
+                    guard let url = WebScript.resolveURL(chapter.url, relativeTo: target) else { return nil }
                     return ComicChapter(id: chapter.id ?? url.absoluteString, title: chapter.title ?? "开始阅读", chapterURL: url)
                 }
                 guard !Task.isCancelled else { return }
                 guard !chapters.isEmpty else { throw SiteDefinitionError.invalid("未找到章节，请检查解析规则") }
-                let coverURL = meta.cover.flatMap { value -> URL? in
-                    guard !value.isEmpty,
-                          let resolved = URL(string: value, relativeTo: target)?.absoluteURL,
-                          WebScript.isMediaURL(resolved) else { return nil }
-                    return resolved
-                }
+                let coverURL = WebScript.resolveURL(meta.cover, relativeTo: target, allowData: true)
                 state = .loaded(ComicMeta(title: meta.title ?? "", author: meta.author ?? "", status: meta.status ?? "",
                     tags: meta.tags ?? [], description: meta.desc ?? "",
                     coverURL: coverURL, chapters: chapters))
@@ -136,27 +111,6 @@ final class ComicDetailLoader: NSObject {
         let id: String?
         let title: String?
         let url: String
-    }
-}
-
-extension ComicDetailLoader: WKNavigationDelegate {
-    nonisolated func webView(_ wv: WKWebView, didFinish _: WKNavigation!) {
-        Task { @MainActor in
-            guard case .loading = self.state else { return }
-            self.extract()
-        }
-    }
-    nonisolated func webView(_ wv: WKWebView, didFail _: WKNavigation!, withError error: Error) {
-        Task { @MainActor in
-            guard (error as NSError).code != NSURLErrorCancelled else { return }
-            if case .loading = self.state { self.state = .failed(error.localizedDescription) }
-        }
-    }
-    nonisolated func webView(_ wv: WKWebView, didFailProvisionalNavigation _: WKNavigation!, withError error: Error) {
-        Task { @MainActor in
-            guard (error as NSError).code != NSURLErrorCancelled else { return }
-            if case .loading = self.state { self.state = .failed(error.localizedDescription) }
-        }
     }
 }
 
@@ -195,14 +149,9 @@ struct ComicDetailView: View {
         }
         .task {
             loader.load(url: item.pageURL, definitionID: definitionID)
-            // Find last-read chapter using a targeted query instead of loading all history
-            let urlString = item.pageURL.absoluteString
-            let descriptor = FetchDescriptor<ReadingHistory>(
-                predicate: #Predicate { $0.url == urlString }
-            )
-            if let existing = (try? modelContext.fetch(descriptor))?.first(where: { $0.fileType == .comic }) {
-                lastReadChapterId = existing.filePath
-            }
+            lastReadChapterId = ReadingHistory.find(
+                in: modelContext, url: item.pageURL.absoluteString, fileType: .comic
+            )?.filePath
         }
         .onDisappear { loader.cancel() }
         .fullScreenCover(item: $showReaderFor) { chapter in

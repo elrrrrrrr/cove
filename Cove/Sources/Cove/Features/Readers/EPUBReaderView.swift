@@ -26,33 +26,12 @@ struct EPUBReaderView: View {
         ZStack(alignment: .bottom) {
             theme.backgroundColor.ignoresSafeArea()
             if isLoading {
-                VStack(spacing: 16) {
-                    ProgressView()
-                    Text("解析中…")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                    Text(fileURL.lastPathComponent)
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(1)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .overlay(alignment: .topLeading) { floatingBackButton }
+                ReaderLoadingStateView(message: "解析中…", filename: fileURL.lastPathComponent) { dismiss() }
             } else if let error {
-                ContentUnavailableView {
-                    Label("解析失败", systemImage: "book.closed")
-                } description: {
-                    Text(error)
-                } actions: {
-                    Button("重试") { Task { await parseEPUB() } }.buttonStyle(.borderedProminent)
-                    Button("返回") { dismiss() }
-                }
+                ReaderErrorView(title: "解析失败", systemImage: "book.closed", message: error,
+                                onRetry: { Task { await parseEPUB() } }, onBack: { dismiss() })
             } else if chapters.isEmpty {
-                ContentUnavailableView {
-                    Label("无法解析章节", systemImage: "book.closed")
-                } actions: {
-                    Button("返回") { dismiss() }
-                }
+                ReaderErrorView(title: "无法解析章节", systemImage: "book.closed") { dismiss() }
             } else {
                 EPUBWebView(chapter: chapters[currentChapter], fontSize: fontSize, theme: theme) {
                     withAnimation(.easeInOut(duration: 0.2)) { showBars.toggle() }
@@ -72,30 +51,12 @@ struct EPUBReaderView: View {
         .onDisappear { saveProgress() }
     }
 
-    private var floatingBackButton: some View {
-        Button { dismiss() } label: {
-            Image(systemName: "chevron.left")
-                .font(.system(size: 17, weight: .medium))
-                .padding(10)
-                .background(.ultraThinMaterial, in: Circle())
-        }
-        .padding(.leading, 16)
-        .padding(.top, 12)
-    }
-
     // MARK: - Bars
 
     private var topBar: some View {
-        HStack {
-            Button { dismiss() } label: { Image(systemName: "chevron.left").imageScale(.large) }
-            Spacer()
-            Text(fileURL.deletingPathExtension().lastPathComponent)
-                .font(.headline).lineLimit(1)
-            Spacer()
+        ReaderTopBar(title: fileURL.deletingPathExtension().lastPathComponent, onBack: { dismiss() }) {
             Button { showTOC = true } label: { Image(systemName: "list.bullet") }
         }
-        .padding(.horizontal).padding(.vertical, 8)
-        .background(.ultraThinMaterial)
     }
 
     private var bottomBar: some View {

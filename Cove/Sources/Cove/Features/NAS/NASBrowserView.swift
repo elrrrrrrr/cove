@@ -58,18 +58,7 @@ struct NASBrowserView: View {
                 if nasConfigs.isEmpty {
                     nasEmptyState
                 } else if let connection {
-                    NASDirectoryListView(
-                        path: "/",
-                        title: selectedConfig?.name ?? "NAS",
-                        connection: connection,
-                        sourceID: selectedConfig?.id.uuidString ?? "nas",
-                        isDownloading: isDownloading,
-                        readPathSet: readPathSet,
-                        onOpenDirectory: { dirPath in navPath.append(dirPath) },
-                        onOpen: { entry, entries in openFile(entry, from: entries) },
-                        onDownload: { entry in downloadToOffline(entry) },
-                        onDisconnect: { disconnect() }
-                    )
+                    directoryView(path: "/", title: selectedConfig?.name ?? "NAS", connection: connection)
                 } else {
                     configPickerView
                 }
@@ -78,18 +67,7 @@ struct NASBrowserView: View {
             .navigationTitle("NAS")
             .navigationDestination(for: String.self) { dirPath in
                 if let connection {
-                    NASDirectoryListView(
-                        path: dirPath,
-                        title: (dirPath as NSString).lastPathComponent,
-                        connection: connection,
-                        sourceID: selectedConfig?.id.uuidString ?? "nas",
-                        isDownloading: isDownloading,
-                        readPathSet: readPathSet,
-                        onOpenDirectory: { dirPath in navPath.append(dirPath) },
-                        onOpen: { entry, entries in openFile(entry, from: entries) },
-                        onDownload: { entry in downloadToOffline(entry) },
-                        onDisconnect: { disconnect() }
-                    )
+                    directoryView(path: dirPath, title: (dirPath as NSString).lastPathComponent, connection: connection)
                 }
             }
         }
@@ -183,23 +161,27 @@ struct NASBrowserView: View {
         }
     }
 
+    private func directoryView(path: String, title: String, connection: SMBClient) -> some View {
+        NASDirectoryListView(
+            path: path,
+            title: title,
+            connection: connection,
+            sourceID: selectedConfig?.id.uuidString ?? "nas",
+            isDownloading: isDownloading,
+            readPathSet: readPathSet,
+            onOpenDirectory: { navPath.append($0) },
+            onOpen: { openFile($0, from: $1) },
+            onDownload: { downloadToOffline($0) },
+            onDisconnect: { disconnect() }
+        )
+    }
+
     @ViewBuilder
     private func readerView(for url: URL, fileType: FileType) -> some View {
-        switch fileType {
-        case .txt:
-            TXTReaderView(fileURL: url, historyItem: openedHistory)
-        case .pdf:
-            PDFReaderView(fileURL: url, historyItem: openedHistory)
-        case .cbz, .cbr:
-            CBZReaderView(fileURL: url, historyItem: openedHistory)
-        case .epub:
-            EPUBReaderView(fileURL: url, historyItem: openedHistory)
-        case .video:
-            NASVideoView(fileURL: url, files: openedSiblings, initialIndex: openedIndex,
-                         client: connection)
-        default:
-            ContentUnavailableView("不支持的文件类型", systemImage: "doc.questionmark",
-                                   description: Text(url.pathExtension.uppercased()))
+        if fileType == .video {
+            NASVideoView(fileURL: url, files: openedSiblings, initialIndex: openedIndex, client: connection)
+        } else {
+            LocalFileReaderView(fileURL: url, fileType: fileType, historyItem: openedHistory)
         }
     }
 
@@ -363,56 +345,52 @@ struct NASBrowserView: View {
     }
 
     private func openImage(entry: NASFileEntry, client: SMBClient, ft: FileType) {
-        openTask?.cancel()
-        isDownloading = true
-        downloadProgress = (entry.name, 0)
-        openTask = Task {
-            do {
-                let data = try await client.readFile(at: entry.path) { pct in
-                    Task { @MainActor in
-                        guard isDownloading else { return }
-                        downloadProgress = (entry.name, pct)
-                    }
-                }
-                guard !Task.isCancelled, connection === client else { return }
-                isDownloading = false
-                downloadProgress = nil
-                openedFileType = ft
-                openedFileData = data
-                saveHistory(entry: entry, fileType: ft)
-                openTask = nil
-            } catch {
-                guard !Task.isCancelled else { return }
-                isDownloading = false
-                downloadProgress = nil
-                openTask = nil
-                self.error = "加载失败: \(error.localizedDescription)"
-            }
+        runOpenTransfer(entry: entry, client: client) { onProgress in
+            let data = try await client.readFile(at: entry.path, progress: onProgress)
+            return (data, nil)
+        } apply: { data, _ in
+            openedFileType = ft
+            openedFileData = data
+            saveHistory(entry: entry, fileType: ft)
         }
     }
 
     private func downloadAndOpen(entry: NASFileEntry, client: SMBClient, ft: FileType) {
+        runOpenTransfer(entry: entry, client: client) { onProgress in
+            let dest = try await client.temporaryFile(for: entry.path, progress: onProgress)
+            return (nil, dest)
+        } apply: { _, dest in
+            openedFileType = ft
+            openedFileURL = dest
+            openedHistory = saveHistory(entry: entry, fileType: ft)
+        }
+    }
+
+    private func runOpenTransfer(
+        entry: NASFileEntry,
+        client: SMBClient,
+        perform: @escaping (@escaping @Sendable (Double) -> Void) async throws -> (Data?, URL?),
+        apply: @escaping (Data?, URL?) -> Void
+    ) {
         openTask?.cancel()
         isDownloading = true
         downloadProgress = (entry.name, 0)
         openTask = Task {
             do {
-                let dest = try await client.temporaryFile(for: entry.path) { pct in
+                let (data, dest) = try await perform { pct in
                     Task { @MainActor in
                         guard isDownloading else { return }
                         downloadProgress = (entry.name, pct)
                     }
                 }
                 guard !Task.isCancelled, connection === client else {
-                    try? FileManager.default.removeItem(at: dest.deletingLastPathComponent())
+                    if let dest { try? FileManager.default.removeItem(at: dest.deletingLastPathComponent()) }
                     return
                 }
                 isDownloading = false
                 downloadProgress = nil
-                openedFileType = ft
-                openedFileURL = dest
-                openedHistory = saveHistory(entry: entry, fileType: ft)
                 openTask = nil
+                apply(data, dest)
             } catch {
                 guard !Task.isCancelled else { return }
                 isDownloading = false
@@ -425,24 +403,18 @@ struct NASBrowserView: View {
 
     // MARK: - History (with dedup)
 
-    @discardableResult private func saveHistory(entry: NASFileEntry, fileType: FileType) -> ReadingHistory {
+    @discardableResult private func saveHistory(entry: NASFileEntry, fileType: FileType) -> ReadingHistory? {
         let configID = selectedConfig?.id.uuidString
-        if let existing = readHistory.first(where: { $0.filePath == entry.path && $0.nasConfigID == configID }) {
-            existing.lastReadAt = Date()
-            existing.nasConfigID = configID
-            try? modelContext.save()
-            return existing
-        } else {
-            let history = ReadingHistory(
-                title: (entry.name as NSString).deletingPathExtension,
-                filePath: entry.path,
-                fileType: fileType
-            )
-            history.nasConfigID = configID
-            modelContext.insert(history)
-            try? modelContext.save()
-            return history
-        }
+        let existing = ReadingHistory.find(in: modelContext, filePath: entry.path, nasConfigID: configID)
+        return ReadingHistory.recordProgress(
+            in: modelContext,
+            historyItem: existing,
+            title: (entry.name as NSString).deletingPathExtension,
+            filePath: entry.path,
+            fileType: fileType,
+            progress: existing?.progress ?? 0,
+            nasConfigID: configID
+        )
     }
 
     private func disconnect() {

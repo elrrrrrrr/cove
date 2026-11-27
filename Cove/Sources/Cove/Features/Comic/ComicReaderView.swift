@@ -12,22 +12,30 @@ struct ChapterImageData: Sendable {
 
 @Observable
 @MainActor
-final class ChapterImageExtractor: NSObject {
+final class ChapterImageExtractor {
     enum State {
         case loading, loaded(ChapterImageData), failed(String)
     }
     var state: State = .loading
-    let webView: WKWebView
+    let webView = WebScript.makeWebView()
 
+    private var navBridge: WebNavigationBridge?
     private var targetURL: URL?
     private var definitionID: String?
     private var extractTask: Task<Void, Never>?
 
-    override init() {
-        let wv = WebScript.makeWebView()
-        self.webView = wv
-        super.init()
-        wv.navigationDelegate = self
+    init() {
+        navBridge = WebNavigationBridge.attach(
+            to: webView,
+            onFinish: { [weak self] _ in
+                guard let self, case .loading = state else { return }
+                startExtraction()
+            },
+            onFail: { [weak self] _, error in
+                guard let self, case .loading = state else { return }
+                state = .failed(error.localizedDescription)
+            }
+        )
     }
 
     func load(url: URL, definitionID: String? = nil) {
@@ -35,11 +43,8 @@ final class ChapterImageExtractor: NSObject {
         extractTask?.cancel()
         targetURL = url
         state = .loading
-        var request = URLRequest(url: url)
-        for (name, value) in SiteParserRegistry.rule(for: url, role: "chapter", definitionID: definitionID)?.load?.headers ?? [:] {
-            request.setValue(value, forHTTPHeaderField: name)
-        }
-        webView.load(request)
+        let headers = SiteParserRegistry.rule(for: url, role: "chapter", definitionID: definitionID)?.load?.headers ?? [:]
+        webView.load(WebScript.makeRequest(url: url, headers: headers))
     }
 
     func cancel() {
@@ -71,8 +76,7 @@ final class ChapterImageExtractor: NSObject {
                 guard let raw = try await WebScript.boundedString(extraction.javascript, in: webView),
                       let bytes = raw.data(using: .utf8) else { continue }
                 let parsed = try JSONDecoder().decode(RawData.self, from: bytes)
-                let urls = parsed.images.compactMap { URL(string: $0, relativeTo: target)?.absoluteURL }
-                    .filter(WebScript.isMediaURL)
+                let urls = parsed.images.compactMap { WebScript.resolveURL($0, relativeTo: target, allowData: true) }
                 if !urls.isEmpty {
                     guard !Task.isCancelled else { return }
                     state = .loaded(ChapterImageData(imageURLs: urls))
@@ -85,21 +89,16 @@ final class ChapterImageExtractor: NSObject {
 
     private func extractRequest(_ config: SiteTextRequest, target: URL, headers: [String: String]) async throws {
         guard let capture = SitePortalResolver.captures(config.capturePattern, in: target.absoluteString).first,
-              let url = URL(string: config.urlTemplate.replacingOccurrences(of: "{capture}", with: capture), relativeTo: target)?.absoluteURL,
-              WebScript.isWebURL(url) else {
+              let url = WebScript.resolveURL(config.urlTemplate.replacingOccurrences(of: "{capture}", with: capture), relativeTo: target) else {
             throw SiteDefinitionError.invalid("无法从地址生成章节请求")
         }
-        var request = URLRequest(url: url)
-        request.setValue(webView.customUserAgent, forHTTPHeaderField: "User-Agent")
-        for (name, value) in headers { request.setValue(value, forHTTPHeaderField: name) }
-        request.timeoutInterval = 15
+        let request = WebScript.makeRequest(url: url, headers: headers, userAgent: webView.customUserAgent, timeout: 15)
         let (bytes, response) = try await URLSession.shared.data(for: request)
         guard let status = (response as? HTTPURLResponse)?.statusCode, (200...299).contains(status),
               let text = String(data: bytes, encoding: .utf8) else { throw SiteDefinitionError.invalid("章节请求失败") }
         let urls = SitePortalResolver.captures(config.responsePattern, in: text)
             .filter { value in !(config.exclude ?? []).contains(where: { value.contains($0) }) }
-            .compactMap { URL(string: $0, relativeTo: url)?.absoluteURL }
-            .filter(WebScript.isMediaURL)
+            .compactMap { WebScript.resolveURL($0, relativeTo: url, allowData: true) }
         guard !Task.isCancelled else { return }
         guard !urls.isEmpty else { throw SiteDefinitionError.invalid("未找到图片，请检查响应规则") }
         state = .loaded(ChapterImageData(imageURLs: urls))
@@ -107,27 +106,6 @@ final class ChapterImageExtractor: NSObject {
 
     private struct RawData: Decodable {
         let images: [String]
-    }
-}
-
-extension ChapterImageExtractor: WKNavigationDelegate {
-    nonisolated func webView(_ wv: WKWebView, didFinish _: WKNavigation!) {
-        Task { @MainActor in
-            guard case .loading = self.state else { return }
-            self.startExtraction()
-        }
-    }
-    nonisolated func webView(_ wv: WKWebView, didFail _: WKNavigation!, withError error: Error) {
-        Task { @MainActor in
-            guard (error as NSError).code != NSURLErrorCancelled else { return }
-            if case .loading = self.state { self.state = .failed(error.localizedDescription) }
-        }
-    }
-    nonisolated func webView(_ wv: WKWebView, didFailProvisionalNavigation _: WKNavigation!, withError error: Error) {
-        Task { @MainActor in
-            guard (error as NSError).code != NSURLErrorCancelled else { return }
-            if case .loading = self.state { self.state = .failed(error.localizedDescription) }
-        }
     }
 }
 
@@ -390,28 +368,19 @@ struct ComicReaderView: View {
     // MARK: - Progress
 
     private func saveProgress() {
-        let urlString = bookURL.absoluteString
         let progress = allChapters.isEmpty ? 0 : Double(currentChapterIndex) / Double(allChapters.count)
-        let descriptor = FetchDescriptor<ReadingHistory>(
-            predicate: #Predicate { $0.url == urlString }
+        ReadingHistory.recordProgress(
+            in: modelContext,
+            historyItem: nil,
+            title: bookTitle,
+            url: bookURL.absoluteString,
+            filePath: currentChapter.id,
+            fileType: .comic,
+            progress: progress,
+            thumbnailURLString: coverURL?.absoluteString,
+            definitionID: definitionID,
+            updateFilePath: true,
+            updateMetadata: true
         )
-        if let existing = (try? modelContext.fetch(descriptor))?.first(where: { $0.fileType == .comic }) {
-            existing.definitionID = definitionID
-            existing.progress = progress
-            existing.lastReadAt = Date()
-            existing.filePath = currentChapter.id  // store last-read chapter ID
-        } else {
-            let entry = ReadingHistory(
-                title: bookTitle,
-                url: urlString,
-                filePath: currentChapter.id,
-                fileType: .comic,
-                progress: progress,
-                thumbnailURLString: coverURL?.absoluteString
-            )
-            entry.definitionID = definitionID
-            modelContext.insert(entry)
-        }
-        try? modelContext.save()
     }
 }

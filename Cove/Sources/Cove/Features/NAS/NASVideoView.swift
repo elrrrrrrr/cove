@@ -143,7 +143,7 @@ private struct VideoPage: View {
             Color.black
 
             if player != nil {
-                NASPlayerViewController(player: $player)
+                PlayerViewController(player: $player)
             } else if let loadError {
                 Text(loadError).foregroundStyle(.white).padding()
             } else {
@@ -201,8 +201,7 @@ private struct VideoPage: View {
     }
 
     private func setupPlayer(item: AVPlayerItem) {
-        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
-        try? AVAudioSession.sharedInstance().setActive(true)
+        activatePlaybackAudioSession()
         player?.pause()
         SMBStreamLoader.cancel(in: player?.currentItem?.asset)
         player?.replaceCurrentItem(with: nil)
@@ -249,31 +248,5 @@ private struct VideoPage: View {
         player = nil
         if let temporaryURL { try? FileManager.default.removeItem(at: temporaryURL.deletingLastPathComponent()) }
         temporaryURL = nil
-    }
-}
-
-// MARK: - Video player (AVPlayerViewController wrapper)
-
-private struct NASPlayerViewController: UIViewControllerRepresentable {
-    @Binding var player: AVPlayer?
-
-    func makeUIViewController(context: Context) -> AVPlayerViewController {
-        let vc = AVPlayerViewController()
-        vc.player = player
-        vc.showsPlaybackControls = true
-        vc.videoGravity = .resizeAspect
-        vc.allowsPictureInPicturePlayback = true
-        return vc
-    }
-
-    func updateUIViewController(_ vc: AVPlayerViewController, context: Context) {
-        if vc.player !== player {
-            vc.player = player
-        }
-    }
-
-    static func dismantleUIViewController(_ vc: AVPlayerViewController, coordinator: ()) {
-        vc.player?.pause()
-        vc.player = nil
     }
 }

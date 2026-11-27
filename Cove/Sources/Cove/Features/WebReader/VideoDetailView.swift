@@ -48,10 +48,7 @@ struct VideoDetailView: View {
                     loadingOverlay.transition(.opacity)
 
                 case .found(let result):
-                    NativeVideoPlayer(
-                        url: result.streamURL,
-                        headers: result.headers,
-                        startTime: savedProgress,
+                    PlayerViewController(
                         player: $player,
                         onPlaybackEnded: { playNextEpisode(from: result) }
                     )
@@ -113,15 +110,16 @@ struct VideoDetailView: View {
             }
             guard player == nil else { return }
             // Restore saved progress before starting extraction (must run first for cache hits)
-            let urlString = currentPageURL.absoluteString
-            let descriptor = FetchDescriptor<ReadingHistory>(
-                predicate: #Predicate { $0.url == urlString }
-            )
-            if let entry = (try? modelContext.fetch(descriptor))?.first(where: { $0.fileType == .video }), entry.progress > 2 {
+            if let entry = ReadingHistory.find(in: modelContext, url: currentPageURL.absoluteString, fileType: .video),
+               entry.progress > 2 {
                 savedProgress = entry.progress
             }
-            // Always (re)load — handles both first open and retry after previous failure
-            extractor.load(url: currentPageURL, definitionID: definitionID)
+            if case .found(let result) = extractor.state {
+                startPlayer(for: result)
+            } else {
+                // Always (re)load — handles both first open and retry after previous failure
+                extractor.load(url: currentPageURL, definitionID: definitionID)
+            }
         }
         .task(id: item.thumbnail) {
             guard let url = item.thumbnail else { return }
@@ -133,6 +131,7 @@ struct VideoDetailView: View {
         .onChange(of: extractor.state) { _, state in
             if case .found(let result) = state {
                 isAdvancingEpisode = false
+                startPlayer(for: result)
                 saveHistory(result: result)
             } else if case .notFound = state {
                 isAdvancingEpisode = false
@@ -142,7 +141,21 @@ struct VideoDetailView: View {
             extractor.cancel()
             player?.pause()
             saveProgress()
+            player = nil
         }
+    }
+
+    private func startPlayer(for result: VideoResult) {
+        activatePlaybackAudioSession()
+        let asset = result.headers.isEmpty
+            ? AVURLAsset(url: result.streamURL)
+            : AVURLAsset(url: result.streamURL, options: ["AVURLAssetHTTPHeaderFieldsKey": result.headers])
+        let p = AVPlayer(playerItem: AVPlayerItem(asset: asset))
+        if savedProgress > 2 {
+            p.seek(to: CMTime(seconds: savedProgress, preferredTimescale: 1000), toleranceBefore: .zero, toleranceAfter: .zero)
+        }
+        player = p
+        p.play()
     }
 
     // MARK: - Diagnostic badge
@@ -190,32 +203,23 @@ struct VideoDetailView: View {
     // MARK: - History (upsert by URL to avoid duplicates)
 
     private func saveHistory(result: VideoResult) {
-        let urlString = currentPageURL.absoluteString
-        let thumbStr  = item.thumbnail?.absoluteString
         let title = result.episodeNumber.map {
             "\(result.title ?? item.title) · 第\($0)集"
         } ?? item.title
-
-        // Fetch existing entry for this URL
-        let descriptor = FetchDescriptor<ReadingHistory>(
-            predicate: #Predicate { $0.url == urlString }
+        let urlString = currentPageURL.absoluteString
+        let existing = ReadingHistory.find(in: modelContext, url: urlString, fileType: .video)
+        ReadingHistory.recordProgress(
+            in: modelContext,
+            historyItem: existing,
+            title: title,
+            url: urlString,
+            fileType: .video,
+            progress: existing?.progress ?? 0,
+            thumbnailURLString: item.thumbnail?.absoluteString,
+            definitionID: definitionID,
+            updateTitle: true,
+            updateMetadata: true
         )
-        if let existing = (try? modelContext.fetch(descriptor))?.first(where: { $0.fileType == .video }) {
-            existing.definitionID = definitionID
-            existing.title              = title
-            existing.lastReadAt         = Date()
-            existing.thumbnailURLString = thumbStr
-        } else {
-            let entry = ReadingHistory(
-                title: title,
-                url: urlString,
-                fileType: .video,
-                thumbnailURLString: thumbStr
-            )
-            entry.definitionID = definitionID
-            modelContext.insert(entry)
-        }
-        try? modelContext.save()
     }
 
     // MARK: - Loading overlay
@@ -267,14 +271,15 @@ struct VideoDetailView: View {
         let seconds = p.currentTime().seconds
         guard seconds.isFinite, seconds > 1 else { return }
         let urlString = currentPageURL.absoluteString
-        let descriptor = FetchDescriptor<ReadingHistory>(
-            predicate: #Predicate { $0.url == urlString }
+        guard let existing = ReadingHistory.find(in: modelContext, url: urlString, fileType: .video) else { return }
+        ReadingHistory.recordProgress(
+            in: modelContext,
+            historyItem: existing,
+            title: existing.title,
+            url: urlString,
+            fileType: .video,
+            progress: seconds
         )
-        if let existing = (try? modelContext.fetch(descriptor))?.first(where: { $0.fileType == .video }) {
-            existing.progress = seconds
-            existing.lastReadAt = Date()
-            try? modelContext.save()
-        }
     }
 }
 
@@ -385,83 +390,6 @@ struct SwipeBackEnabler: UIViewControllerRepresentable {
     }
 }
 
-// MARK: - Native AVPlayer
-
-struct NativeVideoPlayer: UIViewControllerRepresentable {
-    let url: URL
-    var headers: [String: String] = [:]
-    var startTime: Double = 0
-    @Binding var player: AVPlayer?
-    let onPlaybackEnded: @MainActor () -> Void
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(onPlaybackEnded: onPlaybackEnded)
-    }
-
-    func makeUIViewController(context: Context) -> AVPlayerViewController {
-        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
-        try? AVAudioSession.sharedInstance().setActive(true)
-
-        let vc = AVPlayerViewController()
-        let asset = headers.isEmpty
-            ? AVURLAsset(url: url)
-            : AVURLAsset(url: url, options: ["AVURLAssetHTTPHeaderFieldsKey": headers])
-        let item = AVPlayerItem(asset: asset)
-        let p  = AVPlayer(playerItem: item)
-        vc.player = p
-        vc.showsPlaybackControls = true
-        vc.videoGravity = .resizeAspect
-        vc.allowsPictureInPicturePlayback = true
-        context.coordinator.observeEnd(of: item)
-        DispatchQueue.main.async { self.player = p }
-        if startTime > 2 {
-            let t = CMTime(seconds: startTime, preferredTimescale: 1000)
-            p.seek(to: t, toleranceBefore: .zero, toleranceAfter: .zero)
-        }
-        p.play()
-        return vc
-    }
-
-    func updateUIViewController(_ vc: AVPlayerViewController, context: Context) {
-        context.coordinator.onPlaybackEnded = onPlaybackEnded
-    }
-
-    static func dismantleUIViewController(_ vc: AVPlayerViewController, coordinator: Coordinator) {
-        vc.player?.pause()
-        coordinator.stopObserving()
-    }
-
-    @MainActor
-    final class Coordinator: NSObject {
-        var onPlaybackEnded: @MainActor () -> Void
-
-        init(onPlaybackEnded: @escaping @MainActor () -> Void) {
-            self.onPlaybackEnded = onPlaybackEnded
-        }
-
-        func observeEnd(of item: AVPlayerItem) {
-            NotificationCenter.default.addObserver(
-                self,
-                selector: #selector(playbackEnded),
-                name: AVPlayerItem.didPlayToEndTimeNotification,
-                object: item
-            )
-        }
-
-        func stopObserving() {
-            NotificationCenter.default.removeObserver(self)
-        }
-
-        @objc private func playbackEnded() {
-            onPlaybackEnded()
-        }
-
-        deinit {
-            NotificationCenter.default.removeObserver(self)
-        }
-    }
-}
-
 // MARK: - Diagnostic sheet
 
 private struct DiagnosticSheet: View {
@@ -474,17 +402,9 @@ private struct DiagnosticSheet: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
-                    // Page URL
-                    Group {
-                        Text("视频页 URL").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                        Text(pageURL.absoluteString)
-                            .font(.system(.caption, design: .monospaced))
-                            .textSelection(.enabled)
-                    }
-
+                    Text("视频页 URL").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                    Text(pageURL.absoluteString).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
                     Divider()
-
-                    // Raw diagnostic JSON
                     Text("页面诊断结果").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                     Text(info.isEmpty ? "（无数据）" : info)
                         .font(.system(size: 11, design: .monospaced))
@@ -496,11 +416,7 @@ private struct DiagnosticSheet: View {
             .appSurface()
             .navigationTitle("提取失败诊断")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("关闭") { dismiss() }
-                }
-            }
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("关闭") { dismiss() } } }
         }
     }
 }

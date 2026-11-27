@@ -39,8 +39,7 @@ final class AudioPlayerManager {
               name: String, path: String,
               siblings: [NASFileEntry] = [], currentIndex: Int = 0,
               client: SMBClient? = nil) {
-        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
-        try? AVAudioSession.sharedInstance().setActive(true)
+        activatePlaybackAudioSession()
 
         cleanup()
 

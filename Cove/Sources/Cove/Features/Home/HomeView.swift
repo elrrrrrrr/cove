@@ -163,13 +163,10 @@ struct HomeView: View {
             WebReaderView(url: url)
         } else if let fileURL = OfflineFiles.shared.url(for: item.localPath) {
             switch item.fileType {
-            case .pdf:       PDFReaderView(fileURL: fileURL)
-            case .cbz, .cbr: CBZReaderView(fileURL: fileURL)
-            case .epub:      EPUBReaderView(fileURL: fileURL)
-            case .txt:       TXTReaderView(fileURL: fileURL)
-            case .video:     VideoPlayerView(fileURL: fileURL)
-            case .audio:     NASAudioView(trackName: item.title, trackPath: fileURL.path, fileURL: fileURL)
-            default:         Text("不支持的格式")
+            case .audio:
+                NASAudioView(trackName: item.title, trackPath: fileURL.path, fileURL: fileURL)
+            default:
+                LocalFileReaderView(fileURL: fileURL, fileType: item.fileType)
             }
         } else { ContentUnavailableView("离线文件路径无效", systemImage: "doc.badge.ellipsis") }
     }
@@ -251,26 +248,13 @@ struct HomeView: View {
             if let address = item.url, let url = URL(string: address) {
                 ArticleReaderView(item: ParsedItem(title: item.title, pageURL: url, thumbnail: item.thumbnailURL, duration: "", extra: ""), definitionID: item.definitionID, historyItem: item)
             }
-        case .pdf:
+        case .pdf, .cbz, .cbr, .epub, .txt:
             if let p = item.filePath, let fileURL = OfflineFiles.shared.historyURL(for: p) {
-                PDFReaderView(fileURL: fileURL, historyItem: item)
-            }
-        case .cbz, .cbr:
-            if let p = item.filePath, let fileURL = OfflineFiles.shared.historyURL(for: p) {
-                CBZReaderView(fileURL: fileURL, historyItem: item)
-            }
-        case .epub:
-            if let p = item.filePath, let fileURL = OfflineFiles.shared.historyURL(for: p) {
-                EPUBReaderView(fileURL: fileURL, historyItem: item)
-            }
-        case .txt:
-            if let p = item.filePath, let fileURL = OfflineFiles.shared.historyURL(for: p) {
-                TXTReaderView(fileURL: fileURL, historyItem: item)
+                LocalFileReaderView(fileURL: fileURL, fileType: item.fileType, historyItem: item)
             }
         case .video:
             if let p = item.filePath, let fileURL = OfflineFiles.shared.historyURL(for: p) {
-                // Local file → direct player
-                VideoPlayerView(fileURL: fileURL, historyItem: item)
+                LocalFileReaderView(fileURL: fileURL, fileType: .video, historyItem: item)
             } else if let s = item.url, let url = URL(string: s) {
                 // Web video → extract stream and play natively
                 VideoDetailView(item: ParsedItem(
@@ -483,20 +467,12 @@ struct DownloadProgressRow: View {
     }
 }
 
-// MARK: - FileType systemImage
-
 // MARK: - DataThumbnail (caches decoded UIImage in @State to avoid repeated decoding)
 
 struct DataThumbnail: View {
     let data: Data
     var placeholder: String = "photo"
     @State private var image: UIImage?
-
-    init(data: Data, placeholder: String = "photo") {
-        self.data = data
-        self.placeholder = placeholder
-        _image = State(initialValue: nil)
-    }
 
     var body: some View {
         Group {
