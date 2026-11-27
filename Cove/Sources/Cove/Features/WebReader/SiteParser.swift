@@ -11,22 +11,25 @@ struct ParsedItem: Identifiable, Hashable, Sendable, Codable {
     let duration  : String
     let extra     : String
     let extraTags : [String]
+    let titleImage: URL?
 
     enum CodingKeys: String, CodingKey {
-        case title, pageURL, thumbnail, duration, extra
+        case title, pageURL, thumbnail, duration, extra, titleImage
     }
-    init(title: String, pageURL: URL, thumbnail: URL?, duration: String, extra: String) {
+    init(title: String, pageURL: URL, thumbnail: URL?, duration: String, extra: String, titleImage: URL? = nil) {
         self.title = title; self.pageURL = pageURL
         self.thumbnail = thumbnail; self.duration = duration; self.extra = extra; self.extraTags = ItemTags.parse(extra)
+        self.titleImage = titleImage
     }
     init(from decoder: Decoder) throws {
-        let c     = try decoder.container(keyedBy: CodingKeys.self)
-        title     = try c.decode(String.self, forKey: .title)
-        pageURL   = try c.decode(URL.self,    forKey: .pageURL)
-        thumbnail = try c.decodeIfPresent(URL.self, forKey: .thumbnail)
-        duration  = try c.decode(String.self, forKey: .duration)
-        extra     = try c.decode(String.self, forKey: .extra)
-        extraTags = ItemTags.parse(extra)
+        let c      = try decoder.container(keyedBy: CodingKeys.self)
+        title      = try c.decode(String.self, forKey: .title)
+        pageURL    = try c.decode(URL.self,    forKey: .pageURL)
+        thumbnail  = try c.decodeIfPresent(URL.self, forKey: .thumbnail)
+        duration   = try c.decode(String.self, forKey: .duration)
+        extra      = try c.decode(String.self, forKey: .extra)
+        extraTags  = ItemTags.parse(extra)
+        titleImage = try c.decodeIfPresent(URL.self, forKey: .titleImage)
     }
 }
 
@@ -83,14 +86,6 @@ enum PaginationMode: Sendable {
         case .none:           "none"
         case .webNavigation:  "webNavigation"
         case .ajax:           "ajax"
-        }
-    }
-
-    var js: String? {
-        switch self {
-        case .none:                     nil
-        case .webNavigation(let js):    js
-        case .ajax(let js, _):          js
         }
     }
 }

@@ -22,6 +22,87 @@ final class ReadingHistory {
     /// Human-readable title: cleans up raw URLs / file paths stored as titles.
     var displayTitle: String { ReadingProjection.displayTitle(title) }
 
+    var isWebVideoPlayback: Bool { fileType == .video && url != nil }
+
+    var clampedFraction: Double {
+        progress.isFinite ? min(max(progress, 0), 1) : 0
+    }
+
+    var progressSummary: String {
+        if isWebVideoPlayback {
+            let total = Int(max(0, progress.isFinite ? progress : 0))
+            let hours = total / 3600
+            let mins = (total % 3600) / 60
+            let secs = total % 60
+            return hours > 0
+                ? String(format: "%d:%02d:%02d", hours, mins, secs)
+                : String(format: "%02d:%02d", mins, secs)
+        }
+        return "\(Int(clampedFraction * 100))%"
+    }
+
+    static func restoredIndex(progress: Double, count: Int) -> Int {
+        guard count > 0, progress.isFinite else { return 0 }
+        let clamped = min(max(progress, 0), 1)
+        return max(0, min(count - 1, Int((clamped * Double(count)).rounded(.up)) - 1))
+    }
+
+    @MainActor
+    static func recordProgress(
+        in context: ModelContext,
+        historyItem: ReadingHistory?,
+        title: String,
+        url: String? = nil,
+        filePath: String? = nil,
+        fileType: FileType,
+        progress: Double,
+        thumbnailURLString: String? = nil,
+        definitionID: String? = nil
+    ) {
+        guard progress.isFinite else { return }
+        let safeProgress = max(0, progress)
+        if let item = historyItem {
+            item.progress = safeProgress
+            item.lastReadAt = Date()
+            if let thumbnailURLString, item.thumbnailURLString == nil { item.thumbnailURLString = thumbnailURLString }
+            if let definitionID, item.definitionID == nil { item.definitionID = definitionID }
+            try? context.save()
+            return
+        }
+        let existing: ReadingHistory?
+        if let filePath {
+            existing = (try? context.fetch(FetchDescriptor<ReadingHistory>(
+                predicate: #Predicate { $0.filePath == filePath },
+                sortBy: [SortDescriptor(\.lastReadAt, order: .reverse)]
+            )))?.first { $0.fileType == fileType }
+        } else if let url {
+            existing = (try? context.fetch(FetchDescriptor<ReadingHistory>(
+                predicate: #Predicate { $0.url == url },
+                sortBy: [SortDescriptor(\.lastReadAt, order: .reverse)]
+            )))?.first { $0.fileType == fileType }
+        } else {
+            existing = nil
+        }
+        if let existing {
+            existing.progress = safeProgress
+            existing.lastReadAt = Date()
+            if let thumbnailURLString, existing.thumbnailURLString == nil { existing.thumbnailURLString = thumbnailURLString }
+            if let definitionID, existing.definitionID == nil { existing.definitionID = definitionID }
+        } else {
+            let entry = ReadingHistory(
+                title: title,
+                url: url,
+                filePath: filePath,
+                fileType: fileType,
+                progress: safeProgress,
+                thumbnailURLString: thumbnailURLString
+            )
+            entry.definitionID = definitionID
+            context.insert(entry)
+        }
+        try? context.save()
+    }
+
     init(
         title: String,
         url: String? = nil,

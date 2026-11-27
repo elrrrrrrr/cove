@@ -77,7 +77,7 @@ struct WebReaderView: View {
                 Button("刷新")      { webCoordinator.reload() }
                 Button("复制链接")  { UIPasteboard.general.url = webCoordinator.currentURL }
                 Button("在 Safari 中打开") {
-                    if let u = webCoordinator.currentURL { UIApplication.shared.open(u) }
+                    if let u = webCoordinator.currentURL, WebScript.isWebURL(u) { UIApplication.shared.open(u) }
                 }
             } label: {
                 Image(systemName: "ellipsis.circle")
@@ -137,24 +137,22 @@ struct WebReaderView: View {
                 fileType: .web
             )
             context.insert(item)
+            try? context.save()
         }
         showSavedAlert = true
     }
 
     private func saveProgress() {
         let currentURL = webCoordinator.currentURL ?? url
-        if let existing = historyItem {
-            existing.progress   = min(1, max(0, scrollProgress))
-            existing.lastReadAt = Date()
-        } else {
-            let entry = ReadingHistory(
-                title: pageTitle.isEmpty ? currentURL.absoluteString : pageTitle,
-                url: currentURL.absoluteString,
-                fileType: .web,
-                progress: min(1, max(0, scrollProgress))
-            )
-            context.insert(entry)
-        }
+        let progress = min(1, max(0, scrollProgress.isFinite ? scrollProgress : 0))
+        ReadingHistory.recordProgress(
+            in: context,
+            historyItem: historyItem,
+            title: pageTitle.isEmpty ? currentURL.absoluteString : pageTitle,
+            url: currentURL.absoluteString,
+            fileType: .web,
+            progress: progress
+        )
     }
 }
 
@@ -175,11 +173,9 @@ struct WebViewRepresentable: UIViewRepresentable {
         wv.navigationDelegate = context.coordinator
         wv.uiDelegate         = context.coordinator
 
-        // Register scroll progress message handler (weakly via coordinator)
-        wv.configuration.userContentController.add(
-            context.coordinator,
-            name: "scrollProgress"
-        )
+        let ucc = wv.configuration.userContentController
+        ucc.removeScriptMessageHandler(forName: "scrollProgress")
+        ucc.add(context.coordinator, name: "scrollProgress")
 
         let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleTap))
         tap.delegate = context.coordinator
@@ -190,12 +186,25 @@ struct WebViewRepresentable: UIViewRepresentable {
         context.coordinator.onLoading        = onLoading
         context.coordinator.onProgressChange = onProgressChange
         context.coordinator.onTap            = onTap
+        context.coordinator.lastLoadedURL    = url
 
         wv.load(URLRequest(url: url))
         return wv
     }
 
-    func updateUIView(_ uiView: WKWebView, context: Context) {}
+    func updateUIView(_ uiView: WKWebView, context: Context) {
+        if context.coordinator.lastLoadedURL != url {
+            context.coordinator.lastLoadedURL = url
+            uiView.load(URLRequest(url: url))
+        }
+    }
+
+    static func dismantleUIView(_ uiView: WKWebView, coordinator: Coordinator) {
+        uiView.stopLoading()
+        uiView.navigationDelegate = nil
+        uiView.uiDelegate = nil
+        uiView.configuration.userContentController.removeScriptMessageHandler(forName: "scrollProgress")
+    }
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
@@ -203,6 +212,7 @@ struct WebViewRepresentable: UIViewRepresentable {
     final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate,
                              UIGestureRecognizerDelegate, WKScriptMessageHandler {
 
+        var lastLoadedURL   : URL?
         var onTitleChange   : (String) -> Void    = { _ in }
         var onNavChange     : (Bool, Bool) -> Void = { _, _ in }
         var onLoading       : (Bool) -> Void       = { _ in }
@@ -223,7 +233,8 @@ struct WebViewRepresentable: UIViewRepresentable {
                 function prog() {
                     var h = document.documentElement;
                     var total = h.scrollHeight - h.clientHeight;
-                    return total > 0 ? h.scrollTop / total : 0;
+                    var raw = total > 0 ? h.scrollTop / total : 0;
+                    return Math.min(1, Math.max(0, raw));
                 }
                 window.addEventListener('scroll', function() {
                     window.webkit.messageHandlers.scrollProgress.postMessage(prog());
@@ -237,8 +248,11 @@ struct WebViewRepresentable: UIViewRepresentable {
             onLoading(true)
         }
 
-
         func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+            onLoading(false)
+        }
+
+        func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
             onLoading(false)
         }
 
@@ -248,8 +262,8 @@ struct WebViewRepresentable: UIViewRepresentable {
             _ userContentController: WKUserContentController,
             didReceive message: WKScriptMessage
         ) {
-            if message.name == "scrollProgress", let value = message.body as? Double {
-                onProgressChange(value)
+            if message.name == "scrollProgress", let value = message.body as? Double, value.isFinite {
+                onProgressChange(min(1, max(0, value)))
             }
         }
 

@@ -14,6 +14,7 @@ struct ContentView: View {
             if hSizeClass == .regular { iPadRootView(downloadManager: downloadManager) }
             else { iPhoneRootView(downloadManager: downloadManager) }
         }
+        .overlay { PersistenceObserver(manager: downloadManager) }
         .onOpenURL { url in
             guard url.pathExtension.lowercased() == "site" else { return }
             let scoped = url.startAccessingSecurityScopedResource()
@@ -36,20 +37,19 @@ private struct iPhoneRootView: View {
 
     var body: some View {
         TabView(selection: $selectedTab) {
-            Tab("主页", systemImage: "house.fill", value: AppTab.home) {
+            Tab(AppTab.home.label, systemImage: AppTab.home.icon, value: AppTab.home) {
                 HomeView(downloadManager: downloadManager)
             }
-            Tab("收藏", systemImage: "heart.fill", value: AppTab.favorites) {
+            Tab(AppTab.favorites.label, systemImage: AppTab.favorites.icon, value: AppTab.favorites) {
                 FavoritesView()
             }
-            Tab("NAS", systemImage: "externaldrive.fill.badge.wifi", value: AppTab.nas) {
+            Tab(AppTab.nas.label, systemImage: AppTab.nas.icon, value: AppTab.nas) {
                 NASBrowserView()
             }
-            Tab("设置", systemImage: "gearshape.fill", value: AppTab.settings) {
+            Tab(AppTab.settings.label, systemImage: AppTab.settings.icon, value: AppTab.settings) {
                 SettingsView()
             }
         }
-        .overlay { PersistenceObserver(manager: downloadManager) }
     }
 }
 
@@ -76,7 +76,6 @@ private struct iPadRootView: View {
             case nil:        HomeView(downloadManager: downloadManager)
             }
         }
-        .overlay { PersistenceObserver(manager: downloadManager) }
     }
 }
 
@@ -117,7 +116,7 @@ private struct PersistenceObserver: View {
             .allowsHitTesting(false)
             .onChange(of: manager.pendingPersist.map(\.id), initial: true) { _, ids in
                 guard !ids.isEmpty else { return }
-                let batch = manager.drainPendingPersist()
+                let batch = manager.pendingPersist
                 for dl in batch {
                     let item = OfflineItem(
                         title: dl.title,
@@ -129,8 +128,13 @@ private struct PersistenceObserver: View {
                     item.thumbnailData = dl.thumbnailData
                     modelContext.insert(item)
                 }
-                do { try modelContext.save() }
-                catch { Logger(subsystem: "Cove", category: "Storage").error("保存离线记录失败：\(error.localizedDescription, privacy: .private)") }
+                do {
+                    try modelContext.save()
+                    _ = manager.drainPendingPersist()
+                } catch {
+                    modelContext.rollback()
+                    Logger(subsystem: "Cove", category: "Storage").error("保存离线记录失败：\(error.localizedDescription, privacy: .private)")
+                }
             }
     }
 }

@@ -43,11 +43,11 @@ final class PageLoader: NSObject {
     }
 
     var currentURL: URL?
-    /// Cached resolved host from portal resolution — avoids re-fetching portal on category switch.
-    private var resolvedHost: String?
+    private var resolvedAuthority: (scheme: String?, host: String, port: Int?)?
 
     /// The URL the WebView actually settled on (may differ from currentURL after redirects/preNavigateJS).
     var resolvedBaseURL: URL? { _webView?.url ?? currentURL }
+    var currentWebViewURL: URL? { _webView?.url }
     var originalPageRequest: URLRequest? {
         guard let currentURL else { return nil }
         var request = URLRequest(url: currentURL)
@@ -65,23 +65,23 @@ final class PageLoader: NSObject {
     }
 
     /// Lazily-created WKWebView — avoids blocking the main thread during view init.
-    private(set) var webView: WKWebView {
-        get {
-            if let wv = _webView { return wv }
-            let wv = WebScript.makeWebView(frame: CGRect(x: 0, y: 0, width: 1, height: 1), allowsInlineMediaPlayback: true)
-            wv.navigationDelegate = self
-            _webView = wv
-            // Host in off-screen UIWindow for navigation delegate + JS execution
-            let win = UIWindow(frame: CGRect(x: 0, y: 0, width: 1, height: 1))
+    var webView: WKWebView {
+        if let wv = _webView { return wv }
+        let wv = WebScript.makeWebView(frame: CGRect(x: 0, y: 0, width: 1, height: 1), allowsInlineMediaPlayback: true)
+        wv.navigationDelegate = self
+        _webView = wv
+        // Host in off-screen UIWindow for navigation delegate + JS execution
+        if let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first {
+            let win = UIWindow(windowScene: scene)
+            win.frame = CGRect(x: 0, y: 0, width: 1, height: 1)
             win.windowLevel = .init(rawValue: -1)
             win.isHidden = false
             win.rootViewController = UIViewController()
             win.rootViewController?.view.addSubview(wv)
             _backgroundWindow = win
-            syncBlocker(for: wv)
-            return wv
         }
-        set { _webView = newValue }
+        syncBlocker(for: wv)
+        return wv
     }
     private var _webView: WKWebView?
     private var parser   : SiteParser?
@@ -93,11 +93,27 @@ final class PageLoader: NSObject {
     private var refreshWaiters: [UUID: CheckedContinuation<Void, Never>] = [:]
     private var loadTimeoutTask: Task<Void, Never>?
     private var isExtracting = false
+    private var awaitingPageLoad = false
+    private var preNavigateCount = 0
     private var _backgroundWindow: UIWindow?
 
     override init() {
         super.init()
         // Lightweight — WKWebView created lazily on first load()
+    }
+
+    func cancel() {
+        loadTask?.cancel(); loadTask = nil
+        ajaxTask?.cancel(); ajaxTask = nil
+        loadTimeoutTask?.cancel(); loadTimeoutTask = nil
+        blockerTask?.cancel(); blockerTask = nil
+        awaitingPageLoad = false
+        isExtracting = false
+        _webView?.stopLoading()
+        _backgroundWindow?.isHidden = true
+        _backgroundWindow?.rootViewController = nil
+        _backgroundWindow = nil
+        finishRefreshes()
     }
 
     private static let logger = Logger(subsystem: "Cove", category: "PageLoader")
@@ -127,7 +143,7 @@ final class PageLoader: NSObject {
         loadID = UUID()
         _webView?.stopLoading()
         if let wv = _webView { syncBlocker(for: wv) }
-        if forceRefresh || self.parser?.portal != parser.portal { resolvedHost = nil }
+        if forceRefresh || self.parser?.portal != parser.portal { resolvedAuthority = nil }
         self.parser     = parser
         self.currentURL = url
         currentPage     = 1
@@ -136,6 +152,7 @@ final class PageLoader: NSObject {
         isLoadingMore   = false
         paginationFailed = false
         parseLog        = []
+        preNavigateCount = 0
 
         log("load: url=\(url.absoluteString)")
         log("load: parser=\(parser.hostPattern), needsJS=\(parser.needsJS), portal=\(parser.portalURL ?? "nil")")
@@ -149,17 +166,19 @@ final class PageLoader: NSObject {
         }
 
         isExtracting = false
+        awaitingPageLoad = false
         usedFastLoad = false
         loadTimeoutTask?.cancel()
 
         // Portal domain resolution: always resolve when parser has a portalURL.
         // This handles stale bookmark domains (e.g. old mirrors that no longer work).
-        // Once resolved, cache the host to skip re-fetching portal on category switch.
+        // Once resolved, cache the authority to skip re-fetching portal on category switch.
         if parser.portalURL != nil {
-            if let cached = resolvedHost {
-                // Reuse cached resolved host — just swap host and load
+            if let cached = resolvedAuthority {
                 var components = URLComponents(url: url, resolvingAgainstBaseURL: true)
-                components?.host = cached
+                components?.scheme = cached.scheme
+                components?.host = cached.host
+                components?.port = cached.port
                 let resolved = components?.url ?? url
                 log("load: portal host cached → \(resolved.absoluteString)")
                 currentURL = resolved
@@ -216,6 +235,7 @@ final class PageLoader: NSObject {
             guard generation == loadID, !Task.isCancelled else { return }
             log("fetchAndLoad: prepared HTML, loading")
             usedFastLoad = true
+            awaitingPageLoad = true
             webView.loadHTMLString(html, baseURL: url)
             startLoadTimeout()
         } catch {
@@ -232,7 +252,9 @@ final class PageLoader: NSObject {
         if let resolved = await SitePortalResolver.fetch(config: parser.portal ?? SitePortal(url: parser.portalURL!), target: url) {
             guard generation == loadID, !Task.isCancelled else { return }
             log("resolvePortal: resolved → \(resolved.absoluteString)")
-            resolvedHost = resolved.host()
+            if let host = resolved.host() {
+                resolvedAuthority = (resolved.scheme, host, resolved.port)
+            }
             currentURL = resolved
             loadURL = resolved
         } else {
@@ -252,6 +274,7 @@ final class PageLoader: NSObject {
     /// Fallback: let WKWebView navigate normally (for JS-rendered sites or network errors).
     private func fallbackToWebView(url: URL) {
         usedFastLoad = false
+        awaitingPageLoad = true
         var request = URLRequest(url: url)
         for (name, value) in parser?.requestHeaders ?? [:] { request.setValue(value, forHTTPHeaderField: name) }
         webView.load(request)
@@ -291,8 +314,6 @@ final class PageLoader: NSObject {
 
     private func syncBlocker(for wv: WKWebView) {
         blockerTask?.cancel()
-        wv.configuration.userContentController.removeAllContentRuleLists()
-        guard ContentBlocker.isEnabled else { return }
         blockerTask = Task { [weak wv] in
             guard let wv else { return }
             await ContentBlocker.sync(to: wv)
@@ -371,13 +392,11 @@ final class PageLoader: NSObject {
             let raw = try await WebScript.boundedFunction(js, arguments: ["page": page], in: webView)
             guard generation == loadID, !Task.isCancelled else { return }
 
-            guard let data = raw.data(using: .utf8) else {
+            guard let data = raw.data(using: .utf8), let base = webView.url ?? currentURL else {
                 isLoadingMore = false; return
             }
-            let decoded  = try JSONDecoder().decode([RawItem].self, from: data)
-            let base     = webView.url ?? currentURL!
-            let newItems = Array(decoded.compactMap { ParsedItem(from: $0, base: base) }.prefix(100))
-            log("fetchAjaxPage: got \(newItems.count) items (raw=\(decoded.count))")
+            let newItems = try ParsedItem.decodeCatalog(data, base: base)
+            log("fetchAjaxPage: got \(newItems.count) items")
             if let first = newItems.first { log("fetchAjaxPage: first=\(first.pageURL.absoluteString)") }
             if let last = newItems.last { log("fetchAjaxPage: last=\(last.pageURL.absoluteString)") }
 
@@ -444,7 +463,8 @@ final class PageLoader: NSObject {
                         pageURL: allItems[i].pageURL,
                         thumbnail: url,
                         duration: allItems[i].duration,
-                        extra: allItems[i].extra
+                        extra: allItems[i].extra,
+                        titleImage: allItems[i].titleImage
                     )
                     updated += 1
                 }
@@ -465,6 +485,7 @@ final class PageLoader: NSObject {
         let generation = loadID
         guard let parser else { return }
         guard !isExtracting else { log("extract: skipped (already extracting)"); return }
+        awaitingPageLoad = false
         isExtracting = true
         loadTimeoutTask?.cancel()
 
@@ -482,12 +503,16 @@ final class PageLoader: NSObject {
         guard generation == loadID, !Task.isCancelled else { return }
 
         // Auto-follow: if the parser defines a redirect JS, run it first.
-        if let followJS = parser.preNavigateJS {
-            let href = try? await WebScript.evaluate(followJS, in: webView) as? String
+        if let followJS = parser.preNavigateJS, preNavigateCount < 5 {
+            let href = try? await WebScript.boundedString(followJS, in: webView)
             guard generation == loadID, !Task.isCancelled else { return }
-            if let href, !href.isEmpty, let followURL = URL(string: href) {
+            if let href, !href.isEmpty,
+               let followURL = URL(string: href, relativeTo: webView.url ?? currentURL)?.absoluteURL,
+               WebScript.isWebURL(followURL) {
                 log("extract: preNavigateJS → following \(followURL.absoluteString)")
+                preNavigateCount += 1
                 isExtracting = false
+                awaitingPageLoad = true
                 startLoadTimeout()
                 webView.load(URLRequest(url: followURL))
                 return
@@ -496,9 +521,10 @@ final class PageLoader: NSObject {
         }
 
         do {
-            let value = try await WebScript.evaluate(parser.extractItemsJS, in: webView)
+            let jsonString = try await WebScript.boundedString(parser.extractItemsJS, in: webView)
             guard generation == loadID, !Task.isCancelled else { return }
-            guard let jsonString = value as? String, let data = jsonString.data(using: .utf8) else {
+            guard let jsonString, let data = jsonString.data(using: .utf8),
+                  let base = webView.url ?? currentURL else {
                 log("extract: extractItemsJS returned nil/empty")
                 if isMore { paginationFailed = true }
                 else { state = .done(allItems) }
@@ -507,10 +533,8 @@ final class PageLoader: NSObject {
                 return
             }
             guard generation == loadID, !Task.isCancelled else { return }
-            let raw      = try JSONDecoder().decode([RawItem].self, from: data)
-            let base     = webView.url ?? currentURL!
-            let newItems = Array(raw.compactMap { ParsedItem(from: $0, base: base) }.prefix(100))
-            log("extract: got \(newItems.count) items (raw=\(raw.count))")
+            let newItems = try ParsedItem.decodeCatalog(data, base: base)
+            log("extract: got \(newItems.count) items")
             if let first = newItems.first {
                 log("extract: first item: title=\(first.title), thumb=\(first.thumbnail?.absoluteString ?? "nil")")
             }
@@ -542,10 +566,10 @@ final class PageLoader: NSObject {
 
             case .webNavigation(let npJS):
                 let loadedURL = webView.url ?? currentURL
-                let nextHref = try? await WebScript.evaluate(npJS, in: webView) as? String
+                let nextHref = try? await WebScript.boundedString(npJS, in: webView)
                 guard generation == loadID, !Task.isCancelled else { return }
                 let resolvedNext = nextHref.flatMap { URL(string: $0, relativeTo: loadedURL)?.absoluteURL }
-                nextPageURL  = (resolvedNext != nil && resolvedNext != loadedURL) ? resolvedNext : nil
+                nextPageURL  = (resolvedNext != nil && resolvedNext != loadedURL && resolvedNext.map(WebScript.isWebURL) == true) ? resolvedNext : nil
                 hasNextPage  = false
 
             case .ajax:
@@ -579,11 +603,15 @@ final class PageLoader: NSObject {
 
 extension PageLoader: WKNavigationDelegate {
     nonisolated func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        Task { @MainActor in await self.extract() }
+        Task { @MainActor in
+            guard self.awaitingPageLoad else { return }
+            await self.extract()
+        }
     }
     nonisolated func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
         Task { @MainActor in
             guard (error as NSError).code != NSURLErrorCancelled else { return }
+            self.awaitingPageLoad = false
             self.loadTimeoutTask?.cancel()
             if self.isLoadingMore {
                 self.paginationFailed = true
@@ -595,6 +623,7 @@ extension PageLoader: WKNavigationDelegate {
     nonisolated func webView(_ webView: WKWebView, didFailProvisionalNavigation _: WKNavigation!, withError error: Error) {
         Task { @MainActor in
             guard (error as NSError).code != NSURLErrorCancelled else { return }
+            self.awaitingPageLoad = false
             self.loadTimeoutTask?.cancel()
             if self.isLoadingMore {
                 self.paginationFailed = true
@@ -608,34 +637,41 @@ extension PageLoader: WKNavigationDelegate {
 // MARK: - Raw JSON item
 
 private struct RawItem: Decodable {
-    let title: String; let url: String; let thumbnail: String?
-    let duration: String?; let extra: String?
+    let title: String?; let url: String; let thumbnail: String?
+    let duration: String?; let extra: String?; let titleImage: String?
 }
 
-private extension ParsedItem {
-    init?(from raw: RawItem, base: URL) {
-        guard !raw.title.isEmpty,
-              let pageURL = URL(string: raw.url, relativeTo: base)?.absoluteURL else { return nil }
+extension ParsedItem {
+    static func decodeCatalog(_ data: Data, base: URL) throws -> [ParsedItem] {
+        let raw = try JSONDecoder().decode([RawItem].self, from: data)
+        return Array(raw.compactMap { ParsedItem(from: $0, base: base) }.prefix(100))
+    }
+
+    private init?(from raw: RawItem, base: URL) {
+        let titleImage = raw.titleImage.flatMap { value -> URL? in
+            guard !value.isEmpty,
+                  let resolved = URL(string: value, relativeTo: base)?.absoluteURL,
+                  WebScript.isMediaURL(resolved) else { return nil }
+            return resolved
+        }
+        let rawTitle = (raw.title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let title = rawTitle.isEmpty ? (titleImage != nil ? "图片标题" : "") : rawTitle
+        guard !title.isEmpty,
+              let pageURL = URL(string: raw.url, relativeTo: base)?.absoluteURL,
+              WebScript.isWebURL(pageURL) else { return nil }
+        let thumb = raw.thumbnail.flatMap { value -> URL? in
+            guard !value.isEmpty,
+                  let resolved = URL(string: value, relativeTo: base)?.absoluteURL,
+                  WebScript.isMediaURL(resolved) else { return nil }
+            return resolved
+        }
         self.init(
-            title: raw.title,
+            title: title,
             pageURL: pageURL,
-            thumbnail: raw.thumbnail.flatMap { $0.isEmpty ? nil : URL(string: $0, relativeTo: base)?.absoluteURL },
+            thumbnail: thumb,
             duration: raw.duration ?? "",
-            extra: raw.extra ?? ""
+            extra: raw.extra ?? "",
+            titleImage: titleImage
         )
     }
-}
-
-// MARK: - HiddenWebView
-
-/// Accepts any WKWebView — used by both PageLoader and VideoURLExtractor.
-struct HiddenWebView: UIViewRepresentable {
-    let webView: WKWebView
-
-    init(loader: PageLoader) { self.webView = loader.webView }
-    init(webView: WKWebView) { self.webView = webView }
-
-    func makeUIView(context: Context) -> ParsingWebViewContainer { ParsingWebViewContainer(webView: webView, accessibilityHidden: true) }
-    func updateUIView(_ uiView: ParsingWebViewContainer, context: Context) {}
-    static func dismantleUIView(_ uiView: ParsingWebViewContainer, coordinator: ()) { uiView.restore() }
 }

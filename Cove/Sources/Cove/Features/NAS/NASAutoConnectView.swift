@@ -11,7 +11,7 @@ struct NASAutoConnectView: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var state: LoadState = .connecting
-    @State private var connection: NASConnection?
+    @State private var connection: SMBClient?
     @State private var fileURL: URL?
     @State private var streamItem: AVPlayerItem?
     @State private var imageData: Data?
@@ -66,10 +66,10 @@ struct NASAutoConnectView: View {
         .appSurface()
         .navigationTitle(historyItem.title)
         .navigationBarTitleDisplayMode(.inline)
-        .onAppear { connectAndLoad() }
+        .task { connectAndLoad() }
         .onDisappear {
-            loadTask?.cancel()
-            if let fileURL { try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent()) }
+            loadTask?.cancel(); loadTask = nil
+            cleanupResources()
         }
     }
 
@@ -77,7 +77,7 @@ struct NASAutoConnectView: View {
     private var readyView: some View {
         let ft = historyItem.fileType
         if let streamItem {
-            NASVideoView(streamItem: streamItem)
+            NASVideoView(streamItem: streamItem, streamKey: historyItem.filePath, client: connection)
         } else if ft == .audio {
             NASAudioView(trackName: historyItem.title, trackPath: historyItem.filePath ?? "")
         } else if let imageData {
@@ -85,11 +85,28 @@ struct NASAutoConnectView: View {
         } else if let url = fileURL {
             switch ft {
             case .txt: TXTReaderView(fileURL: url, historyItem: historyItem)
-            case .pdf: PDFReaderView(fileURL: url)
-            case .cbz, .cbr: CBZReaderView(fileURL: url)
-            case .epub: EPUBReaderView(fileURL: url)
-            case .video: NASVideoView(fileURL: url)
+            case .pdf: PDFReaderView(fileURL: url, historyItem: historyItem)
+            case .cbz, .cbr: CBZReaderView(fileURL: url, historyItem: historyItem)
+            case .epub: EPUBReaderView(fileURL: url, historyItem: historyItem)
+            case .video: NASVideoView(fileURL: url, streamKey: historyItem.filePath)
             default: Text("不支持的格式")
+            }
+        }
+    }
+
+    private func cleanupResources() {
+        if let streamItem {
+            SMBStreamLoader.cancel(in: streamItem.asset)
+            self.streamItem = nil
+        }
+        if let fileURL {
+            try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent())
+            self.fileURL = nil
+        }
+        if let client = connection {
+            self.connection = nil
+            if historyItem.fileType != .audio {
+                Task { await client.disconnect() }
             }
         }
     }
@@ -109,7 +126,7 @@ struct NASAutoConnectView: View {
         }
 
         loadTask?.cancel()
-        streamItem = nil
+        cleanupResources()
         imageData = nil
         state = .connecting
 
@@ -126,10 +143,9 @@ struct NASAutoConnectView: View {
         loadTask = Task {
             do {
                 try await client.connect(password: password)
-                try Task.checkCancellation()
-                let conn = NASConnection.smb(client)
-                connection = conn
-                await loadFile(connection: conn, filePath: filePath)
+                if Task.isCancelled { await client.disconnect(); return }
+                connection = client
+                await loadFile(client: client, filePath: filePath)
             } catch {
                 guard !Task.isCancelled else { return }
                 state = .failed(error.localizedDescription)
@@ -138,9 +154,8 @@ struct NASAutoConnectView: View {
     }
 
 
-    private func loadFile(connection: NASConnection, filePath: String) async {
+    private func loadFile(client: SMBClient, filePath: String) async {
         do {
-            guard let client = connection.smbClient else { throw SMBError.notConnected }
             switch historyItem.fileType {
             case .video where SMBStreamLoader.supportsVideo(path: filePath):
                 streamItem = SMBStreamLoader.makePlayerItem(client: client, remotePath: filePath)

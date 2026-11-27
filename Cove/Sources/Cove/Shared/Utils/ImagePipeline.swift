@@ -52,7 +52,6 @@ final class ImageMemoryCache: @unchecked Sendable {
     }
     func store(_ image: UIImage, for request: ThumbnailRequest) { store(image, forKey: request.cacheID) }
     func image(for request: ThumbnailRequest) -> UIImage? { image(forKey: request.cacheID) }
-    func store(_ image: UIImage, for url: URL) { store(image, for: ThumbnailRequest(url: url)) }
     func image(for url: URL) -> UIImage? { image(for: ThumbnailRequest(url: url)) }
     func clear() { cache.removeAllObjects() }
 }
@@ -69,7 +68,12 @@ actor ImagePipeline {
     private let session: URLSession
 
     init(root: URL? = nil, session: URLSession? = nil) {
-        let directory = root ?? FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("CoverCache", isDirectory: true)
+        var directory = root ?? FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("CoverCache", isDirectory: true)
+        if root == nil {
+            try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            var values = URLResourceValues(); values.isExcludedFromBackup = true
+            try? directory.setResourceValues(values)
+        }
         self.root = directory
         disk = DiskDataCache(root: directory, suffix: ".image", byteLimit: 500 * 1024 * 1024, ttl: 7 * 86400, entryByteLimit: Self.maximumEncodedBytes)
         if let session { self.session = session } else {
@@ -178,8 +182,6 @@ actor ImagePipeline {
         memory.clear(); ImageMemoryCache.shared.clear()
         await disk.clear()
     }
-    func diskUsageBytes() async -> Int { await disk.usageBytes() }
-    func encodedMemoryBytes() -> Int { memory.byteCount }
 
     static func legacyFile(for url: URL, under root: URL) -> URL? {
         guard let host = url.host() else { return nil }
@@ -225,5 +227,85 @@ struct CachedThumbnail: View {
                 guard !Task.isCancelled else { return }
                 withAnimation(.easeIn(duration: 0.15)) { image = loaded }
             }
+    }
+}
+
+struct PageImageView: View {
+    let url: URL?
+    var placeholderHeight: CGFloat = 300
+    var spinnerTint: Color? = nil
+    var placeholderBackground: Color? = Color(.secondarySystemBackground)
+    var failureColor: Color = .secondary
+
+    private let source: ThumbnailRequest?
+    @Environment(\.displayScale) private var scale
+    @State private var pixels = 1024
+    @State private var image: UIImage?
+    @State private var failed = false
+
+    init(
+        url: URL?,
+        referer: URL? = nil,
+        definitionID: String? = nil,
+        placeholderHeight: CGFloat = 300,
+        spinnerTint: Color? = nil,
+        placeholderBackground: Color? = Color(.secondarySystemBackground),
+        failureColor: Color = .secondary
+    ) {
+        self.url = url
+        self.placeholderHeight = placeholderHeight
+        self.spinnerTint = spinnerTint
+        self.placeholderBackground = placeholderBackground
+        self.failureColor = failureColor
+        source = url.map { ThumbnailRequest(url: $0, referer: referer, definitionID: definitionID, sizing: .page(width: 1024)) }
+        _image = State(initialValue: source.flatMap { ImageMemoryCache.shared.image(for: $0) })
+    }
+
+    private var request: ThumbnailRequest? { source?.resized(.page(width: pixels)) }
+
+    var body: some View {
+        Group {
+            if let img = image {
+                Image(uiImage: img)
+                    .resizable()
+                    .scaledToFit()
+            } else if failed {
+                VStack(spacing: 8) {
+                    Image(systemName: "photo.badge.exclamationmark")
+                        .font(.title2)
+                        .foregroundStyle(failureColor)
+                    Text("图片加载失败")
+                        .font(.caption)
+                        .foregroundStyle(failureColor.opacity(0.8))
+                }
+                .frame(maxWidth: .infinity)
+                .frame(height: min(placeholderHeight, 300))
+                .background(placeholderBackground ?? .clear)
+            } else {
+                ProgressView()
+                    .tint(spinnerTint)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: placeholderHeight)
+                    .background(placeholderBackground ?? .clear)
+            }
+        }
+        .onGeometryChange(for: Int.self) { [scale] proxy in ImageSizing.pixels(points: proxy.size.width, scale: scale) } action: { pixels = $0 }
+        .task(id: request) {
+            guard let request else { failed = true; return }
+            if let cached = ImageMemoryCache.shared.image(for: request) {
+                image = cached
+                failed = false
+                return
+            }
+            failed = false
+            let loaded = await ImagePipeline.shared.image(for: request)
+            guard !Task.isCancelled else { return }
+            if let img = loaded {
+                withAnimation(.easeIn(duration: 0.15)) { image = img }
+            } else {
+                failed = true
+            }
+        }
+        .onDisappear { image = nil }
     }
 }

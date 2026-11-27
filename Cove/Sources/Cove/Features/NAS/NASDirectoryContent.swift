@@ -4,7 +4,7 @@ import SwiftUI
 struct NASDirectoryContent: View {
     let entries: [NASFileEntry]
     let layout: BrowserLayout
-    let connection: NASConnection?
+    let connection: SMBClient?
     let isDownloading: Bool
     let readPathSet: Set<String>
     let totalCount: Int
@@ -104,9 +104,13 @@ struct NASDirectoryContent: View {
     }
     private func portraitCard(_ entry: NASFileEntry) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            NASFileThumbnail(entry: entry, connection: connection, size: 80)
+            Color.clear
                 .aspectRatio(2.0 / 3, contentMode: .fit)
-                .clipped().clipShape(RoundedRectangle(cornerRadius: 10))
+                .overlay {
+                    NASFileThumbnail(entry: entry, connection: connection, size: 80)
+                }
+                .clipped()
+                .clipShape(RoundedRectangle(cornerRadius: 10))
                 .overlay(alignment: .topTrailing) { readBadge(entry).padding(6) }
             metadata(entry, titleFont: .system(size: 13, weight: .medium))
         }

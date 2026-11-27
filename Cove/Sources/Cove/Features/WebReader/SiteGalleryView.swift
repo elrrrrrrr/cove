@@ -13,7 +13,7 @@ struct SiteGalleryView: View {
         siteName        = site.name
         siteURLString   = site.urlString
         bookmarkSite    = site
-        _loader         = State(wrappedValue: Self.makeLoader())
+        _loader         = State(wrappedValue: PageLoader())
         _parser = State(initialValue: SiteParserRegistry.parser(for: site.urlString, definitionID: site.definitionID))
         _navigation = State(initialValue: SiteCatalogNavigation(entryURLString: site.urlString))
         _savedLayout = AppStorage(wrappedValue: "", BrowserLayout.preferenceKey(source: "web", location: site.id.uuidString))
@@ -25,15 +25,11 @@ struct SiteGalleryView: View {
         siteName      = name
         siteURLString = urlString
         bookmarkSite  = nil
-        _loader       = State(wrappedValue: Self.makeLoader())
+        _loader       = State(wrappedValue: PageLoader())
         _parser = State(initialValue: SiteParserRegistry.parser(for: urlString, definitionID: definitionID))
         _navigation = State(initialValue: SiteCatalogNavigation(entryURLString: urlString))
         _savedLayout = AppStorage(wrappedValue: "", BrowserLayout.preferenceKey(source: "web:" + (definitionID ?? ""), location: urlString))
     }
-
-    /// Creates a bare PageLoader — cache is pre-populated asynchronously in .task
-    /// to avoid a blocking disk read during the view init/State construction.
-    private static func makeLoader() -> PageLoader { PageLoader() }
 
     @State private var loader: PageLoader
     @State private var showWeb          = false
@@ -121,26 +117,31 @@ struct SiteGalleryView: View {
             // Async cache pre-warm (disk I/O runs on actor, not main thread)
             if case .idle = loader.state,
                let (cached, _) = await GalleryCache.load(for: parser.cacheURL(for: url)) {
+                guard !Task.isCancelled else { return }
                 loader.preload(cached)
             }
+            guard !Task.isCancelled else { return }
             loader.load(url: url, parser: parser)
         }
+        .onDisappear { loader.cancel() }
         // Keep favoriteURLCache in sync — avoids rebuilding a Set<String> on
         // every body re-evaluation (which can happen many times during a load).
-        .onChange(of: allFavorites) { _, favorites in
+        .onChange(of: allFavorites, initial: true) { _, favorites in
             favoriteURLCache = Set(favorites.map(\.pageURLString))
         }
         .onChange(of: library.definitions) { _, _ in
-            refreshParser()
+            let updated = navigation.parser(definitionID: bookmarkSite?.definitionID ?? definitionID)
+            if updated.definitionID != parser.definitionID || updated.ruleID != parser.ruleID ||
+               updated.extractItemsJS != parser.extractItemsJS || updated.needsJS != parser.needsJS ||
+               updated.portalURL != parser.portalURL || updated.transformScript != parser.transformScript {
+                refreshParser()
+            }
         }
         .onChange(of: bookmarkSite?.definitionID) { _, _ in refreshParser() }
         .onChange(of: loader.state, initial: true) { _, state in
             if case .done(let items) = state { automaticImages = isImageContent(items) }
         }
         .navigationDestination(item: $navigationItem) { item in destinationView(for: item) }
-        .task(id: "favorites") {
-            favoriteURLCache = Set(allFavorites.map(\.pageURLString))
-        }
     }
 
     private var searchableContent: some View {
@@ -270,8 +271,8 @@ struct SiteGalleryView: View {
 
     private func imageGalleryLayout(_ items: [ParsedItem]) -> some View {
         LazyVStack(spacing: 2) {
-            ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                ThreadImageCard(url: item.thumbnail, index: index, referer: item.pageURL, definitionID: parser.definitionID)
+            ForEach(items) { item in
+                PageImageView(url: item.thumbnail, referer: item.pageURL, definitionID: parser.definitionID)
             }
             infiniteScrollFooter
         }
@@ -339,7 +340,8 @@ struct SiteGalleryView: View {
                 ComicCard(
                     item: item,
                     isFavorited: favoriteURLCache.contains(item.pageURL.absoluteString),
-                    definitionID: parser.definitionID
+                    definitionID: parser.definitionID,
+                    onExtraTap: extraAction(for: item)
                 )
             }
             .buttonStyle(CardPressStyle())
@@ -373,7 +375,8 @@ struct SiteGalleryView: View {
             pageURL: pageURL,
             thumbnail: item.thumbnail,
             duration: "第 \(number) 集",
-            extra: item.extra
+            extra: item.extra,
+            titleImage: item.titleImage
         )
     }
 
@@ -477,6 +480,7 @@ struct SiteGalleryView: View {
             ))
             favoriteURLCache.insert(key)
         }
+        try? modelContext.save()
     }
 
     private func isMixedMediaItem(_ item: ParsedItem) -> Bool {
@@ -611,7 +615,7 @@ struct SiteGalleryView: View {
                 } else {
                     resolved = nil
                 }
-                guard let url = resolved else { return }
+                guard let url = resolved, WebScript.isWebURL(url) else { return }
                 navigation.selectCategory(url)
                 searchText = ""
                 refreshParser()
@@ -813,10 +817,15 @@ struct NavLinkCard: View {
             }
 
             VStack(alignment: .leading, spacing: 4) {
-                Text(item.title)
-                    .font(.body.weight(.medium))
-                    .lineLimit(2)
-                    .foregroundStyle(.primary)
+                ItemTitleView(
+                    title: item.title,
+                    titleImage: item.titleImage,
+                    referer: item.pageURL,
+                    definitionID: definitionID,
+                    font: .body.weight(.medium),
+                    fontSize: 16,
+                    lineLimit: 2
+                )
 
                 // Metadata row: extra (author · date) + duration (upvotes, replies, etc.)
                 let parts = [item.extra, item.duration].filter { !$0.isEmpty }
@@ -868,12 +877,17 @@ struct VideoCard: View {
                 .contentShape(Rectangle())
                 .gesture(cardGesture)
             VStack(alignment: .leading, spacing: 3) {
-                Text(item.title)
-                    .font(titleFont)
-                    .lineLimit(titleLines)
-                    .foregroundStyle(.primary)
-                    .contentShape(Rectangle())
-                    .gesture(cardGesture)
+                ItemTitleView(
+                    title: item.title,
+                    titleImage: item.titleImage,
+                    referer: item.pageURL,
+                    definitionID: definitionID,
+                    font: titleFont,
+                    fontSize: cardSize == .large ? 15 : 13,
+                    lineLimit: titleLines
+                )
+                .contentShape(Rectangle())
+                .gesture(cardGesture)
                 if !item.extra.isEmpty {
                     if onExtraTap != nil {
                         extraTagsView
@@ -915,15 +929,7 @@ struct VideoCard: View {
     @ViewBuilder
     private var thumbnailView: some View {
         ZStack(alignment: .bottomTrailing) {
-            if item.thumbnail != nil {
-                CachedThumbnail(url: item.thumbnail, placeholder: placeholder, referer: item.pageURL, definitionID: definitionID)
-            } else {
-                Color(.secondarySystemBackground)
-                    .overlay {
-                        Image(systemName: placeholder)
-                            .font(.title).foregroundStyle(.tertiary)
-                    }
-            }
+            CachedThumbnail(url: item.thumbnail, placeholder: placeholder, referer: item.pageURL, definitionID: definitionID)
             if !item.duration.isEmpty {
                 LinearGradient(colors: [.clear, .black.opacity(0.55)], startPoint: .center, endPoint: .bottom)
             }
@@ -944,76 +950,6 @@ struct VideoCard: View {
                     .padding(6)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
             }
-        }
-    }
-}
-
-// MARK: - Thread image card (full-width image for forum thread galleries)
-
-private struct ThreadImageCard: View {
-    let url: URL?
-    private let source: ThumbnailRequest?
-    @Environment(\.displayScale) private var scale
-    @State private var pixels = 1024
-    private var request: ThumbnailRequest? { source?.resized(.page(width: pixels)) }
-    let index: Int
-
-    @State private var image: UIImage?
-    @State private var failed = false
-
-    init(url: URL?, index: Int, referer: URL?, definitionID: String?) {
-        self.url = url
-        self.index = index
-        source = url.map { ThumbnailRequest(url: $0, referer: referer, definitionID: definitionID, sizing: .page(width: 1024)) }
-        _image = State(initialValue: source.flatMap { ImageMemoryCache.shared.image(for: $0) })
-    }
-
-    var body: some View {
-        Group {
-            if let img = image {
-                Image(uiImage: img)
-                    .resizable()
-                    .scaledToFit()
-            } else if failed {
-                VStack(spacing: 8) {
-                    Image(systemName: "photo.badge.exclamationmark")
-                        .font(.title2)
-                        .foregroundStyle(.secondary)
-                    Text("图片加载失败")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                }
-                .frame(maxWidth: .infinity)
-                .frame(height: 200)
-                .background(Color(.secondarySystemBackground))
-            } else {
-                ProgressView()
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 300)
-                    .background(Color(.secondarySystemBackground))
-            }
-        }
-        .onGeometryChange(for: Int.self) { [scale] proxy in ImageSizing.pixels(points: proxy.size.width, scale: scale) } action: { pixels = $0 }
-        .task(id: request) {
-            guard let request else { return }
-            failed = false
-            let loaded = await ImagePipeline.shared.image(for: request)
-            guard !Task.isCancelled else { return }
-            if let img = loaded {
-                withAnimation(.easeIn(duration: 0.15)) {
-                    image = img
-                }
-            } else {
-                failed = true
-            }
-        }
-        .onAppear {
-            if image == nil, !failed, let request {
-                image = ImageMemoryCache.shared.image(for: request)
-            }
-        }
-        .onDisappear {
-            image = nil
         }
     }
 }
@@ -1109,7 +1045,7 @@ struct ParsedItemsDebugSheet: View {
                         Text(pageURL?.absoluteString ?? "—")
                             .font(.caption2).foregroundStyle(.secondary).textSelection(.enabled)
                     }
-                    if let webURL = loader.webView.url, webURL != pageURL {
+                    if let webURL = loader.currentWebViewURL, webURL != pageURL {
                         LabeledContent("WebView URL") {
                             Text(webURL.absoluteString)
                                 .font(.caption2).foregroundStyle(.secondary).textSelection(.enabled)
@@ -1134,7 +1070,7 @@ struct ParsedItemsDebugSheet: View {
                                         .font(.caption2)
                                         .foregroundStyle(.secondary)
                                         .textSelection(.enabled)
-                                    CachedThumbnail(url: thumb, placeholder: "photo")
+                                    CachedThumbnail(url: thumb, placeholder: "photo", referer: item.pageURL, definitionID: parser.definitionID)
                                         .frame(width: 80, height: 50)
                                         .clipShape(RoundedRectangle(cornerRadius: 6))
                                 }
@@ -1142,6 +1078,25 @@ struct ParsedItemsDebugSheet: View {
                                 Text("nil")
                                     .font(.caption2)
                                     .foregroundStyle(.red)
+                            }
+                        }
+                        if let titleImage = item.titleImage {
+                            LabeledContent("titleImage") {
+                                VStack(alignment: .trailing, spacing: 6) {
+                                    Text(titleImage.absoluteString)
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                        .textSelection(.enabled)
+                                    ItemTitleView(
+                                        title: item.title,
+                                        titleImage: titleImage,
+                                        referer: item.pageURL,
+                                        definitionID: parser.definitionID,
+                                        font: .caption,
+                                        fontSize: 13,
+                                        lineLimit: 1
+                                    )
+                                }
                             }
                         }
                         if !item.duration.isEmpty {

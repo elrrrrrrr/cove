@@ -59,27 +59,32 @@ final class ComicDetailLoader: NSObject {
     /// URLSession fetch → strip scripts → loadHTMLString.
     /// Shares cookies via HTTPCookieStorage and avoids WKWebView navigation issues.
     private func fetchAndLoad(url: URL) async {
-        if SiteParserRegistry.rule(for: url, role: "comic", definitionID: definitionID)?.load?.mode == "webView" {
-            webView.load(URLRequest(url: url))
+        let rule = SiteParserRegistry.rule(for: url, role: "comic", definitionID: definitionID)
+        var request = URLRequest(url: url)
+        request.setValue(webView.customUserAgent, forHTTPHeaderField: "User-Agent")
+        for (name, value) in rule?.load?.headers ?? [:] { request.setValue(value, forHTTPHeaderField: name) }
+        request.timeoutInterval = 10
+
+        if rule?.load?.mode == "webView" {
+            webView.load(request)
             return
         }
         do {
-            var request = URLRequest(url: url)
-            request.setValue(webView.customUserAgent, forHTTPHeaderField: "User-Agent")
-            request.timeoutInterval = 10
             let (data, response) = try await URLSession.shared.data(for: request)
+            guard !Task.isCancelled else { return }
             guard let http = response as? HTTPURLResponse,
                   (200...299).contains(http.statusCode),
                   let html = String(data: data, encoding: .utf8)
                           ?? String(data: data, encoding: .isoLatin1) else {
                 // Fallback to direct WebView navigation
-                webView.load(URLRequest(url: url))
+                webView.load(request)
                 return
             }
             let stripped = WebScript.stripResourceTags(html)
             webView.loadHTMLString(stripped, baseURL: url)
         } catch {
-            webView.load(URLRequest(url: url))
+            guard !Task.isCancelled else { return }
+            webView.load(request)
         }
     }
 
@@ -95,18 +100,25 @@ final class ComicDetailLoader: NSObject {
             try? await Task.sleep(for: .seconds(rule.load?.waitSeconds ?? 0))
             guard !Task.isCancelled else { return }
             do {
-                guard let raw = try await WebScript.string(extraction.javascript, in: webView),
+                guard let raw = try await WebScript.boundedString(extraction.javascript, in: webView),
                       let bytes = raw.data(using: .utf8) else { throw SiteDefinitionError.invalid("解析结果为空") }
                 let meta = try JSONDecoder().decode(RawMeta.self, from: bytes)
                 let chapters = meta.chapters.compactMap { chapter -> ComicChapter? in
-                    guard let url = URL(string: chapter.url, relativeTo: target)?.absoluteURL else { return nil }
+                    guard let url = URL(string: chapter.url, relativeTo: target)?.absoluteURL,
+                          WebScript.isWebURL(url) else { return nil }
                     return ComicChapter(id: chapter.id ?? url.absoluteString, title: chapter.title ?? "开始阅读", chapterURL: url)
                 }
                 guard !Task.isCancelled else { return }
                 guard !chapters.isEmpty else { throw SiteDefinitionError.invalid("未找到章节，请检查解析规则") }
+                let coverURL = meta.cover.flatMap { value -> URL? in
+                    guard !value.isEmpty,
+                          let resolved = URL(string: value, relativeTo: target)?.absoluteURL,
+                          WebScript.isMediaURL(resolved) else { return nil }
+                    return resolved
+                }
                 state = .loaded(ComicMeta(title: meta.title ?? "", author: meta.author ?? "", status: meta.status ?? "",
                     tags: meta.tags ?? [], description: meta.desc ?? "",
-                    coverURL: meta.cover.flatMap { $0.isEmpty ? nil : URL(string: $0, relativeTo: target)?.absoluteURL }, chapters: chapters))
+                    coverURL: coverURL, chapters: chapters))
             } catch { if !Task.isCancelled { state = .failed("提取失败：\(error.localizedDescription)") } }
         }
     }
@@ -129,13 +141,22 @@ final class ComicDetailLoader: NSObject {
 
 extension ComicDetailLoader: WKNavigationDelegate {
     nonisolated func webView(_ wv: WKWebView, didFinish _: WKNavigation!) {
-        Task { @MainActor in self.extract() }
+        Task { @MainActor in
+            guard case .loading = self.state else { return }
+            self.extract()
+        }
     }
     nonisolated func webView(_ wv: WKWebView, didFail _: WKNavigation!, withError error: Error) {
-        Task { @MainActor in self.state = .failed(error.localizedDescription) }
+        Task { @MainActor in
+            guard (error as NSError).code != NSURLErrorCancelled else { return }
+            if case .loading = self.state { self.state = .failed(error.localizedDescription) }
+        }
     }
     nonisolated func webView(_ wv: WKWebView, didFailProvisionalNavigation _: WKNavigation!, withError error: Error) {
-        Task { @MainActor in self.state = .failed(error.localizedDescription) }
+        Task { @MainActor in
+            guard (error as NSError).code != NSURLErrorCancelled else { return }
+            if case .loading = self.state { self.state = .failed(error.localizedDescription) }
+        }
     }
 }
 
@@ -154,7 +175,7 @@ struct ComicDetailView: View {
     var body: some View {
         ZStack {
             // Hidden WebView for extraction
-            HiddenWebView(webView: loader.webView)
+            ParsingWebViewHost(webView: loader.webView, accessibilityHidden: true)
                 .frame(width: 1, height: 1)
                 .opacity(0)
                 .allowsHitTesting(false)
@@ -176,11 +197,10 @@ struct ComicDetailView: View {
             loader.load(url: item.pageURL, definitionID: definitionID)
             // Find last-read chapter using a targeted query instead of loading all history
             let urlString = item.pageURL.absoluteString
-            let comicType = FileType.comic
             let descriptor = FetchDescriptor<ReadingHistory>(
-                predicate: #Predicate { $0.url == urlString && $0.fileType == comicType }
+                predicate: #Predicate { $0.url == urlString }
             )
-            if let existing = try? modelContext.fetch(descriptor).first {
+            if let existing = (try? modelContext.fetch(descriptor))?.first(where: { $0.fileType == .comic }) {
                 lastReadChapterId = existing.filePath
             }
         }
@@ -222,18 +242,10 @@ struct ComicDetailView: View {
     private var loadingView: some View {
         ScrollView {
             VStack(spacing: 16) {
-                // Show cover placeholder from parsed item thumbnail
-                if item.thumbnail != nil {
-                    CachedThumbnail(url: item.thumbnail, placeholder: "photo.on.rectangle.angled")
-                        .aspectRatio(2/3, contentMode: .fit)
-                        .frame(maxWidth: 200)
-                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                } else {
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(Color(.secondarySystemBackground))
-                        .aspectRatio(2/3, contentMode: .fit)
-                        .frame(maxWidth: 200)
-                }
+                CachedThumbnail(url: item.thumbnail, placeholder: "photo.on.rectangle.angled", referer: item.pageURL, definitionID: definitionID)
+                    .aspectRatio(2/3, contentMode: .fit)
+                    .frame(maxWidth: 200)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 Text(item.title)
                     .font(.title2.bold())
                     .multilineTextAlignment(.center)
@@ -253,19 +265,12 @@ struct ComicDetailView: View {
                 // ── Cover + info header ──
                 HStack(alignment: .top, spacing: 16) {
                     // Cover
-                    Group {
-                        if let coverURL = meta.coverURL {
-                            CachedThumbnail(url: coverURL, placeholder: "photo.on.rectangle.angled")
-                        } else if item.thumbnail != nil {
-                            CachedThumbnail(url: item.thumbnail, placeholder: "photo.on.rectangle.angled")
-                        } else {
-                            Color(.secondarySystemBackground)
-                                .overlay {
-                                    Image(systemName: "photo.on.rectangle.angled")
-                                        .font(.title2).foregroundStyle(.tertiary)
-                                }
-                        }
-                    }
+                    CachedThumbnail(
+                        url: meta.coverURL ?? item.thumbnail,
+                        placeholder: "photo.on.rectangle.angled",
+                        referer: item.pageURL,
+                        definitionID: definitionID
+                    )
                     .aspectRatio(2/3, contentMode: .fit)
                     .frame(width: 130)
                     .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
@@ -338,7 +343,7 @@ struct ComicDetailView: View {
         } label: {
             HStack {
                 Image(systemName: resumeChapter != nil ? "book" : "play.fill")
-                Text(resumeChapter != nil ? "继续阅读 \(resumeChapter!.title)" : "开始阅读")
+                Text(resumeChapter.map { "继续阅读 \($0.title)" } ?? "开始阅读")
                     .fontWeight(.semibold)
             }
             .frame(maxWidth: .infinity)

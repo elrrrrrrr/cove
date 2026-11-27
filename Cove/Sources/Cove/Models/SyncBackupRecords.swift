@@ -29,12 +29,13 @@ struct OfflineBackup: Codable {
 
     func validate() throws {
         if fileType == .web && localPath.isEmpty && contentSHA256 == nil {
-            guard let sourceURL, let url = URL(string: sourceURL), ["http", "https"].contains(url.scheme ?? ""), url.host != nil else {
+            guard let sourceURL, let url = URL(string: sourceURL), ["http", "https"].contains(url.scheme?.lowercased() ?? ""), url.host != nil else {
                 throw ReaderSafetyError.message("离线网页记录缺少有效地址")
             }
             return
         }
-        guard localPath.hasPrefix("Offline/"), !localPath.split(separator: "/").contains(".."),
+        let parts = localPath.split(separator: "/")
+        guard localPath.hasPrefix("Offline/"), !parts.contains(".."), parts.dropFirst().contains(where: { $0 != "." }),
               fileSizeBytes >= 0 else { throw ReaderSafetyError.message("离线记录路径或大小无效") }
         _ = try ReaderContainedPath.resolve(localPath, under: LocalAppStorage.data)
         if let hash = contentSHA256 {
@@ -131,88 +132,80 @@ extension ConfigBackup {
     @MainActor func applySynchronized(to context: ModelContext, store: SiteDefinitionStore = .shared) throws {
         try validate(); try context.save()
         let oldDefinitions = store.definitions
+        var deletedOfflinePaths: [String] = []
+        var keptOfflinePaths: Set<String> = []
         do {
             if store.definitions != siteDefinitions { try store.replace(siteDefinitions) }
-            let oldSites = try context.fetch(FetchDescriptor<BookmarkSite>())
-            let siteIDs = Set(sites.map(\.id))
-            let sitesByID = Dictionary(oldSites.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-            for old in oldSites where !siteIDs.contains(old.id) { context.delete(old) }
-            for value in sites {
-                let item = sitesByID[value.id] ?? BookmarkSite(name: value.name, urlString: value.urlString)
-                if item.modelContext == nil { item.id = value.id; context.insert(item) }
-                item.name = value.name; item.urlString = value.urlString
-                item.category = SiteCategory(rawValue: value.category) ?? .other
-                item.note = value.note; item.sortOrder = value.sortOrder
-                item.definitionID = value.definitionID; item.entryID = value.entryID
-                if let date = value.createdAt { item.createdAt = date }; item.faviconData = value.faviconData
-            }
-            let oldNAS = try context.fetch(FetchDescriptor<NASConfig>())
-            let nasIDs = Set(nasConfigs.map(\.id))
-            let nasByID = Dictionary(oldNAS.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-            for old in oldNAS where !nasIDs.contains(old.id) { context.delete(old) }
-            for value in nasConfigs {
-                let item = nasByID[value.id] ?? NASConfig(name: value.name, host: value.host, username: value.username, shareName: value.shareName)
-                if item.modelContext == nil { item.id = value.id; context.insert(item) }
-                item.name = value.name; item.host = value.host; item.port = value.port
-                item.username = value.username; item.shareName = value.shareName
-                if let active = value.isActive { item.isActive = active }
-            }
+            try reconcile(sites, existing: context.fetch(FetchDescriptor<BookmarkSite>()),
+                existingID: \.id, recordID: \.id, context: context,
+                make: { BookmarkSite(name: $0.name, urlString: $0.urlString) },
+                update: { item, value in
+                    item.name = value.name; item.urlString = value.urlString
+                    item.category = SiteCategory(rawValue: value.category) ?? .other
+                    item.note = value.note; item.sortOrder = value.sortOrder
+                    item.definitionID = value.definitionID; item.entryID = value.entryID
+                    if let date = value.createdAt { item.createdAt = date }; item.faviconData = value.faviconData
+                })
+            try reconcile(nasConfigs, existing: context.fetch(FetchDescriptor<NASConfig>()),
+                existingID: \.id, recordID: \.id, context: context,
+                make: { NASConfig(name: $0.name, host: $0.host, username: $0.username, shareName: $0.shareName) },
+                update: { item, value in
+                    item.name = value.name; item.host = value.host; item.port = value.port
+                    item.username = value.username; item.shareName = value.shareName
+                    if let active = value.isActive { item.isActive = active }
+                })
             if let favorites {
-                let old = try context.fetch(FetchDescriptor<FavoriteVideo>())
-                let ids = Set(favorites.compactMap(\.id))
-                let byID = Dictionary(old.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-                for item in old where !ids.contains(item.id) { context.delete(item) }
-                for value in favorites {
-                    guard let id = value.id else { throw ReaderSafetyError.message("同步收藏缺少标识") }
-                    let item = byID[id] ?? FavoriteVideo(title: value.title, pageURLString: value.pageURL)
-                    if item.modelContext == nil { item.id = id; context.insert(item) }
-                    item.title = value.title; item.pageURLString = value.pageURL
-                    item.thumbnailURLString = value.thumbnail; item.duration = value.duration ?? ""
-                    item.siteName = value.siteName ?? ""; item.definitionID = value.definitionID
-                    item.isComic = value.isComic ?? false; item.isArticle = value.isArticle ?? false; item.isPinned = value.isPinned ?? false
-                    item.pinOrder = value.pinOrder ?? 0; if let date = value.addedAt { item.addedAt = date }
-                }
+                for value in favorites where value.id == nil { throw ReaderSafetyError.message("同步收藏缺少标识") }
+                try reconcile(favorites, existing: context.fetch(FetchDescriptor<FavoriteVideo>()),
+                    existingID: \.id, recordID: { $0.id! }, context: context,
+                    make: { FavoriteVideo(title: $0.title, pageURLString: $0.pageURL) },
+                    update: { item, value in
+                        item.title = value.title; item.pageURLString = value.pageURL
+                        item.thumbnailURLString = value.thumbnail; item.duration = value.duration ?? ""
+                        item.siteName = value.siteName ?? ""; item.definitionID = value.definitionID
+                        item.isComic = value.isComic ?? false; item.isArticle = value.isArticle ?? false; item.isPinned = value.isPinned ?? false
+                        item.pinOrder = value.pinOrder ?? 0; if let date = value.addedAt { item.addedAt = date }
+                    })
             }
             if let histories {
-                let old = try context.fetch(FetchDescriptor<ReadingHistory>())
-                let ids = Set(histories.map(\.id))
-                let byID = Dictionary(old.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-                for item in old where !ids.contains(item.id) { context.delete(item) }
-                for value in histories {
-                    let item = byID[value.id] ?? ReadingHistory(title: value.title)
-                    if item.modelContext == nil { item.id = value.id; context.insert(item) }
-                    item.title = value.title; item.url = value.url
-                    if let path = value.filePath {
-                        // Portable backup paths rebase to this device's absolute reader URL.
-                        if value.nasConfigID != nil || value.fileType == .comic { item.filePath = path }
-                        else { item.filePath = OfflineFiles.shared.historyURL(for: path)?.path }
-                    } else {
-                        let external = item.nasConfigID == nil && item.fileType != .comic
-                            && item.filePath?.hasPrefix("/") == true
-                            && item.filePath.flatMap(OfflineFiles.shared.normalizedPath) == nil
-                        if !external { item.filePath = nil }
-                    }
-                    item.fileType = value.fileType; item.progress = value.progress; item.lastReadAt = value.lastReadAt
-                    item.thumbnailData = value.thumbnailData; item.thumbnailURLString = value.thumbnailURLString
-                    item.definitionID = value.definitionID; item.nasConfigID = value.nasConfigID
-                }
+                try reconcile(histories, existing: context.fetch(FetchDescriptor<ReadingHistory>()),
+                    existingID: \.id, recordID: \.id, context: context,
+                    make: { ReadingHistory(title: $0.title) },
+                    update: { item, value in
+                        item.title = value.title; item.url = value.url
+                        if let path = value.filePath {
+                            // Portable backup paths rebase to this device's absolute reader URL.
+                            if value.nasConfigID != nil || value.fileType == .comic { item.filePath = path }
+                            else { item.filePath = OfflineFiles.shared.historyURL(for: path)?.path }
+                        } else {
+                            let external = item.nasConfigID == nil && item.fileType != .comic
+                                && item.filePath?.hasPrefix("/") == true
+                                && item.filePath.flatMap(OfflineFiles.shared.normalizedPath) == nil
+                            if !external { item.filePath = nil }
+                        }
+                        item.fileType = value.fileType; item.progress = value.progress; item.lastReadAt = value.lastReadAt
+                        item.thumbnailData = value.thumbnailData; item.thumbnailURLString = value.thumbnailURLString
+                        item.definitionID = value.definitionID; item.nasConfigID = value.nasConfigID
+                    })
             }
             if let offlineItems {
-                let old = try context.fetch(FetchDescriptor<OfflineItem>())
-                let ids = Set(offlineItems.map(\.id))
-                let byID = Dictionary(old.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-                for item in old where !ids.contains(item.id) { context.delete(item) }
-                for value in offlineItems {
-                    let item = byID[value.id] ?? OfflineItem(title: value.title, localPath: value.localPath, fileType: value.fileType)
-                    if item.modelContext == nil { item.id = value.id; context.insert(item) }
-                    item.title = value.title; item.sourceURL = value.sourceURL; item.localPath = value.localPath
-                    item.fileType = value.fileType; item.savedAt = value.savedAt
-                    item.fileSizeBytes = value.fileSizeBytes; item.thumbnailData = value.thumbnailData
-                }
+                let deleted = try reconcile(offlineItems, existing: context.fetch(FetchDescriptor<OfflineItem>()),
+                    existingID: \.id, recordID: \.id, context: context,
+                    make: { OfflineItem(title: $0.title, localPath: $0.localPath, fileType: $0.fileType) },
+                    update: { item, value in
+                        item.title = value.title; item.sourceURL = value.sourceURL; item.localPath = value.localPath
+                        item.fileType = value.fileType; item.savedAt = value.savedAt
+                        item.fileSizeBytes = value.fileSizeBytes; item.thumbnailData = value.thumbnailData
+                    })
+                deletedOfflinePaths = deleted.map(\.localPath)
+                keptOfflinePaths = Set(offlineItems.map(\.localPath))
             }
             try context.save()
         } catch {
             context.rollback(); if store.definitions != oldDefinitions { try? store.replace(oldDefinitions) }; throw error
+        }
+        for path in deletedOfflinePaths where !path.isEmpty && !keptOfflinePaths.contains(path) {
+            OfflineFiles.shared.deleteFile(path: path)
         }
         let defaults = UserDefaults.standard
         defaults.set(settings.readerFontSize, forKey: "readerFontSize")
@@ -220,5 +213,38 @@ extension ConfigBackup {
         defaults.set(settings.novelReadingMode ?? NovelReadingMode.paged.rawValue, forKey: NovelReadingMode.storageKey)
         defaults.set(settings.contentBlockerEnabled, forKey: "contentBlockerEnabled")
         if let preferences { SyncPreferences.apply(preferences, to: defaults) }
+    }
+
+    @MainActor @discardableResult
+    private func reconcile<Model: PersistentModel, Record>(
+        _ records: [Record],
+        existing: [Model],
+        existingID: (Model) -> UUID,
+        recordID: (Record) -> UUID,
+        context: ModelContext,
+        make: (Record) -> Model,
+        update: (Model, Record) -> Void
+    ) throws -> [Model] {
+        let ids = Set(records.map(recordID))
+        let byID = Dictionary(existing.map { (existingID($0), $0) }, uniquingKeysWith: { first, _ in first })
+        var deleted: [Model] = []
+        for item in existing where !ids.contains(existingID(item)) {
+            deleted.append(item)
+            context.delete(item)
+        }
+        for value in records {
+            let id = recordID(value)
+            let item = byID[id] ?? make(value)
+            if item.modelContext == nil {
+                if let site = item as? BookmarkSite { site.id = id }
+                else if let nas = item as? NASConfig { nas.id = id }
+                else if let fav = item as? FavoriteVideo { fav.id = id }
+                else if let hist = item as? ReadingHistory { hist.id = id }
+                else if let off = item as? OfflineItem { off.id = id }
+                context.insert(item)
+            }
+            update(item, value)
+        }
+        return deleted
     }
 }

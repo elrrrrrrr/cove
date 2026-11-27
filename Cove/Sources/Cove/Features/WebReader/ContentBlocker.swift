@@ -30,22 +30,14 @@ actor ContentBlocker {
             throw ContentBlockerError.rulesNotFound
         }
 
-        // compileContentRuleList must be called on MainActor; use nonisolated wrapper
         let jsonCopy = json
-        let list: WKContentRuleList? = try await withCheckedThrowingContinuation { cont in
-            Task { @MainActor in
-                do {
-                    let result = try await WKContentRuleListStore.default()
-                        .compileContentRuleList(
-                            forIdentifier: "CoveBlocker",
-                            encodedContentRuleList: jsonCopy
-                        )
-                    cont.resume(returning: result)
-                } catch {
-                    cont.resume(throwing: error)
-                }
-            }
-        }
+        let list: WKContentRuleList? = try await Task { @MainActor in
+            try await WKContentRuleListStore.default()
+                .compileContentRuleList(
+                    forIdentifier: "CoveBlocker",
+                    encodedContentRuleList: jsonCopy
+                )
+        }.value
 
         guard let list else { throw ContentBlockerError.compilationFailed }
         cachedList = list

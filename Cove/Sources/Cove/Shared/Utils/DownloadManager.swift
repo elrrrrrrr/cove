@@ -50,7 +50,6 @@ import Foundation
         downloads.removeAll { $0.id == id }; sources.removeValue(forKey: id)
         rebuildIndex(); processQueue()
     }
-    func remove(id: UUID) { cancel(id: id) }
     func retry(id: UUID) {
         guard let index = indexByID[id], downloads[index].state != .completed else { return }
         stop(id)

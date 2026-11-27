@@ -10,7 +10,7 @@ actor GalleryCache {
 
     init(root: URL? = nil, ttl: TimeInterval = 86400, byteLimit: Int = 32 * 1024 * 1024, countLimit: Int = 2000) {
         self.ttl = ttl
-        let directory = root ?? FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let directory = root ?? FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("GalleryCache", isDirectory: true)
         disk = DiskDataCache(root: directory, suffix: ".json", byteLimit: byteLimit, countLimit: countLimit, ttl: ttl)
     }

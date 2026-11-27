@@ -119,7 +119,13 @@ actor FolderSyncFiles {
         progress(.init(phase: "准备本地备份"))
         var backup = try ConfigBackup.decode(local)
         try FileManager.default.createDirectory(at: recovery, withIntermediateDirectories: true)
+        if let existingRecovery = try? FileManager.default.contentsOfDirectory(at: recovery, includingPropertiesForKeys: nil) {
+            for item in existingRecovery where item.lastPathComponent != "Before-Sync.json" && item.lastPathComponent != "During-Sync.json" {
+                try? FileManager.default.removeItem(at: item)
+            }
+        }
         try local.write(to: recovery.appendingPathComponent("Before-Sync.json"), options: .atomic)
+        let decodedBaseline = try baseline.map(ConfigBackup.decode)
         // Fingerprint and upload only immutable model snapshots, not database/WAL files.
         if var offline = backup.offlineItems {
             let fileCount = offline.count
@@ -145,7 +151,7 @@ actor FolderSyncFiles {
                     offline[index].contentSHA256 = digest
                 } else {
                     // Keep the known cloud attachment if this device has not downloaded it.
-                    let old = try baseline.map(ConfigBackup.decode)?.offlineItems?.first { $0.id == item.id }
+                    let old = decodedBaseline?.offlineItems?.first { $0.id == item.id }
                     offline[index].contentSHA256 = old?.contentSHA256
                     guard old?.contentSHA256 != nil else { throw ReaderSafetyError.message("离线文件缺失，暂不覆盖云端数据") }
                 }
@@ -343,6 +349,7 @@ private extension FolderSyncFiles {
             for path in removed {
                 try FileManager.default.removeItem(at: safe(path, root: root)); erased.append(path)
             }
+            pruneBackups(root: root)
         } catch {
             for path in written + erased {
                 let target = try safe(path, root: root)
@@ -350,6 +357,25 @@ private extension FolderSyncFiles {
                 else { try? FileManager.default.removeItem(at: target) }
             }
             throw error
+        }
+    }
+
+    private func pruneBackups(root: URL, keep: Int = 10) {
+        guard let backupsDir = try? safe("Backups", root: root),
+              let dirs = try? FileManager.default.contentsOfDirectory(
+                  at: backupsDir,
+                  includingPropertiesForKeys: [.isDirectoryKey, .contentModificationDateKey],
+                  options: .skipsHiddenFiles
+              ) else { return }
+        let sorted = dirs
+            .filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
+            .sorted {
+                let d1 = (try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+                let d2 = (try? $1.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+                return d1 > d2
+            }
+        for old in sorted.dropFirst(keep) {
+            try? FileManager.default.removeItem(at: old)
         }
     }
 }

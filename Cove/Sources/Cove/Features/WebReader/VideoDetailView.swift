@@ -17,6 +17,7 @@ struct VideoDetailView: View {
     @State private var isAdvancingEpisode = false
     @State private var loadingScrollable = false
     @State private var showParsingWeb = false
+    @State private var viewHeight: CGFloat = 900
     // Pre-populate from L0 synchronous cache — no blank frame when re-entering
     @State private var thumbImage      : UIImage?
     @Environment(\.dismiss) private var dismiss
@@ -36,7 +37,7 @@ struct VideoDetailView: View {
             // Draggable content layer
             ZStack(alignment: .topLeading) {
                 // Hidden rendering surface
-                HiddenWebView(webView: extractor.webView)
+                ParsingWebViewHost(webView: extractor.webView, accessibilityHidden: true)
                     .frame(width: 1, height: 1)
                     .opacity(0)
                     .allowsHitTesting(false)
@@ -47,25 +48,23 @@ struct VideoDetailView: View {
                     loadingOverlay.transition(.opacity)
 
                 case .found(let result):
-                    if !showParsingWeb {
-                        NativeVideoPlayer(
-                            url: result.streamURL,
-                            headers: result.headers,
-                            startTime: savedProgress,
-                            player: $player,
-                            onPlaybackEnded: { playNextEpisode(from: result) }
-                        )
-                            .id(currentPageURL)
-                            .ignoresSafeArea()
-                            .overlay(alignment: .topTrailing) {
-                                if let player {
-                                    VideoNetworkSpeedBadge(player: player)
-                                        .padding(.top, 54)
-                                        .padding(.trailing, 16)
-                                }
+                    NativeVideoPlayer(
+                        url: result.streamURL,
+                        headers: result.headers,
+                        startTime: savedProgress,
+                        player: $player,
+                        onPlaybackEnded: { playNextEpisode(from: result) }
+                    )
+                        .id(currentPageURL)
+                        .ignoresSafeArea()
+                        .overlay(alignment: .topTrailing) {
+                            if let player {
+                                VideoNetworkSpeedBadge(player: player)
+                                    .padding(.top, 54)
+                                    .padding(.trailing, 16)
                             }
-                            .transition(.opacity)
-                    }
+                        }
+                        .transition(.opacity)
 
                 case .notFound:
                     if !showParsingWeb {
@@ -106,24 +105,23 @@ struct VideoDetailView: View {
                 request: extractor.originalPageRequest ?? URLRequest(url: currentPageURL),
                 status: extractor.state == .loading ? "解析视频地址中…" : "视频解析已结束")
         }
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { viewHeight = max($0, 1) }
         .onAppear {
+            // L0 synchronous read — instant if thumbnail was already cached this session
+            if let url = item.thumbnail {
+                thumbImage = ImageMemoryCache.shared.image(for: ThumbnailRequest(url: url, referer: item.pageURL, definitionID: definitionID))
+            }
             guard player == nil else { return }
             // Restore saved progress before starting extraction (must run first for cache hits)
             let urlString = currentPageURL.absoluteString
             let descriptor = FetchDescriptor<ReadingHistory>(
                 predicate: #Predicate { $0.url == urlString }
             )
-            if let entry = try? modelContext.fetch(descriptor).first, entry.progress > 2 {
+            if let entry = (try? modelContext.fetch(descriptor))?.first(where: { $0.fileType == .video }), entry.progress > 2 {
                 savedProgress = entry.progress
             }
             // Always (re)load — handles both first open and retry after previous failure
             extractor.load(url: currentPageURL, definitionID: definitionID)
-        }
-        .onAppear {
-            // L0 synchronous read — instant if thumbnail was already cached this session
-            if let url = item.thumbnail {
-                thumbImage = ImageMemoryCache.shared.image(for: ThumbnailRequest(url: url, referer: item.pageURL, definitionID: definitionID))
-            }
         }
         .task(id: item.thumbnail) {
             guard let url = item.thumbnail else { return }
@@ -141,6 +139,7 @@ struct VideoDetailView: View {
             }
         }
         .onDisappear {
+            extractor.cancel()
             player?.pause()
             saveProgress()
         }
@@ -201,7 +200,7 @@ struct VideoDetailView: View {
         let descriptor = FetchDescriptor<ReadingHistory>(
             predicate: #Predicate { $0.url == urlString }
         )
-        if let existing = try? modelContext.fetch(descriptor).first {
+        if let existing = (try? modelContext.fetch(descriptor))?.first(where: { $0.fileType == .video }) {
             existing.definitionID = definitionID
             existing.title              = title
             existing.lastReadAt         = Date()
@@ -216,12 +215,14 @@ struct VideoDetailView: View {
             entry.definitionID = definitionID
             modelContext.insert(entry)
         }
+        try? modelContext.save()
     }
 
     // MARK: - Loading overlay
 
     private var loadingOverlay: some View {
-        VideoLoadingView(title: item.title, duration: item.duration, image: thumbImage,
+        VideoLoadingView(title: item.title, titleImage: item.titleImage, referer: item.pageURL,
+            definitionID: definitionID, duration: item.duration, image: thumbImage,
             advancing: isAdvancingEpisode, onOverflow: { loadingScrollable = $0 },
             onViewPage: { showParsingWeb = true }) {
             extractor.cancel()
@@ -247,7 +248,7 @@ struct VideoDetailView: View {
                 if value.translation.height > 150 || value.predictedEndTranslation.height > 400 {
                     saveProgress()
                     withAnimation(.easeOut(duration: 0.2)) {
-                        dragOffset = UIScreen.main.bounds.height
+                        dragOffset = viewHeight
                     } completion: {
                         dismiss()
                     }
@@ -269,8 +270,10 @@ struct VideoDetailView: View {
         let descriptor = FetchDescriptor<ReadingHistory>(
             predicate: #Predicate { $0.url == urlString }
         )
-        if let existing = try? modelContext.fetch(descriptor).first {
+        if let existing = (try? modelContext.fetch(descriptor))?.first(where: { $0.fileType == .video }) {
             existing.progress = seconds
+            existing.lastReadAt = Date()
+            try? modelContext.save()
         }
     }
 }
@@ -278,6 +281,9 @@ struct VideoDetailView: View {
 /// The cover cannot expand the loading layout beyond its viewport.
 struct VideoLoadingView: View {
     let title: String
+    var titleImage: URL? = nil
+    var referer: URL? = nil
+    var definitionID: String? = nil
     let duration: String
     let image: UIImage?
     var advancing = false
@@ -313,11 +319,19 @@ struct VideoLoadingView: View {
                                 Text(advancing ? "正在切换剧集…" : "解析视频地址中…")
                                     .foregroundStyle(.white.opacity(0.85)).font(.subheadline)
                             }
-                            Text(title).font(.body.weight(.medium)).foregroundStyle(.white)
-                                .multilineTextAlignment(.center).lineLimit(nil)
-                                .fixedSize(horizontal: false, vertical: true)
-                                .frame(maxWidth: .infinity)
-                                .accessibilityIdentifier("video-loading-title")
+                            ItemTitleView(
+                                title: title,
+                                titleImage: titleImage,
+                                referer: referer,
+                                definitionID: definitionID,
+                                font: .body.weight(.medium),
+                                fontSize: 17,
+                                lineLimit: nil,
+                                foregroundColor: .white,
+                                alignment: .center
+                            )
+                            .frame(maxWidth: .infinity)
+                            .accessibilityIdentifier("video-loading-title")
                         }
                         .frame(width: max(1, min(geometry.size.width - 48, 420)))
                         .padding(.vertical, 24)
@@ -348,10 +362,25 @@ struct SwipeBackEnabler: UIViewControllerRepresentable {
     func updateUIViewController(_ vc: UIViewController, context: Context) {}
 
     private final class SwipeBackVC: UIViewController {
+        private weak var previousDelegate: (any UIGestureRecognizerDelegate)?
+        private var savedDelegate = false
+
         override func viewDidAppear(_ animated: Bool) {
             super.viewDidAppear(animated)
-            navigationController?.interactivePopGestureRecognizer?.isEnabled = true
-            navigationController?.interactivePopGestureRecognizer?.delegate = nil
+            guard let pop = navigationController?.interactivePopGestureRecognizer else { return }
+            if !savedDelegate {
+                previousDelegate = pop.delegate
+                savedDelegate = true
+            }
+            pop.isEnabled = true
+            pop.delegate = nil
+        }
+
+        override func viewWillDisappear(_ animated: Bool) {
+            super.viewWillDisappear(animated)
+            if savedDelegate, let pop = navigationController?.interactivePopGestureRecognizer, pop.delegate == nil {
+                pop.delegate = previousDelegate
+            }
         }
     }
 }
@@ -384,7 +413,7 @@ struct NativeVideoPlayer: UIViewControllerRepresentable {
         vc.videoGravity = .resizeAspect
         vc.allowsPictureInPicturePlayback = true
         context.coordinator.observeEnd(of: item)
-        player = p
+        DispatchQueue.main.async { self.player = p }
         if startTime > 2 {
             let t = CMTime(seconds: startTime, preferredTimescale: 1000)
             p.seek(to: t, toleranceBefore: .zero, toleranceAfter: .zero)

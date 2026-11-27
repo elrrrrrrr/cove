@@ -232,69 +232,20 @@ struct BentoGrid<Item: Identifiable, Content: View, Footer: View>: View {
 
 // MARK: - BentoSkeletonGrid
 
+private struct SkeletonItem: Identifiable { let id: Int }
+
 struct BentoSkeletonGrid: View {
     let columns: Int
-    private let slots: [BentoSlot]
-    init(columns: Int) {
-        self.columns = columns
-        slots = columns == 2 ? BentoGrouper.group2Col(count: 5) : BentoGrouper.group3Col(count: 12)
-    }
-
-    @State private var metrics = BentoMetrics.zero
+    private var items: [SkeletonItem] { (0..<(columns == 2 ? 5 : 12)).map(SkeletonItem.init) }
 
     var body: some View {
         SkeletonShimmer { gradient in
             ScrollView {
-                LazyVStack(spacing: 10) {
-                    if metrics != .zero {
-                        ForEach(slots) { slot in
-                            skeletonSlot(slot, gradient: gradient)
-                        }
-                    }
+                BentoGrid(items: items, columns: columns) { _, size in
+                    SkeletonCard(isLarge: size == .large, gradient: gradient)
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
             }
         }
         .allowsHitTesting(false)
-        .onGeometryChange(for: CGFloat.self) { proxy in
-            floor(proxy.size.width - 24)
-        } action: { width in
-            let m = BentoMetrics(availableWidth: width, columns: columns)
-            if m != metrics { metrics = m }
-        }
-    }
-
-    @ViewBuilder
-    private func skeletonSlot(_ slot: BentoSlot, gradient: LinearGradient) -> some View {
-        let m = metrics
-        switch slot.kind {
-        case .fullWidth:
-            SkeletonCard(isLarge: true, gradient: gradient)
-                .frame(width: m.largeWidth, height: m.largeHeight)
-        case .smallRow(let indices):
-            HStack(spacing: m.spacing) {
-                ForEach(indices, id: \.self) { _ in
-                    SkeletonCard(gradient: gradient).frame(width: m.smallWidth, height: m.smallHeight)
-                }
-                if indices.count < columns { Spacer(minLength: 0) }
-            }
-        case .largeLeftSmallRight:
-            HStack(alignment: .top, spacing: m.spacing) {
-                SkeletonCard(isLarge: true, gradient: gradient).frame(width: m.largeWidth, height: m.largeHeight)
-                VStack(spacing: m.spacing) {
-                    SkeletonCard(gradient: gradient).frame(width: m.smallWidth, height: m.smallHeight)
-                    SkeletonCard(gradient: gradient).frame(width: m.smallWidth, height: m.smallHeight)
-                }
-            }
-        case .smallLeftLargeRight:
-            HStack(alignment: .top, spacing: m.spacing) {
-                VStack(spacing: m.spacing) {
-                    SkeletonCard(gradient: gradient).frame(width: m.smallWidth, height: m.smallHeight)
-                    SkeletonCard(gradient: gradient).frame(width: m.smallWidth, height: m.smallHeight)
-                }
-                SkeletonCard(isLarge: true, gradient: gradient).frame(width: m.largeWidth, height: m.largeHeight)
-            }
-        }
     }
 }

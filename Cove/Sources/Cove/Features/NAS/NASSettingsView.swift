@@ -72,7 +72,9 @@ struct NASSettingsView: View {
                 if let config {
                     Section {
                         Button("删除此 NAS", role: .destructive) {
+                            NASKeychain.delete(for: config.id)
                             context.delete(config)
+                            try? context.save()
                             dismiss()
                         }
                     }
@@ -101,17 +103,18 @@ struct NASSettingsView: View {
         value.name = name.trimmed; value.host = normalizedSMBHost; value.port = validPort
         value.username = username.trimmed; value.shareName = shareName.trimmed
         if config == nil { context.insert(value) }
-        if !password.isEmpty { NASKeychain.save(password: password, for: value.id) }
+        if password.isEmpty { NASKeychain.delete(for: value.id) }
+        else { NASKeychain.save(password: password, for: value.id) }
         do { try context.save(); dismiss() } catch { self.error = error.localizedDescription }
     }
 
     private func discoverShares() {
         loadingShares = true; error = nil; availableShares = []
-        let h = normalizedSMBHost, u = username.trimmed, p = password
+        let h = normalizedSMBHost, portNum = validPort ?? 445, u = username.trimmed, p = password
         Task {
             defer { loadingShares = false }
             do {
-                availableShares = try await SMBClient.listShares(host: h, username: u, password: p).filter { !$0.name.hasSuffix("$") }
+                availableShares = try await SMBClient.listShares(host: h, port: portNum, username: u, password: p).filter { !$0.name.hasSuffix("$") }
                 if availableShares.isEmpty { error = "未发现可用共享" }
             } catch { self.error = error.localizedDescription }
         }

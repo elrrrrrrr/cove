@@ -42,7 +42,10 @@ final class ParsingWebViewContainer: UIView {
 
 struct ParsingWebViewHost: UIViewRepresentable {
     let webView: WKWebView
-    func makeUIView(context: Context) -> ParsingWebViewContainer { ParsingWebViewContainer(webView: webView) }
+    var accessibilityHidden: Bool = false
+    func makeUIView(context: Context) -> ParsingWebViewContainer {
+        ParsingWebViewContainer(webView: webView, accessibilityHidden: accessibilityHidden)
+    }
     func updateUIView(_ uiView: ParsingWebViewContainer, context: Context) {}
     static func dismantleUIView(_ uiView: ParsingWebViewContainer, coordinator: ()) { uiView.restore() }
 }
@@ -130,7 +133,7 @@ private struct ParsingWebPageContent: View {
         _info = State(initialValue: ParsingWebPageInfo(webView: webView))
     }
     private var address: URL? {
-        if let url = info.url, ["http", "https"].contains(url.scheme ?? "") { return url }
+        if let url = info.url, WebScript.isWebURL(url) { return url }
         return fallbackURL
     }
     var body: some View {

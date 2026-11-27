@@ -88,8 +88,6 @@ final class SiteDefinitionStore {
         SiteParserRegistry.replaceDefinitions(definitions)
     }
 
-    func remove(id: String) throws { try replace(definitions.filter { $0.id != id }) }
-
     func definition(id: String?) -> SiteDefinition? {
         guard let id else { return nil }
         return definitions.first { $0.id == id }

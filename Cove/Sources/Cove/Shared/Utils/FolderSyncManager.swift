@@ -63,10 +63,22 @@ final class FolderSyncManager {
     func disconnect() {
         guard !isSyncing else { return }
         pending?.cancel(); pending = nil
+        if let folder = try? resolveFolder() {
+            let stateRoot = Self.stateRoot(for: folder)
+            try? FileManager.default.removeItem(at: stateRoot.appendingPathComponent("Baseline.json"))
+        }
         UserDefaults.standard.removeObject(forKey: Self.bookmarkKey)
         isConnected = false
         errorDetails = nil
         folderName = nil; lastSync = nil; hasConflicts = false; message = "尚未连接文件夹"
+    }
+    func clearLocalState() {
+        disconnect()
+        try? FileManager.default.removeItem(at: LocalAppStorage.config.appendingPathComponent("FolderSync"))
+    }
+    private static func stateRoot(for folder: URL) -> URL {
+        let identifier = SHA256.hash(data: Data(folder.standardizedFileURL.path.utf8)).map { String(format: "%02x", $0) }.joined()
+        return LocalAppStorage.config.appendingPathComponent("FolderSync/\(identifier)")
     }
     func requestSync() {
         guard automatic, foreground, context != nil, isConnected, !isApplying, !isSyncing else { return }
@@ -94,12 +106,12 @@ final class FolderSyncManager {
         defer { isSyncing = false }
         var scopedFolder: URL?
         defer { scopedFolder?.stopAccessingSecurityScopedResource() }
+        var needsFollowUp = false
         do {
             let folder = try resolveFolder()
             if folder.startAccessingSecurityScopedResource() { scopedFolder = folder }
             folderName = folder.lastPathComponent
-            let identifier = SHA256.hash(data: Data(folder.standardizedFileURL.path.utf8)).map { String(format: "%02x", $0) }.joined()
-            let stateRoot = LocalAppStorage.config.appendingPathComponent("FolderSync/\(identifier)")
+            let stateRoot = Self.stateRoot(for: folder)
             let baselineURL = stateRoot.appendingPathComponent("Baseline.json")
             let recovery = stateRoot.appendingPathComponent("Recovery/Latest")
             try context.save()
@@ -134,8 +146,13 @@ final class FolderSyncManager {
             try await files.saveBaseline(result.data, at: baselineURL)
             lastSync = Date(); hasConflicts = result.conflicts || final.hasConflicts
             message = "同步完成"
-            if !(try FolderSyncMerge.equivalent(final.data, result.data)) { requestSync() }
+            needsFollowUp = !(try FolderSyncMerge.equivalent(final.data, result.data))
         } catch is CancellationError { message = "同步已暂停" }
         catch { message = "同步失败"; errorDetails = error.localizedDescription }
+        isSyncing = false
+        if needsFollowUp {
+            if automatic { requestSync() }
+            else { await synchronize() }
+        }
     }
 }

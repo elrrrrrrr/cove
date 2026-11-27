@@ -50,7 +50,7 @@ enum SitePortalResolver {
         func rewrite(_ candidates: [String]) -> URL? {
             for candidate in candidates {
                 guard let url = URL(string: candidate, relativeTo: portal)?.absoluteURL,
-                      ["http", "https"].contains(url.scheme ?? ""),
+                      ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
                       let host = url.host(), host.lowercased() != portal.host()?.lowercased(),
                       !(config.excludedHosts ?? []).contains(where: { host.lowercased().contains($0.lowercased()) }) else { continue }
                 var result = URLComponents(url: target, resolvingAgainstBaseURL: true)

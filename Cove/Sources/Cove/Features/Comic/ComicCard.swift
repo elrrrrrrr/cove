@@ -13,15 +13,7 @@ struct ComicCard: View {
             // Cover (portrait 2:3)
             actionArea {
                 ZStack(alignment: .topTrailing) {
-                    if item.thumbnail != nil {
-                        CachedThumbnail(url: item.thumbnail, placeholder: "photo.on.rectangle.angled", referer: item.pageURL, definitionID: definitionID)
-                    } else {
-                        Color(.secondarySystemBackground)
-                            .overlay {
-                                Image(systemName: "photo.on.rectangle.angled")
-                                    .font(.title2).foregroundStyle(.tertiary)
-                            }
-                    }
+                    CachedThumbnail(url: item.thumbnail, placeholder: "photo.on.rectangle.angled", referer: item.pageURL, definitionID: definitionID)
                     if isFavorited {
                         Image(systemName: "heart.fill")
                             .font(.system(size: 11, weight: .bold))
@@ -37,10 +29,15 @@ struct ComicCard: View {
 
             VStack(alignment: .leading, spacing: 3) {
                 actionArea {
-                    Text(item.title)
-                        .font(.system(size: 13, weight: .medium))
-                        .lineLimit(2)
-                        .foregroundStyle(.primary)
+                    ItemTitleView(
+                        title: item.title,
+                        titleImage: item.titleImage,
+                        referer: item.pageURL,
+                        definitionID: definitionID,
+                        font: .system(size: 13, weight: .medium),
+                        fontSize: 13,
+                        lineLimit: 2
+                    )
                 }
                 if !item.extra.isEmpty {
                     if let onExtraTap {

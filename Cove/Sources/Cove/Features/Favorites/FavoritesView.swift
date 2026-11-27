@@ -120,13 +120,7 @@ struct FavoritesView: View {
                 if !videoFavs.isEmpty {
                     BentoGrid(items: videoFavs, columns: columns) { fav, cardSize in
                         if let pageURL = fav.pageURL {
-                            NavigationLink(destination: VideoDetailView(item: ParsedItem(
-                                title: fav.title,
-                                pageURL: pageURL,
-                                thumbnail: fav.thumbnailURL,
-                                duration: fav.duration,
-                                extra: fav.siteName
-                            ), definitionID: fav.definitionID)) {
+                            NavigationLink(destination: FavoriteDestination(favorite: fav, url: pageURL)) {
                                 FavoriteCard(fav: fav, cardSize: cardSize)
                             }
                             .buttonStyle(.plain)
@@ -143,13 +137,7 @@ struct FavoritesView: View {
                     LazyVGrid(columns: cols, spacing: 12) {
                         ForEach(comicFavs) { fav in
                             if let pageURL = fav.pageURL {
-                                NavigationLink(destination: ComicDetailView(item: ParsedItem(
-                                    title: fav.title,
-                                    pageURL: pageURL,
-                                    thumbnail: fav.thumbnailURL,
-                                    duration: "",
-                                    extra: fav.siteName
-                                ), definitionID: fav.definitionID)) {
+                                NavigationLink(destination: FavoriteDestination(favorite: fav, url: pageURL)) {
                                     ComicCard(
                                         item: ParsedItem(
                                             title: fav.title,

@@ -16,13 +16,10 @@ struct CBZReaderView: View {
     @State private var pixels = 1024
     @State private var pages: [URL] = []
     @State private var currentPage  = 0
+    @State private var jumpTarget: Int?
     @State private var showBars     = true
     @State private var isLoading    = true
     @State private var error: String?
-
-    private var progress: Double {
-        pages.isEmpty ? 0 : Double(currentPage + 1) / Double(pages.count)
-    }
 
     var body: some View {
         ZStack(alignment: .bottom) {
@@ -54,7 +51,7 @@ struct CBZReaderView: View {
                 scrollView
             }
 
-            if showBars && !isLoading {
+            if showBars && !isLoading && error == nil && !pages.isEmpty {
                 VStack(spacing: 0) {
                     topBar
                     Spacer()
@@ -99,13 +96,16 @@ struct CBZReaderView: View {
             .onTapGesture {
                 withAnimation(.easeInOut(duration: 0.2)) { showBars.toggle() }
             }
-            .onChange(of: currentPage) { _, page in
-                // Only scroll programmatically from slider
+            .onChange(of: jumpTarget) { _, target in
+                if let target {
+                    proxy.scrollTo(target, anchor: .top)
+                    jumpTarget = nil
+                }
             }
             .onAppear {
                 // Restore saved progress
                 if let item = historyItem, !pages.isEmpty {
-                    let target = min(Int(item.progress * Double(pages.count)), pages.count - 1)
+                    let target = ReadingHistory.restoredIndex(progress: item.progress, count: pages.count)
                     if target > 0 {
                         currentPage = target
                         proxy.scrollTo(target, anchor: .top)
@@ -150,14 +150,15 @@ struct CBZReaderView: View {
 
     private var bottomBar: some View {
         VStack(spacing: 4) {
-            if !pages.isEmpty {
+            if pages.count > 1 {
                 Slider(value: Binding(
                     get: { Double(currentPage) },
                     set: { newVal in
                         let page = Int(newVal)
                         currentPage = page
+                        jumpTarget = page
                     }
-                ), in: 0...Double(max(pages.count - 1, 0)), step: 1)
+                ), in: 0...Double(pages.count - 1), step: 1)
                 .padding(.horizontal)
             }
         }
@@ -172,29 +173,11 @@ struct CBZReaderView: View {
         let file = fileURL
         let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         let task = Task.detached(priority: .userInitiated) { () throws -> [URL] in
-            do {
-                try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
-                let archive = try Archive(url: file, accessMode: .read)
-                var expanded: UInt64 = 0
-                var result: [URL] = []
-                for entry in archive where !entry.path.hasPrefix("__MACOSX") {
-                    try Task.checkCancellation()
-                    let ext = (entry.path as NSString).pathExtension.lowercased()
-                    guard ["jpg", "jpeg", "png", "webp", "gif"].contains(ext) else { continue }
-                    guard entry.type != .symlink, entry.uncompressedSize <= 128 * 1024 * 1024,
-                          expanded <= 1024 * 1024 * 1024 - entry.uncompressedSize else { throw ReaderSafetyError.message("压缩包超过安全解包限制") }
-                    expanded += entry.uncompressedSize
-                    let dest = try ReaderContainedPath.resolve(entry.path, under: tempDir)
-                    try FileManager.default.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
-                    _ = try archive.extract(entry, to: dest)
-                    result.append(dest)
-                }
-                try Task.checkCancellation()
-                return result.sorted { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
-            } catch {
-                try? FileManager.default.removeItem(at: tempDir)
-                throw error
+            let extracted = try ReaderArchive.extract(archiveURL: file, to: tempDir) { entry in
+                let ext = (entry.path as NSString).pathExtension.lowercased()
+                return ["jpg", "jpeg", "png", "webp", "gif"].contains(ext)
             }
+            return extracted.sorted { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
         }
         do {
             let all = try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
@@ -211,19 +194,16 @@ struct CBZReaderView: View {
     }
 
     private func saveProgress() {
-        let p = pages.isEmpty ? 0 : Double(currentPage + 1) / Double(pages.count)
-        if let item = historyItem {
-            item.progress   = p
-            item.lastReadAt = Date()
-        } else {
-            let entry = ReadingHistory(
-                title: fileURL.deletingPathExtension().lastPathComponent,
-                filePath: fileURL.path,
-                fileType: fileURL.pathExtension.lowercased() == "cbr" ? .cbr : .cbz,
-                progress: p
-            )
-            context.insert(entry)
-        }
+        guard !pages.isEmpty else { return }
+        let p = Double(currentPage + 1) / Double(pages.count)
+        ReadingHistory.recordProgress(
+            in: context,
+            historyItem: historyItem,
+            title: fileURL.deletingPathExtension().lastPathComponent,
+            filePath: fileURL.path,
+            fileType: fileURL.pathExtension.lowercased() == "cbr" ? .cbr : .cbz,
+            progress: p
+        )
     }
 }
 

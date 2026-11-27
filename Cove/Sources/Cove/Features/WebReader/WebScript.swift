@@ -4,6 +4,14 @@ import WebKit
     nonisolated static let mobileUserAgent =
         "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"
 
+    nonisolated static func isWebURL(_ url: URL) -> Bool {
+        ["http", "https"].contains(url.scheme?.lowercased() ?? "") && url.host() != nil
+    }
+
+    nonisolated static func isMediaURL(_ url: URL) -> Bool {
+        isWebURL(url) || url.scheme?.lowercased() == "data"
+    }
+
     static func makeWebView(
         frame: CGRect = .zero,
         allowsInlineMediaPlayback: Bool = false,
@@ -47,7 +55,8 @@ import WebKit
     static func boundedFunction(_ body: String, arguments: [String: Any] = [:], in webView: WKWebView, timeout: Duration = .seconds(15)) async throws -> String {
         try await runBounded(body, arguments: arguments, in: webView, timeout: timeout) { raw in
             if let string = raw as? String { return string }
-            if let bytes = try? JSONSerialization.data(withJSONObject: raw, options: [.fragmentsAllowed]),
+            if (JSONSerialization.isValidJSONObject(raw) || raw is NSNumber || raw is NSNull),
+               let bytes = try? JSONSerialization.data(withJSONObject: raw, options: [.fragmentsAllowed]),
                let string = String(data: bytes, encoding: .utf8) { return string }
             throw SiteDefinitionError.invalid("分页脚本没有返回可解析的数据")
         }

@@ -23,7 +23,14 @@ enum TextPaginator {
 
     static func load(_ url: URL) async throws -> (text: String, chapters: [Chapter]) {
         let work = Task.detached(priority: .userInitiated) {
+            let maxBytes = 50 * 1024 * 1024
+            if let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize), size > maxBytes {
+                throw ReaderSafetyError.message("文本文件超过 50 MB 加载上限")
+            }
             let data = try Data(contentsOf: url)
+            guard data.count <= maxBytes else {
+                throw ReaderSafetyError.message("文本文件超过 50 MB 加载上限")
+            }
             let encoding = String.Encoding(rawValue: CFStringConvertEncodingToNSStringEncoding(CFStringEncoding(CFStringEncodings.GB_18030_2000.rawValue)))
             guard let text = String(data: data, encoding: .utf8) ?? String(data: data, encoding: encoding) else {
                 throw ReaderSafetyError.message("无法识别小说文件编码")
@@ -298,23 +305,20 @@ struct TXTReaderView: View {
                             // Swipe left → next page
                             withAnimation(.easeOut(duration: 0.2)) { dragOffset = -w }
                             DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                                dragOffset = 0; currentPage += 1
+                                dragOffset = 0
+                                currentPage = min(currentPage + 1, max(pages.count - 1, 0))
                             }
                         } else if value.translation.width + velocity > threshold, currentPage > 0 {
                             // Swipe right → previous page
                             withAnimation(.easeOut(duration: 0.2)) { dragOffset = w }
                             DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                                dragOffset = 0; currentPage -= 1
+                                dragOffset = 0
+                                currentPage = max(currentPage - 1, 0)
                             }
                         } else {
                             withAnimation(.easeOut(duration: 0.15)) { dragOffset = 0 }
                         }
                     }
-            )
-            .simultaneousGesture(
-                TapGesture().onEnded {
-                    // no-op: tap location handled below
-                }
             )
             // Tap zones overlaid on top
             .overlay {
@@ -528,26 +532,24 @@ struct TXTReaderView: View {
         isPaginating = false
 
         if !pages.isEmpty {
-            currentPage = min(Int(savedProgress * Double(pages.count - 1)), pages.count - 1)
+            let safe = savedProgress.isFinite ? min(max(savedProgress, 0), 1) : 0
+            currentPage = min(Int(safe * Double(pages.count - 1)), pages.count - 1)
             scrollPage = currentPage
-            scrollProgress = savedProgress
+            scrollProgress = safe
         }
     }
 
     private func saveProgress() {
         guard !pages.isEmpty else { return }
         let p = readingMode == .scroll ? scrollProgress : Double(currentPage) / Double(max(pages.count - 1, 1))
-        let path = fileURL.path
-        let stored = try? context.fetch(FetchDescriptor<ReadingHistory>(predicate: #Predicate { $0.filePath == path })).first
-        if let item = historyItem ?? stored {
-            item.progress = p; item.lastReadAt = Date()
-        } else {
-            context.insert(ReadingHistory(
-                title: fileURL.deletingPathExtension().lastPathComponent,
-                filePath: fileURL.path, fileType: .txt, progress: p
-            ))
-        }
-        try? context.save()
+        ReadingHistory.recordProgress(
+            in: context,
+            historyItem: historyItem,
+            title: fileURL.deletingPathExtension().lastPathComponent,
+            filePath: fileURL.path,
+            fileType: .txt,
+            progress: p
+        )
     }
 }
 

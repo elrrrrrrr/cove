@@ -1,54 +1,27 @@
 import WebKit
 import Foundation
+import CryptoKit
 
 // MARK: - Extracted video result
 
 struct VideoResult: Sendable, Equatable {
     let streamURL : URL        // m3u8 / mp4
-    let type      : StreamType
     let headers   : [String: String]
     /// Page URL for the next episode. The page is re-parsed when playback ends
     /// so expiring CDN signatures are never reused as a playlist.
     let nextPageURL  : URL?
     let episodeNumber: Int?
-    let episodeCount : Int?
     let title        : String?
-    enum StreamType: Equatable { case hls, mp4, unknown }
 
-    init(streamURL: URL, type: StreamType, headers: [String: String],
+    init(streamURL: URL, headers: [String: String],
          nextPageURL: URL? = nil, episodeNumber: Int? = nil,
-         episodeCount: Int? = nil, title: String? = nil) {
+         title: String? = nil) {
         self.streamURL = streamURL
-        self.type = type
         self.headers = headers
         self.nextPageURL = nextPageURL
         self.episodeNumber = episodeNumber
-        self.episodeCount = episodeCount
         self.title = title
     }
-}
-
-// MARK: - Shared detail rules
-
-enum DetailParserRegistry {
-    static func js(for url: URL, definitionID: String? = nil) -> String {
-        SiteParserRegistry.rule(for: url, role: "video", definitionID: definitionID)?.extract?.javascript ?? genericJS
-    }
-    private static let genericJS = #"""
-    (function() {
-        const video = document.querySelector('video');
-        const source = video?.currentSrc || video?.getAttribute('src') || document.querySelector('video source[src]')?.getAttribute('src');
-        if (source && !source.startsWith('blob:')) {
-            const url = new URL(source, location.href).href;
-            return JSON.stringify({url, type: url.includes('.m3u8') ? 'hls' : 'mp4'});
-        }
-        for (const script of document.querySelectorAll('script:not([src])')) {
-            const hit = (script.textContent || '').match(/https?:\/\/[^\s'"<>\\]+\.(?:m3u8|mp4)[^\s'"<>\\]*/);
-            if (hit) return JSON.stringify({url: hit[0], type: hit[0].includes('.m3u8') ? 'hls' : 'mp4'});
-        }
-        return 'null';
-    })()
-    """#
 }
 
 // MARK: - Extractor (WKWebView-based, MainActor)
@@ -69,13 +42,36 @@ final class VideoURLExtractor: NSObject {
     private var extractTask: Task<Void, Never>?
     private var loadTimeoutTask: Task<Void, Never>?
 
-    /// Session-scoped cache: pageURL → VideoResult.
-    /// m3u8 CDN tokens may expire, so we don't persist to disk.
-    private static var cache: [String: VideoResult] = [:]
+    /// Session-scoped bounded cache: hashed (pageURL + JS) → VideoResult with short TTL.
+    private struct CacheEntry { let result: VideoResult; let cachedAt: Date }
+    private static var cache: [String: CacheEntry] = [:]
+    private static let cacheTTL: TimeInterval = 600
+    private static let cacheLimit = 64
     private var cacheKey: String {
         guard let targetURL else { return "" }
-        return targetURL.absoluteString + DetailParserRegistry.js(for: targetURL, definitionID: definitionID)
+        let input = targetURL.absoluteString + "\0" + Self.extractionJS(for: targetURL, definitionID: definitionID)
+        return SHA256.hash(data: Data(input.utf8)).map { String(format: "%02x", $0) }.joined()
     }
+
+    private static func extractionJS(for url: URL, definitionID: String? = nil) -> String {
+        SiteParserRegistry.rule(for: url, role: "video", definitionID: definitionID)?.extract?.javascript ?? genericJS
+    }
+
+    private static let genericJS = #"""
+    (function() {
+        const video = document.querySelector('video');
+        const source = video?.currentSrc || video?.getAttribute('src') || document.querySelector('video source[src]')?.getAttribute('src');
+        if (source && !source.startsWith('blob:')) {
+            const url = new URL(source, location.href).href;
+            return JSON.stringify({url});
+        }
+        for (const script of document.querySelectorAll('script:not([src])')) {
+            const hit = (script.textContent || '').match(/https?:\/\/[^\s'"<>\\]+\.(?:m3u8|mp4)[^\s'"<>\\]*/);
+            if (hit) return JSON.stringify({url: hit[0]});
+        }
+        return 'null';
+    })()
+    """#
 
     override init() {
         let wv = WebScript.makeWebView()
@@ -88,9 +84,13 @@ final class VideoURLExtractor: NSObject {
         cancel()
         targetURL = url
         self.definitionID = definitionID
-        if !forceRefresh, let cached = Self.cache[cacheKey] {
-            state = .found(cached)
-            return
+        let key = cacheKey
+        if !forceRefresh, let entry = Self.cache[key] {
+            if Date().timeIntervalSince(entry.cachedAt) <= Self.cacheTTL {
+                state = .found(entry.result)
+                return
+            }
+            Self.cache.removeValue(forKey: key)
         }
         // Cancel any previous in-flight work before restarting
         extractTask?.cancel()
@@ -145,7 +145,7 @@ final class VideoURLExtractor: NSObject {
             try? await Task.sleep(for: .seconds(wait))
             guard !Task.isCancelled else { return }
         }
-        let js = DetailParserRegistry.js(for: url, definitionID: definitionID)
+        let js = Self.extractionJS(for: url, definitionID: definitionID)
 
         // Try immediately first — media URLs may be embedded in an
         // inline <script> that's fully parsed by the time didFinish fires.
@@ -160,7 +160,7 @@ final class VideoURLExtractor: NSObject {
             if Task.isCancelled { return }
             if let result = await parseResult(from: js) {
                 guard !Task.isCancelled, targetURL == url else { return }
-                Self.cache[cacheKey] = result
+                Self.storeCache(result, for: cacheKey)
                 state = .found(result)
                 return
             }
@@ -169,6 +169,15 @@ final class VideoURLExtractor: NSObject {
         await runDiagnostic()
         guard !Task.isCancelled, targetURL == url else { return }
         state = .notFound
+    }
+
+    private static func storeCache(_ result: VideoResult, for key: String) {
+        let now = Date()
+        cache = cache.filter { now.timeIntervalSince($0.value.cachedAt) <= cacheTTL }
+        if cache.count >= cacheLimit, let oldest = cache.min(by: { $0.value.cachedAt < $1.value.cachedAt })?.key {
+            cache.removeValue(forKey: oldest)
+        }
+        cache[key] = CacheEntry(result: result, cachedAt: now)
     }
 
     private func pageRequest(url: URL) -> URLRequest {
@@ -222,52 +231,58 @@ final class VideoURLExtractor: NSObject {
     """
 
     private func runDiagnostic() async {
-        guard let raw = try? await webView.evaluateJavaScript(Self.diagnosticJS) as? String else {
+        guard let raw = try? await WebScript.boundedString(Self.diagnosticJS, in: webView) else {
             diagnostic = "WebView 无响应"
             return
         }
         diagnostic = raw
-        print("\\n[VideoURLExtractor] 诊断结果:\\n\\(raw)\\n")
+        print("\n[VideoURLExtractor] 诊断结果:\n\(raw)\n")
     }
 
     private func parseResult(from js: String) async -> VideoResult? {
-        guard let raw = try? await WebScript.evaluate(js, in: webView) as? String,
+        guard let raw = try? await WebScript.boundedString(js, in: webView),
               raw != "null",
               let data = raw.data(using: .utf8),
               let obj  = try? JSONDecoder().decode(RawVideo.self, from: data),
-              let streamURL = URL(string: obj.url, relativeTo: targetURL)?.absoluteURL else { return nil }
-        let t: VideoResult.StreamType = (obj.type ?? (streamURL.pathExtension == "m3u8" ? "hls" : "mp4")) == "hls" ? .hls
-                                      : obj.type == "mp4"  ? .mp4 : .unknown
+              let streamURL = URL(string: obj.url, relativeTo: targetURL)?.absoluteURL,
+              WebScript.isWebURL(streamURL) else { return nil }
+        let nextPage = obj.nextPageURL.flatMap { URL(string: $0, relativeTo: targetURL)?.absoluteURL }
+            .flatMap { WebScript.isWebURL($0) ? $0 : nil }
         return VideoResult(
             streamURL: streamURL,
-            type: t,
             headers: obj.headers ?? [:],
-            nextPageURL: obj.nextPageURL.flatMap { URL(string: $0, relativeTo: targetURL)?.absoluteURL },
+            nextPageURL: nextPage,
             episodeNumber: obj.episodeNumber,
-            episodeCount: obj.episodeCount,
             title: obj.title
         )
     }
 
     private struct RawVideo: Decodable {
         let url: String
-        let type: String?
         let headers: [String: String]?
         let nextPageURL: String?
         let episodeNumber: Int?
-        let episodeCount: Int?
         let title: String?
     }
 }
 
 extension VideoURLExtractor: WKNavigationDelegate {
     nonisolated func webView(_ wv: WKWebView, didFinish _: WKNavigation!) {
-        Task { @MainActor in self.startExtraction() }
+        Task { @MainActor in
+            guard self.state == .loading, self.extractTask == nil else { return }
+            self.startExtraction()
+        }
     }
-    nonisolated func webView(_ wv: WKWebView, didFail _: WKNavigation!, withError _: Error) {
-        Task { @MainActor in self.state = .notFound }
+    nonisolated func webView(_ wv: WKWebView, didFail _: WKNavigation!, withError error: Error) {
+        Task { @MainActor in
+            guard (error as NSError).code != NSURLErrorCancelled else { return }
+            if case .loading = self.state { self.state = .notFound }
+        }
     }
-    nonisolated func webView(_ wv: WKWebView, didFailProvisionalNavigation _: WKNavigation!, withError _: Error) {
-        Task { @MainActor in self.state = .notFound }
+    nonisolated func webView(_ wv: WKWebView, didFailProvisionalNavigation _: WKNavigation!, withError error: Error) {
+        Task { @MainActor in
+            guard (error as NSError).code != NSURLErrorCancelled else { return }
+            if case .loading = self.state { self.state = .notFound }
+        }
     }
 }

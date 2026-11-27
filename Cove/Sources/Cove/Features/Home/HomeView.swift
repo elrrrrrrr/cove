@@ -55,7 +55,7 @@ struct HomeView: View {
                     }
 
                     // ── 空状态 ────────────────────────────────────────
-                    if sites.isEmpty && historyIndex.latest == nil {
+                    if sites.isEmpty && historyIndex.latest == nil && offlineItems.isEmpty && downloadManager.downloads.isEmpty {
                         emptyState
                     }
                 }
@@ -87,7 +87,7 @@ struct HomeView: View {
     private func continueReadingCard(_ item: ReadingHistory) -> some View {
         NavigationLink(destination: destinationView(for: item)) {
             HStack(spacing: 14) {
-                thumbnailView(item)
+                HistoryThumbnail(item: item)
                     .frame(width: 72, height: 72)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
 
@@ -95,9 +95,11 @@ struct HomeView: View {
                     Text(item.displayTitle)
                         .font(.headline)
                         .lineLimit(2)
-                    ProgressView(value: item.progress)
-                        .tint(.accentColor)
-                    Text("\(Int(item.progress * 100))% · \(item.lastReadAt.formatted(.relative(presentation: .named)))")
+                    if !item.isWebVideoPlayback {
+                        ProgressView(value: item.clampedFraction)
+                            .tint(.accentColor)
+                    }
+                    Text("\(item.progressSummary) · \(item.lastReadAt.formatted(.relative(presentation: .named)))")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -123,6 +125,7 @@ struct HomeView: View {
             .contextMenu {
                 Button(role: .destructive) {
                     modelContext.delete(item)
+                    try? modelContext.save()
                 } label: {
                     Label("删除记录", systemImage: "trash")
                 }
@@ -137,32 +140,16 @@ struct HomeView: View {
     private var offlineList: some View {
         LazyVStack(spacing: 0) {
             ForEach(offlineItems) { item in
-                if item.localPath.isEmpty, let urlStr = item.sourceURL,
-                   let url = URL(string: urlStr) {
-                    NavigationLink(destination: WebReaderView(url: url)) {
-                        OfflineItemRow(item: item)
-                    }
-                    .buttonStyle(.plain)
-                    .padding(.horizontal)
-                    .swipeActions(edge: .trailing) {
-                        Button(role: .destructive) {
-                            deleteOfflineItem(item)
-                        } label: {
-                            Label("删除", systemImage: "trash")
-                        }
-                    }
-                } else {
-                    NavigationLink(destination: offlineDestination(for: item)) {
-                        OfflineItemRow(item: item)
-                    }
-                    .buttonStyle(.plain)
-                    .padding(.horizontal)
-                    .swipeActions(edge: .trailing) {
-                        Button(role: .destructive) {
-                            deleteOfflineItem(item)
-                        } label: {
-                            Label("删除", systemImage: "trash")
-                        }
+                NavigationLink(destination: offlineDestination(for: item)) {
+                    OfflineItemRow(item: item)
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal)
+                .contextMenu {
+                    Button(role: .destructive) {
+                        deleteOfflineItem(item)
+                    } label: {
+                        Label("删除", systemImage: "trash")
                     }
                 }
                 Divider().padding(.leading, 56 + 12 + 12)
@@ -172,7 +159,9 @@ struct HomeView: View {
 
     @ViewBuilder
     private func offlineDestination(for item: OfflineItem) -> some View {
-        if let fileURL = OfflineFiles.shared.url(for: item.localPath) {
+        if item.localPath.isEmpty, let urlStr = item.sourceURL, let url = URL(string: urlStr) {
+            WebReaderView(url: url)
+        } else if let fileURL = OfflineFiles.shared.url(for: item.localPath) {
             switch item.fileType {
             case .pdf:       PDFReaderView(fileURL: fileURL)
             case .cbz, .cbr: CBZReaderView(fileURL: fileURL)
@@ -186,11 +175,12 @@ struct HomeView: View {
     }
 
     private func deleteOfflineItem(_ item: OfflineItem) {
-        // Delete local file if it exists
-        if !item.localPath.isEmpty {
-            OfflineFiles.shared.deleteFile(path: item.localPath)
-        }
+        let localPath = item.localPath
         modelContext.delete(item)
+        try? modelContext.save()
+        if !localPath.isEmpty {
+            OfflineFiles.shared.deleteFile(path: localPath)
+        }
     }
 
     // MARK: - Empty state
@@ -232,21 +222,6 @@ struct HomeView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-    }
-
-    @ViewBuilder
-    private func thumbnailView(_ item: ReadingHistory) -> some View {
-        if item.thumbnailURL != nil {
-            CachedThumbnail(url: item.thumbnailURL, placeholder: item.fileType.systemImage)
-        } else if item.thumbnailData != nil {
-            DataThumbnail(data: item.thumbnailData!, placeholder: item.fileType.systemImage)
-        } else {
-            Color(.secondarySystemBackground)
-                .overlay {
-                    Image(systemName: item.fileType.systemImage)
-                        .foregroundStyle(.secondary)
-                }
-        }
     }
 
     @ViewBuilder
@@ -330,8 +305,8 @@ struct SiteQuickCard: View {
     /// Stable color derived from the site name.
     private var iconColor: Color {
         let colors: [Color] = [.blue, .purple, .orange, .pink, .teal, .indigo, .mint, .red]
-        let hash = abs(site.name.hashValue)
-        return colors[hash % colors.count]
+        let hash = site.name.utf8.reduce(UInt(5381)) { ($0 &<< 5) &+ $0 &+ UInt($1) }
+        return colors[Int(hash % UInt(colors.count))]
     }
 
     /// First character of the site name for the icon.
@@ -376,7 +351,7 @@ struct RecentCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            thumbnailView
+            HistoryThumbnail(item: item)
                 .aspectRatio(16/9, contentMode: .fit)
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
 
@@ -386,20 +361,28 @@ struct RecentCard: View {
                     .lineLimit(titleLines)
                     .foregroundStyle(.primary)
 
-                ProgressView(value: item.progress)
-                    .tint(.accentColor)
+                if item.isWebVideoPlayback {
+                    Text(item.progressSummary)
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                } else {
+                    ProgressView(value: item.clampedFraction)
+                        .tint(.accentColor)
+                }
             }
             .padding(.horizontal, 4)
             .padding(.vertical, 6)
         }
     }
+}
 
-    @ViewBuilder
-    private var thumbnailView: some View {
+private struct HistoryThumbnail: View {
+    let item: ReadingHistory
+    var body: some View {
         if item.thumbnailURL != nil {
             CachedThumbnail(url: item.thumbnailURL, placeholder: item.fileType.systemImage)
-        } else if item.thumbnailData != nil {
-            DataThumbnail(data: item.thumbnailData!, placeholder: item.fileType.systemImage)
+        } else if let data = item.thumbnailData {
+            DataThumbnail(data: data, placeholder: item.fileType.systemImage)
         } else {
             Color(.secondarySystemBackground)
                 .overlay {

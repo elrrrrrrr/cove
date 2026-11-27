@@ -27,12 +27,11 @@ actor DiskDataCache {
         indexed = true; scanCount += 1
         try? FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let keys: Set<URLResourceKey> = [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey, .contentModificationDateKey]
-        guard let enumerator = FileManager.default.enumerator(at: root, includingPropertiesForKeys: Array(keys)) else { return }
-        for case let url as URL in enumerator {
-            guard let value = try? url.resourceValues(forKeys: keys), value.isRegularFile == true, value.isSymbolicLink != true,
-                  url.path.hasPrefix(root.path + "/") else { continue }
-            let relative = String(url.path.dropFirst(root.path.count + 1))
-            guard (try? ReaderContainedPath.resolve(relative, under: root)) != nil else { continue }
+        guard let enumerator = FileManager.default.enumerator(atPath: root.path) else { return }
+        for case let relative as String in enumerator {
+            guard let url = try? ReaderContainedPath.resolve(relative, under: root),
+                  let value = try? url.resourceValues(forKeys: keys),
+                  value.isRegularFile == true, value.isSymbolicLink != true else { continue }
             let stem = String(url.lastPathComponent.dropLast(min(suffix.count, url.lastPathComponent.count)))
             let key = !relative.contains("/") && relative.hasSuffix(suffix) && file(stem) != nil ? stem : "legacy:" + relative
             let saved = value.contentModificationDate ?? .distantPast

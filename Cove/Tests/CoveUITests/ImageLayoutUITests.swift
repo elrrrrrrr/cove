@@ -52,6 +52,79 @@ import UIKit
             snapshot.lifetime = .keepAlways; add(snapshot)
         }
     }
+    func testTitleMaskImageRendersInAllThreeLayouts() throws {
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        format.opaque = false
+        let maskImage = UIGraphicsImageRenderer(size: CGSize(width: 701, height: 44), format: format).image { context in
+            UIColor.clear.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 701, height: 44))
+            UIColor.white.setFill()
+            context.fill(CGRect(x: 0, y: 8, width: 701, height: 28))
+        }
+        let server = try LocalPageServer(image: XCTUnwrap(maskImage.pngData()))
+        defer { server.listener.cancel() }
+        let titleImageURI = server.url + "cover.png"
+        let app = XCUIApplication(), title = "图片标题回归-" + String(UUID().uuidString.prefix(6))
+        app.launch(); app.tabBars.buttons["设置"].tap()
+        let management = app.buttons["管理网站"]; reveal(management, in: app); management.tap()
+        app.buttons["添加或导入站点"].tap(); app.buttons["创建站点规则"].tap()
+        let editor = app.textViews["完整站点 YAML"]
+        XCTAssertTrue(editor.waitForExistence(timeout: 5)); editor.tap(); editor.press(forDuration: 1)
+        let all = app.menuItems["Select All"].exists ? app.menuItems["Select All"] : app.menuItems["全选"]
+        XCTAssertTrue(all.waitForExistence(timeout: 3)); all.tap()
+        editor.typeText("""
+        schemaVersion: 1
+        id: ui.titleimage.\(UUID().uuidString)
+        name: \(title)
+        match:
+          hosts: [127.0.0.1]
+        entries:
+          - id: main
+            name: \(title)
+            path: \(server.url)
+            category: video
+        rules:
+          - id: catalog
+            role: catalog
+            contentType: video
+            extract:
+              script: |
+                return [{title:'图片标题回退',url:'/video',titleImage:'\(titleImageURI)'}];
+        """)
+        app.buttons["保存"].tap()
+        let cell = app.cells.containing(.staticText, identifier: title).firstMatch
+        reveal(cell, in: app); cell.tap()
+        let titleElement = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "图片标题回退")).firstMatch
+        XCTAssertTrue(titleElement.waitForExistence(timeout: 10))
+        for layout in ["列表", "竖版", "Bento"] {
+            app.buttons["browser-layout-menu"].tap(); app.buttons[layout].tap()
+            XCTAssertTrue(titleElement.waitForExistence(timeout: 3))
+            XCTAssertLessThanOrEqual(titleElement.frame.width, app.frame.width, "图片标题不应撑破卡片宽度")
+            let rendered = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                ((try? self.solidTintedPixels(in: titleElement.screenshot().image)) ?? 0) > 1500
+            }, object: nil)
+            XCTAssertEqual(XCTWaiter.wait(for: [rendered], timeout: 8), .completed, "模板图片标题必须在\(layout)布局中可见渲染")
+            let snapshot = XCTAttachment(screenshot: app.screenshot()); snapshot.name = "title-image-" + layout
+            snapshot.lifetime = .keepAlways; add(snapshot)
+        }
+    }
+    private func solidTintedPixels(in image: UIImage) throws -> Int {
+        let cg = try XCTUnwrap(image.cgImage), width = cg.width, height = cg.height
+        var bytes = [UInt8](repeating: 0, count: width * height * 4)
+        return try bytes.withUnsafeMutableBytes { buffer in
+            let context = try XCTUnwrap(CGContext(data: buffer.baseAddress, width: width, height: height, bitsPerComponent: 8,
+                bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+            context.draw(cg, in: CGRect(x: 0, y: 0, width: width, height: height))
+            let pixels = buffer.bindMemory(to: UInt8.self)
+            // Detect dense dark ink pixels (Light Mode .primary) from the tinted white-alpha mask bar
+            var count = 0
+            for offset in stride(from: 0, to: pixels.count, by: 4) {
+                if pixels[offset] < 40, pixels[offset + 1] < 40, pixels[offset + 2] < 40 { count += 1 }
+            }
+            return count
+        }
+    }
     private func magentaPixels(in image: UIImage) throws -> Int {
         let cg = try XCTUnwrap(image.cgImage), width = cg.width, height = cg.height
         var bytes = [UInt8](repeating: 0, count: width * height * 4)

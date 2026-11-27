@@ -29,17 +29,22 @@ final class SMBStreamLoader: NSObject, AVAssetResourceLoaderDelegate, @unchecked
 
     // MARK: - Public factory
 
+    private nonisolated(unsafe) static var associatedKey: UInt8 = 0
+
     /// Creates an AVURLAsset that streams from NAS. The loader is retained on the asset.
     static func makeAsset(client: any SMBRangeSource, remotePath: String) -> AVURLAsset {
         let loader = SMBStreamLoader(client: client, remotePath: remotePath)
 
-        let encoded = remotePath.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? remotePath
-        let url = URL(string: "\(scheme)://nas\(encoded)")!
+        var components = URLComponents()
+        components.scheme = scheme
+        components.host = "nas"
+        components.path = remotePath.hasPrefix("/") ? remotePath : "/" + remotePath
+        let url = components.url ?? URL(string: "\(scheme)://nas/stream")!
 
         let asset = AVURLAsset(url: url)
         asset.resourceLoader.setDelegate(loader, queue: loader.queue)
         // Retain the loader for the lifetime of the asset
-        objc_setAssociatedObject(asset, "SMBStreamLoader", loader, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+        objc_setAssociatedObject(asset, &Self.associatedKey, loader, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
         return asset
     }
 

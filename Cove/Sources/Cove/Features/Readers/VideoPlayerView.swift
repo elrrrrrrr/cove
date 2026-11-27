@@ -10,6 +10,7 @@ struct VideoPlayerView: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var player: AVPlayer?
+    @State private var restoreTask: Task<Void, Never>?
     @State private var showBars = true
 
     var body: some View {
@@ -24,13 +25,6 @@ struct VideoPlayerView: View {
                     }
             } else {
                 ProgressView("加载中…").tint(.white)
-            }
-
-            if let player {
-                VideoNetworkSpeedBadge(player: player)
-                    .padding(.top, 58)
-                    .padding(.trailing, 16)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
             }
 
             if showBars {
@@ -63,34 +57,52 @@ struct VideoPlayerView: View {
         .navigationBarHidden(true)
         .statusBarHidden(!showBars)
         .onAppear { setupPlayer() }
-        .onDisappear { saveProgress() }
+        .onDisappear {
+            restoreTask?.cancel(); restoreTask = nil
+            saveProgress()
+            player?.pause()
+            player = nil
+        }
     }
 
     private func setupPlayer() {
+        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
+        try? AVAudioSession.sharedInstance().setActive(true)
         let item = AVPlayerItem(url: fileURL)
         let p = AVPlayer(playerItem: item)
         self.player = p
-        p.play()
+        let fraction = historyItem?.clampedFraction ?? 0
+        if fraction > 0 && fraction < 0.99 {
+            restoreTask = Task {
+                if let duration = try? await item.asset.load(.duration), !Task.isCancelled {
+                    let secs = duration.seconds
+                    if secs.isFinite && secs > 0 {
+                        await p.seek(to: CMTime(seconds: secs * fraction, preferredTimescale: 600))
+                    }
+                }
+                guard !Task.isCancelled else { return }
+                p.play()
+            }
+        } else {
+            p.play()
+        }
     }
 
     private func saveProgress() {
         guard let player else { return }
         let duration  = player.currentItem?.duration.seconds ?? 0
         let current   = player.currentTime().seconds
-        let progress  = duration > 0 ? current / duration : 0
         player.pause()
-
-        if let item = historyItem {
-            item.progress   = progress
-            item.lastReadAt = Date()
-        } else {
-            context.insert(ReadingHistory(
-                title: fileURL.deletingPathExtension().lastPathComponent,
-                filePath: fileURL.path,
-                fileType: .video,
-                progress: progress
-            ))
-        }
+        guard duration.isFinite, duration > 0, current.isFinite else { return }
+        let progress = min(max(current / duration, 0), 1)
+        ReadingHistory.recordProgress(
+            in: context,
+            historyItem: historyItem,
+            title: fileURL.deletingPathExtension().lastPathComponent,
+            filePath: fileURL.path,
+            fileType: .video,
+            progress: progress
+        )
     }
 }
 
@@ -170,7 +182,9 @@ final class VideoNetworkSpeedMonitor {
             return
         }
 
-        label = isLocal(player: player) ? "本地" : "网速 --"
+        let local = isLocal(player: player)
+        label = local ? "本地" : "网速 --"
+        if local && streamKey == nil { return }
 
         if let streamKey {
             smbObserver = NotificationCenter.default.addObserver(
