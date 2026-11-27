@@ -234,21 +234,28 @@ final class WebSession {
     var originalRequest: URLRequest? { currentURL.map { WebURLSafety.makeRequest(url: $0, headers: currentHeaders) } }
 
     var webView: WKWebView {
-        if let _webView { return _webView }
+        if let _webView {
+            attachWindowIfNeeded(to: _webView)
+            return _webView
+        }
         let wv = WebScript.makeWebView()
         navBridge = WebNavigationBridge.attach(to: wv)
         _webView = wv
-        if let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first {
-            let win = UIWindow(windowScene: scene)
-            win.frame = CGRect(x: 0, y: 0, width: 1, height: 1)
-            win.windowLevel = .init(rawValue: -1)
-            win.isHidden = false
-            win.rootViewController = UIViewController()
-            win.rootViewController?.view.addSubview(wv)
-            window = win
-        }
+        attachWindowIfNeeded(to: wv)
         Task { [weak wv] in if let wv { await ContentBlocker.sync(to: wv) } }
         return wv
+    }
+
+    private func attachWindowIfNeeded(to wv: WKWebView) {
+        guard window == nil,
+              let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first else { return }
+        let win = UIWindow(windowScene: scene)
+        win.frame = CGRect(x: 0, y: 0, width: 1, height: 1)
+        win.windowLevel = .init(rawValue: -1)
+        win.isHidden = false
+        win.rootViewController = UIViewController()
+        win.rootViewController?.view.addSubview(wv)
+        window = win
     }
 
     private var _webView: WKWebView?
@@ -303,6 +310,20 @@ final class WebSession {
     func reload() {
         guard let currentURL, let parser else { return }
         loadCatalog(url: currentURL, parser: parser, forceRefresh: true)
+    }
+
+    func refresh() async {
+        guard let currentURL, let parser else { return }
+        catalogTask?.cancel(); pageTask?.cancel()
+        generation = UUID()
+        let id = generation
+        resolvedAuthority = nil
+        currentHeaders = parser.requestHeaders
+        isLoadingMore = false; paginationFailed = false; preNavigateHops = 0
+        let target = await resolvePortalURL(url: currentURL, parser: parser, generation: id)
+        guard id == generation, !Task.isCancelled else { return }
+        self.currentURL = target
+        await runCatalogPage(url: target, parser: parser, generation: id, append: false)
     }
 
     func loadNextPage() {

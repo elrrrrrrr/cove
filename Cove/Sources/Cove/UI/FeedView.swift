@@ -182,8 +182,11 @@ struct FeedView: View {
                     .padding(12)
                 }
             }
-            .refreshable { session.reload() }
-            .onDisappear { session.cancel() }
+            .refreshable { await session.refresh() }
+            .onDisappear {
+                guard viewerTarget == nil && subFeedTarget == nil && !showInspectSheet else { return }
+                session.cancel()
+            }
         }
     }
 
@@ -206,6 +209,7 @@ struct FeedView: View {
                 }
             }
         )
+        .accessibilityIdentifier("feed.card.\(index)")
         .coveZoomSource(id: "web:\(item.pageURL.absoluteString)", in: zoomNS)
         .onAppear {
             if session.canLoadMore, index >= max(0, count - 4) { session.loadNextPage() }
@@ -381,6 +385,7 @@ struct FeedView: View {
         ScrollView {
             content().padding(.bottom, 76)
         }
+        .accessibilityIdentifier("feed.scroll")
         .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, y in
             let delta = y - lastScrollY
             if abs(delta) > 12 {
@@ -410,6 +415,7 @@ struct FeedView: View {
                     Button(showWebFallback ? "返回画廊" : "网页模式", systemImage: "globe") { showWebFallback.toggle() }
                 }
             } label: { Image(systemName: "ellipsis.circle") }
+            .accessibilityIdentifier("feed.menu")
         }
     }
 

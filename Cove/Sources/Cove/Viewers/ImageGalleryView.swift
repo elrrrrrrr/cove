@@ -21,6 +21,7 @@ struct ImageGalleryView: View {
     @State private var detailError: String?
     @State private var lastChapterID: String?
     @State private var activeChapter: ComicChapter?
+    @State private var chapterTask: Task<Void, Never>?
 
     // Shared image strip state (chapter / CBZ / NAS images)
     @State private var imageURLs: [URL] = []
@@ -51,6 +52,7 @@ struct ImageGalleryView: View {
         .sheet(isPresented: $showInspect) {
             if let req = session.originalRequest { ParsingWebViewSheet(webView: session.webView, request: req) }
         }
+        .onDisappear { chapterTask?.cancel(); session.cancel() }
     }
 
     // MARK: - 1. Online Comic Detail + Chapter Reader
@@ -81,6 +83,7 @@ struct ImageGalleryView: View {
                                 .fontWeight(.semibold).frame(maxWidth: .infinity).padding(.vertical, 10)
                         }
                         .buttonStyle(.borderedProminent).padding(.horizontal)
+                        .accessibilityIdentifier("comic.readButton")
 
                         LazyVStack(spacing: 0) {
                             ForEach(detail.chapters) { ch in
@@ -114,14 +117,14 @@ struct ImageGalleryView: View {
             do { comicDetail = try await session.extractComic(url: item.pageURL, definitionID: defID) }
             catch { if !Task.isCancelled { detailError = error.localizedDescription } }
         }
-        .onDisappear { session.cancel() }
     }
 
     private func openChapter(_ ch: ComicChapter?, defID: String?) {
         guard let ch else { return }
+        chapterTask?.cancel()
         activeChapter = ch
         imageURLs = []; loading = true; loadError = nil
-        Task {
+        chapterTask = Task {
             do { imageURLs = try await session.extractChapterImages(url: ch.chapterURL, definitionID: defID); loading = false }
             catch { if !Task.isCancelled { loadError = error.localizedDescription; loading = false } }
         }
@@ -142,14 +145,20 @@ struct ImageGalleryView: View {
                         }
                     }
                 }
+                .accessibilityIdentifier("comic.reader.scroll")
                 .onTapGesture { withAnimation(.easeInOut(duration: 0.2)) { showBars.toggle() } }
             }
             if showBars {
                 VStack {
                     HStack {
                         Button { activeChapter = nil; saveComicProgress(detail: detail, bookURL: bookURL, defID: defID) } label: {
-                            Image(systemName: "xmark").padding(10).glassEffect(.regular, in: Circle())
+                            Image(systemName: "xmark")
+                                .font(.body.weight(.semibold))
+                                .foregroundStyle(.white)
+                                .frame(width: 36, height: 36)
+                                .glassEffect(.regular, in: Circle())
                         }
+                        .accessibilityIdentifier("comic.reader.close")
                         Text(chapter.title).font(.subheadline.weight(.medium)).foregroundStyle(.white).lineLimit(1)
                         Spacer()
                     }.padding()

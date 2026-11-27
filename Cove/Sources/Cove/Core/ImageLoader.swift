@@ -77,11 +77,27 @@ private final class CoveDataLoader: Nuke.DataLoading, @unchecked Sendable {
 
         // 3. HTTP / HTTPS (with optional SiteImageTransform AES decryption)
         var cleanRequest = request
+        if cleanRequest.value(forHTTPHeaderField: "User-Agent") == nil {
+            cleanRequest.setValue(WebURLSafety.mobileUserAgent, forHTTPHeaderField: "User-Agent")
+        }
+        if cleanRequest.value(forHTTPHeaderField: "Accept") == nil {
+            cleanRequest.setValue("image/avif,image/webp,image/apng,image/*,*/*;q=0.8", forHTTPHeaderField: "Accept")
+        }
+        let refererURL = cleanRequest.value(forHTTPHeaderField: "Referer").flatMap(URL.init(string:)) ?? url
+        if cleanRequest.value(forHTTPHeaderField: "Referer") == nil {
+            cleanRequest.setValue(refererURL.absoluteString, forHTTPHeaderField: "Referer")
+        }
+        if cleanRequest.value(forHTTPHeaderField: "Origin") == nil,
+           var origin = URLComponents(url: refererURL, resolvingAgainstBaseURL: true) {
+            origin.path = ""; origin.query = nil; origin.fragment = nil; origin.user = nil; origin.password = nil
+            if let originStr = origin.string {
+                cleanRequest.setValue(originStr, forHTTPHeaderField: "Origin")
+            }
+        }
         let defID = cleanRequest.value(forHTTPHeaderField: CoveImagePipeline.definitionIDHeader)
         cleanRequest.setValue(nil, forHTTPHeaderField: CoveImagePipeline.definitionIDHeader)
-        let referer = cleanRequest.value(forHTTPHeaderField: "Referer").flatMap(URL.init(string:))
 
-        if let transform = SiteParserRegistry.imageTransform(for: url, referer: referer, definitionID: defID),
+        if let transform = SiteParserRegistry.imageTransform(for: url, referer: refererURL, definitionID: defID),
            let key = transform.key.data(using: .utf8),
            let iv = transform.iv.data(using: .utf8) {
             let box = DecryptBuffer()
@@ -90,9 +106,13 @@ private final class CoveDataLoader: Nuke.DataLoading, @unchecked Sendable {
             } completion: { error in
                 if let error { completion(error); return }
                 let (encrypted, response) = box.take()
-                let decoded = SiteCrypto.decrypt(encrypted, key: key, iv: iv)
-                    ?? Data(base64Encoded: String(data: encrypted, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "")
-                        .flatMap { SiteCrypto.decrypt($0, key: key, iv: iv) }
+                let decoded: Data? = if Self.looksLikePlainImage(encrypted) {
+                    encrypted
+                } else {
+                    SiteCrypto.decrypt(encrypted, key: key, iv: iv)
+                        ?? Data(base64Encoded: String(data: encrypted, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "")
+                            .flatMap { SiteCrypto.decrypt($0, key: key, iv: iv) }
+                }
                 guard let decoded, let response else {
                     completion(URLError(.cannotDecodeContentData))
                     return
@@ -103,6 +123,17 @@ private final class CoveDataLoader: Nuke.DataLoading, @unchecked Sendable {
         }
 
         return httpLoader.loadData(with: cleanRequest, didReceiveData: didReceiveData, completion: completion)
+    }
+
+    private static func looksLikePlainImage(_ data: Data) -> Bool {
+        guard data.count >= 4 else { return false }
+        let b = [UInt8](data.prefix(12))
+        if b.starts(with: [0xFF, 0xD8, 0xFF]) { return true } // JPEG
+        if b.starts(with: [0x89, 0x50, 0x4E, 0x47]) { return true } // PNG
+        if b.starts(with: [0x47, 0x49, 0x46, 0x38]) { return true } // GIF
+        if b.count >= 12, b[0...3] == [0x52, 0x49, 0x46, 0x46], b[8...11] == [0x57, 0x45, 0x42, 0x50] { return true } // WEBP
+        if b.count >= 8, b[4...7] == [0x66, 0x74, 0x79, 0x70] { return true } // AVIF/HEIF
+        return UIImage(data: data) != nil
     }
 
     private final class DecryptBuffer: @unchecked Sendable {
@@ -171,7 +202,13 @@ struct CoveImage: View {
         if let imageRequest {
             LazyImage(request: imageRequest) { state in
                 if let image = state.image {
-                    image.resizable().aspectRatio(contentMode: contentMode)
+                    if contentMode == .fill {
+                        Color.clear
+                            .overlay { image.resizable().scaledToFill() }
+                            .clipped()
+                    } else {
+                        image.resizable().scaledToFit()
+                    }
                 } else {
                     placeholderView
                 }

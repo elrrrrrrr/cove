@@ -28,10 +28,12 @@ struct HomeView: View {
                                 ForEach(sites) { site in
                                     NavigationLink { FeedView(site: site) } label: { SiteQuickTile(site: site) }
                                         .buttonStyle(SpringPressButtonStyle())
+                                        .accessibilityIdentifier("home.site.\(site.name)")
                                 }
                             }
                             .padding(.horizontal)
                         }
+                        .accessibilityIdentifier("home.sites.scroll")
                     }
 
                     if let latest = latestHistory {

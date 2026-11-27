@@ -54,28 +54,35 @@ struct MediaPlayerView: View {
         switch source {
         case .web(let item, _):
             if webResult != nil, player != nil {
-                AVPlayerSurface(player: $player) { advanceEpisode() }
-                    .ignoresSafeArea()
-                    .overlay(alignment: .topLeading) { floatingCloseButton }
+                ZStack(alignment: .topLeading) {
+                    AVPlayerSurface(player: $player) { advanceEpisode() }
+                        .ignoresSafeArea()
+                    floatingCloseButton
+                }
             } else if webFailed, let url = activePageURL ?? Optional(item.pageURL) {
-                WebBrowserView(url: url)
-                    .overlay(alignment: .topTrailing) {
-                        Button("重试解析", systemImage: "arrow.clockwise") {
-                            webFailed = false
-                            Task { await loadWebVideo(url: url, title: item.title, thumbnail: item.thumbnail, defID: defID) }
+                ZStack(alignment: .topLeading) {
+                    WebBrowserView(url: url)
+                        .overlay(alignment: .topTrailing) {
+                            Button("重试解析", systemImage: "arrow.clockwise") {
+                                webFailed = false
+                                Task { await loadWebVideo(url: url, title: item.title, thumbnail: item.thumbnail, defID: defID) }
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .padding()
                         }
-                        .buttonStyle(.borderedProminent)
-                        .padding()
-                    }
+                    floatingCloseButton
+                }
             } else {
                 ambientLoadingView(item: item)
             }
 
         case .localVideo:
             if player != nil {
-                AVPlayerSurface(player: $player, onEnded: nil)
-                    .ignoresSafeArea()
-                    .overlay(alignment: .topLeading) { floatingCloseButton }
+                ZStack(alignment: .topLeading) {
+                    AVPlayerSurface(player: $player, onEnded: nil)
+                        .ignoresSafeArea()
+                    floatingCloseButton
+                }
             } else {
                 ProgressView().tint(.white)
             }
@@ -127,6 +134,7 @@ struct MediaPlayerView: View {
                 .frame(width: 40, height: 40)
                 .glassEffect(.regular, in: Circle())
         }
+        .accessibilityIdentifier("player.close")
         .padding(.leading, 16).padding(.top, 12)
     }
 
